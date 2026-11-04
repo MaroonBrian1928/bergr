@@ -32,6 +32,13 @@ to jump in when they are.
 Unfolded on the iPhone Duo, the terminal list and a terminal sit side by side. It works on every
 iPhone with iOS 27.1 or later.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-dark.png">
+    <img src="assets/screenshot-light.png" width="700" alt="Hirte on the unfolded iPhone Duo: the terminal list next to an agent asking to run a database migration, with Yes, No, Return and Esc buttons">
+  </picture>
+</p>
+
 > Hirte is an independent project. It is not affiliated with or endorsed by the herdr project; it
 > speaks herdr-core's public protocol.
 
