@@ -335,6 +335,32 @@ final class DemoTourTests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "t3").firstMatch.waitForExistence(timeout: 5))
     }
 
+    /// "Clear" in the open Finished section removes all finished terminals, after asking.
+    @MainActor
+    func testClearFinished() throws {
+        let app = XCUIApplication()
+        app.launch()
+        startDemo(app)
+        app.buttons["Terminals"].tap()
+        let backup = app.descendants(matching: .any).matching(identifier: "t7").firstMatch
+        let finished = app.staticTexts["Finished"]
+        let list = app.collectionViews.firstMatch
+        for _ in 0..<4 where !(finished.exists && finished.isHittable) { list.swipeUp() }
+        XCTAssertTrue(finished.isHittable, "the Finished section is listed")
+        if !backup.exists { finished.tap() }
+        XCTAssertTrue(backup.waitForExistence(timeout: 5), "opening it shows the finished backup")
+        let clear = app.buttons["Clear"]
+        XCTAssertTrue(clear.isHittable, "the open section offers Clear")
+        shot(app, "finished-clear")
+        clear.tap()
+        let remove = app.buttons["Remove"]
+        XCTAssertTrue(remove.waitForExistence(timeout: 5), "Clear asks first")
+        shot(app, "finished-clear-confirm")
+        remove.tap()
+        XCTAssertTrue(finished.waitForNonExistence(timeout: 5), "the section goes once it's empty")
+        XCTAssertFalse(backup.exists)
+    }
+
     /// Each view keeps its scroll position when switching away and back. Large text makes the
     /// demo list longer than the screen.
     @MainActor

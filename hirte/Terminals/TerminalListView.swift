@@ -16,6 +16,8 @@ struct TerminalListView: View {
     @State private var concealed = false
     @State private var newTerminal: NewTerminalContext?
     @State private var confirmKill: Terminal?
+    /// The finished terminals "Clear" would remove, as they were when it was tapped.
+    @State private var confirmClear: [Terminal]?
     @State private var actionError: String?
     /// Collapsed sections as "hostID|sectionID" lines, remembered across launches.
     @AppStorage("terminals.collapsed") private var collapsed = ""
@@ -128,6 +130,27 @@ struct TerminalListView: View {
     private func remove(_ terminal: Terminal) {
         if selection == terminal.address { selection = nil }
         perform { try await session.remove(terminal.address) }
+    }
+
+    private static func finishedCount(_ terminals: [Terminal]) -> String {
+        terminals.count == 1 ? "1 finished terminal" : "\(terminals.count) finished terminals"
+    }
+
+    /// Removes them one by one, going on past failures: the core keeps a terminal until a
+    /// waiting parent has its exit code.
+    private func clear(_ terminals: [Terminal]) {
+        confirmClear = nil
+        if let selection, terminals.contains(where: { $0.address == selection }) { self.selection = nil }
+        Task {
+            var failed: [(String, Error)] = []
+            for terminal in terminals {
+                do { try await session.remove(terminal.address) } catch { failed.append((terminal.address, error)) }
+            }
+            guard let (address, error) = failed.first else { return }
+            let removed = terminals.count - failed.count
+            actionError = "Removed \(removed) of \(terminals.count). \(failed.count == 1 ? address : "\(failed.count), like \(address),")"
+                + " could not be removed: \(error.localizedDescription)"
+        }
     }
 
     private func perform(_ action: @escaping () async throws -> Void) {
@@ -284,6 +307,27 @@ struct TerminalListView: View {
                         HStack {
                             Text("Finished")
                             Spacer()
+                            // Only while open: next to the rows it removes, not in the way of
+                            // the tap that opens the section.
+                            if expanded("finished", initially: false).wrappedValue {
+                                Button("Clear") { confirmClear = finished }
+                                    .buttonStyle(.borderless)
+                                    .foregroundStyle(.tint)
+                                    .disabled(session.state != .connected)
+                                    // On the button, so the popover points at it.
+                                    .confirmationDialog(
+                                        "Remove \(confirmClear.map(Self.finishedCount) ?? "")?",
+                                        isPresented: .constant(confirmClear != nil),
+                                        titleVisibility: .visible, presenting: confirmClear
+                                    ) { terminals in
+                                        Button("Remove", role: .destructive) { clear(terminals) }
+                                        Button("Cancel", role: .cancel) { confirmClear = nil }
+                                    } message: { terminals in
+                                        Text(terminals.count == 1
+                                            ? "Its screen and exit code are gone for good."
+                                            : "Their screens and exit codes are gone for good.")
+                                    }
+                            }
                             Text("\(finished.count)").foregroundStyle(.secondary)
                         }
                     }
