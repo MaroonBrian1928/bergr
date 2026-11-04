@@ -41,6 +41,10 @@ final class TerminalScreenModel {
     }
     /// Typed while (re)attaching, e.g. the keys that ended watching; sent once attached.
     private var pendingInput: [Data] = []
+    /// Whether this channel last told the core we have focus. Programs that asked for focus
+    /// reports (lazygit highlights its focused panel) otherwise keep the focus-out they got when
+    /// the desktop window lost focus, also while we type or tap.
+    private var reportedFocus = false
 
     /// The colors to draw with; changing it recolors the live screen (or, before there is one,
     /// the empty screen shown while attaching).
@@ -117,6 +121,7 @@ final class TerminalScreenModel {
                 display: theme.displayFacts)
             guard !Task.isCancelled else { return await attached.detach() }
             self.attached = attached
+            reportedFocus = false
             let vt = try VirtualTerminal(
                 cols: max(attached.terminal.cols, 1), rows: max(attached.terminal.rows, 1))
             Self.apply(theme, to: vt)
@@ -128,6 +133,12 @@ final class TerminalScreenModel {
                 // The grid may have changed while attaching (taking over brings up the keyboard):
                 // claim the size we want now, or the terminal stays at the one we attached with.
                 if let now = preferredSize, now.cols != size.cols || now.rows != size.rows { claimSize() }
+                // Taking over by bringing up the keyboard, typing or tapping: we have focus. (The
+                // keyboard's focus change came while watching, and a new channel starts without.)
+                if wantsKeyboard || !pendingInput.isEmpty {
+                    reportedFocus = true
+                    try? await attached.focus(true)
+                }
                 for data in pendingInput { try? await attached.send(data) }
             }
             pendingInput.removeAll()
@@ -226,6 +237,7 @@ final class TerminalScreenModel {
         if focused && watching { return setWatching(false) }
         guard let attached else { return }
         if focused && sizeOwnedElsewhere { claimSize() }
+        reportedFocus = focused
         Task { try? await attached.focus(focused) }
     }
 
@@ -249,7 +261,14 @@ final class TerminalScreenModel {
         // Typing makes us the active viewer again; show the live screen.
         if scrolledBack { scroll(toBottom: true) }
         if sizeOwnedElsewhere { claimSize() }
-        Task { try? await attached.send(data) }
+        // Typing or tapping without the keyboard up (a click in lazygit) focuses, like clicking
+        // a window does; in the same task, so the focus report arrives first.
+        let focusFirst = !reportedFocus
+        reportedFocus = true
+        Task {
+            if focusFirst { try? await attached.focus(true) }
+            try? await attached.send(data)
+        }
     }
 
     // MARK: Scrolling
