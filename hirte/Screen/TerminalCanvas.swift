@@ -72,6 +72,18 @@ final class TerminalCanvasView: UIView, UIKeyInput {
     }()
     private let ticks = UISelectionFeedbackGenerator()
     private var pan: UIPanGestureRecognizer?
+    private var pinch: UIPinchGestureRecognizer?
+    /// Off while watching: the screen is shrunk to the other viewer's size, so a new font
+    /// size would change nothing visible.
+    var pinchEnabled = true {
+        didSet { pinch?.isEnabled = pinchEnabled }
+    }
+    /// Watching: the terminal's size is another viewer's. It's fitted to the view as a whole
+    /// (larger or smaller than our font) and outlined, or the screen would seem to end where
+    /// the output does.
+    var watching = false {
+        didSet { if watching != oldValue { setNeedsDisplay() } }
+    }
     /// A sideways swipe that starts in our left part, for showing or hiding the lists beside us
     /// (see `onEdgeSwipe`). Not a `UIScreenEdgePanGestureRecognizer`: with the lists showing, our
     /// left edge is the column border, not the screen's, and a thin strip there was hard to hit.
@@ -126,6 +138,7 @@ final class TerminalCanvasView: UIView, UIKeyInput {
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched))
         pinch.delegate = self
         addGestureRecognizer(pinch)
+        self.pinch = pinch
         let pan = UIPanGestureRecognizer(target: self, action: #selector(panned))
         pan.maximumNumberOfTouches = 1
         pan.delegate = self
@@ -212,6 +225,7 @@ final class TerminalCanvasView: UIView, UIKeyInput {
     /// (the keyboard just came up and our resize hasn't landed yet): keep the font,
     /// and shift up only as far as needed to keep the cursor row in view. Changing the
     /// font for a height change made the screen jump while the keyboard animated.
+    /// Watching, the whole terminal fits instead: shrunk, or enlarged up to the largest font.
     private func geometry() -> Geometry {
         let usable = usableRect
         var origin = CGPoint(x: padding, y: padding)
@@ -219,8 +233,11 @@ final class TerminalCanvasView: UIView, UIKeyInput {
             return Geometry(origin: origin, fonts: fonts)
         }
         var drawFonts = fonts
-        let scale = usable.width / (CGFloat(screen.cols) * fonts.cellWidth)
-        if scale < 1 {
+        var scale = usable.width / (CGFloat(screen.cols) * fonts.cellWidth)
+        if watching {
+            scale = min(scale, usable.height / (CGFloat(screen.rows) * fonts.cellHeight), Self.fontRange.upperBound / fontSize)
+        }
+        if scale < 1 || (watching && scale > 1) {
             let size = (fontSize * scale * 4).rounded(.down) / 4
             if scaledFonts?.size != size { scaledFonts = Fonts(size: size, family: fontFamily) }
             drawFonts = scaledFonts!
@@ -293,6 +310,15 @@ final class TerminalCanvasView: UIView, UIKeyInput {
         }
         if let cursor = screen.cursor, cursor.y < screen.lines.count {
             drawCursor(cursor, origin: g.origin, cellWidth: g.cellWidth, cellHeight: g.cellHeight, fonts: g.fonts, in: context)
+        }
+        if watching {
+            let cells = CGRect(
+                x: g.origin.x, y: g.origin.y,
+                width: CGFloat(screen.cols) * g.cellWidth, height: CGFloat(screen.lines.count) * g.cellHeight)
+            UIColor(screen.foreground).withAlphaComponent(0.3).setStroke()
+            let outline = UIBezierPath(roundedRect: cells.insetBy(dx: -3, dy: -3), cornerRadius: 4)
+            outline.lineWidth = 1
+            outline.stroke()
         }
         if let thumb = scrollbarThumb(screen.scrollbar) {
             UIColor(screen.foreground).withAlphaComponent(0.45).setFill()
@@ -963,6 +989,8 @@ struct TerminalCanvas: UIViewRepresentable {
         view.darkKeyboard = dark
         view.onGridSize = onGridSize
         view.onEdgeSwipe = onEdgeSwipe
+        view.pinchEnabled = !model.watching
+        view.watching = model.watching
         view.screen = model.frame
         view.refreshKeyBar()
         // The toolbar's keyboard button flips this; follow it once the view is on screen.

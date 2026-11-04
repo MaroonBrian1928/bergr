@@ -51,6 +51,8 @@ private actor DemoEngine {
     /// One attached viewer.
     private struct View {
         let address: String
+        /// Watches only, like herdr-core's `observe`: its typing and size don't count.
+        var observe = false
         var line = ""
     }
 
@@ -89,13 +91,14 @@ private actor DemoEngine {
         }
         switch Frame.Kind(rawValue: frame.kind) {
         case .data:
+            guard views[frame.channel]?.observe != true else { return }
             typed(frame.payload, on: frame.channel)
         case .close:
             eventChannels.remove(frame.channel)
             views.removeValue(forKey: frame.channel)
             tasks.removeValue(forKey: frame.channel)?.cancel()
         case .resize:
-            guard frame.payload.count >= 4, let view = views[frame.channel] else { return }
+            guard frame.payload.count >= 4, let view = views[frame.channel], !view.observe else { return }
             let bytes = [UInt8](frame.payload)
             let cols = Int(bytes[0]) | Int(bytes[1]) << 8
             let rows = Int(bytes[2]) | Int(bytes[3]) << 8
@@ -154,9 +157,10 @@ private actor DemoEngine {
                 throw DemoError(code: -32000, message: "\(address) has finished", kind: "finished")
             }
             let cols = max(params["cols"] as? Int ?? 80, 20), rows = max(params["rows"] as? Int ?? 24, 5)
-            resize(address, cols: cols, rows: rows)
+            let observe = params["observe"] as? Bool ?? false
+            if !observe { resize(address, cols: cols, rows: rows) }
             let channel = openChannel()
-            views[channel] = View(address: address)
+            views[channel] = View(address: address, observe: observe)
             let result = try encode(Attached(channel: channel, terminal: terminals[index]))
             return (result, { [weak self] in
                 Task { await self?.paint(channel) }

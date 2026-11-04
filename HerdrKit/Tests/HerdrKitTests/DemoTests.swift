@@ -98,3 +98,21 @@ private actor Screen {
     try await client.remove("t8")
     await #expect(throws: HerdrError.self) { try await client.attach(terminal: "t8", cols: 40, rows: 10) }
 }
+
+/// Like herdr-core's `observe`: watching leaves the terminal's size alone and ignores typing.
+@Test(.timeLimit(.minutes(1))) func demoObserverWatchesWithoutResizingOrTyping() async throws {
+    let client = try await HerdrClient.connectDemo()
+    defer { Task { await client.close() } }
+
+    let before = try #require(try await client.listTerminals().terminals.first { $0.address == "t5" })
+    let observer = try await client.attach(terminal: "t5", cols: before.cols + 7, rows: before.rows + 3, observe: true)
+    let screen = Screen(observer.output)
+    _ = try await screen.wait(for: "Update dependencies")
+    try await observer.resize(cols: before.cols + 9, rows: before.rows + 5)
+    try await observer.send(Data("pwd\r".utf8))
+    try await Task.sleep(for: .milliseconds(300))
+
+    let after = try #require(try await client.listTerminals().terminals.first { $0.address == "t5" })
+    #expect(after.cols == before.cols && after.rows == before.rows)
+    #expect(!(await screen.text.contains("/Users/demo/projects/shop-api\r\n")))
+}

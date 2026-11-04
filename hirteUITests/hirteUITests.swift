@@ -230,6 +230,45 @@ final class DemoTourTests: XCTestCase {
         shot(app, "zoom-2-out")
     }
 
+    /// Watch Only: the terminal opens as an observer; tapping it takes over (and the choice is
+    /// remembered for the next terminal until it's switched off).
+    @MainActor
+    func testWatchOnly() throws {
+        let app = XCUIApplication()
+        app.launch()
+        startDemo(app)
+        open(app, "t5")
+        let watch = app.buttons["Watch Only"]
+        XCTAssertTrue(watch.waitForExistence(timeout: 5))
+        watch.tap()
+        // The subtitle says so (the size the other viewer set).
+        let banner = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Watching'")).firstMatch
+        XCTAssertTrue(banner.waitForExistence(timeout: 5), "watching shows in the title")
+        shot(app, "watch-0-watching")
+        // Typing takes over: the keyboard comes up and the banner goes.
+        app.descendants(matching: .any).matching(identifier: "terminal-screen").firstMatch.tap()
+        let hint = app.buttons["Continue"]
+        if hint.waitForExistence(timeout: 2) { hint.tap() }
+        XCTAssertTrue(app.buttons["Hide Keyboard"].waitForExistence(timeout: 5), "tapping brings up the keyboard")
+        XCTAssertFalse(banner.exists, "and takes over")
+        sleep(1)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Another viewer'")).firstMatch.exists,
+                       "taking over sets the size, also with the keyboard up")
+        XCTAssertTrue(app.buttons["Watch Only"].exists)
+        shot(app, "watch-1-taken-over")
+        // Watching again puts the keyboard away.
+        app.buttons["Watch Only"].tap()
+        XCTAssertTrue(app.buttons["Show Keyboard"].waitForExistence(timeout: 5), "watching hides the keyboard")
+        XCTAssertTrue(banner.waitForExistence(timeout: 5))
+        back(app)
+        // Remembered: the next terminal opens watching. Switch it off again for the other tests.
+        open(app, "t1")
+        XCTAssertTrue(banner.waitForExistence(timeout: 5), "the next terminal opens watching")
+        app.buttons["Take Over"].tap()
+        XCTAssertTrue(app.buttons["Watch Only"].waitForExistence(timeout: 5))
+        XCTAssertFalse(banner.exists)
+    }
+
     /// Agents lists only agents, with their status; Terminals lists every terminal by space.
     @MainActor
     func testAgentsAndTerminals() throws {

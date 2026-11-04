@@ -56,10 +56,14 @@ final class HostSession {
         address.flatMap { snapshot?[$0] }
     }
 
-    /// Attaches to a terminal's screen on the current connection.
-    func attach(address: String, cols: Int, rows: Int, display: DisplayFacts?) async throws -> AttachedTerminal {
+    /// Attaches to a terminal's screen on the current connection, with up to `history` lines of
+    /// what scrolled off before. Observing watches it at the size another viewer set, without typing.
+    func attach(
+        address: String, cols: Int, rows: Int, history: Int = 0, observe: Bool = false, display: DisplayFacts?
+    ) async throws -> AttachedTerminal {
         guard let client, state == .connected else { throw SessionError.connectionLost }
-        return try await client.attach(terminal: address, cols: cols, rows: rows, display: display)
+        return try await client.attach(
+            terminal: address, cols: cols, rows: rows, history: history, observe: observe, display: display)
     }
 
     // MARK: Managing terminals

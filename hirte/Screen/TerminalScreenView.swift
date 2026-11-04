@@ -10,6 +10,8 @@ struct TerminalScreenView: View {
     @State private var showingInfo = false
     @AppStorage(TerminalFont.sizeKey) private var fontSize = TerminalFont.defaultSize
     @AppStorage(TerminalFont.storageKey) private var fontFamily = TerminalFont.jetBrainsMono
+    /// Open terminals watching (observe) instead of taking them over; remembered.
+    @AppStorage("terminal.watch") private var watchByDefault = false
     @AppStorage(TerminalTheme.lightKey) private var lightTheme = TerminalTheme.defaultLight
     @AppStorage(TerminalTheme.darkKey) private var darkTheme = TerminalTheme.defaultDark
     @Environment(\.colorScheme) private var colorScheme
@@ -47,7 +49,7 @@ struct TerminalScreenView: View {
                     } : nil
                 ) { cols, rows in
                     if case .attaching = model.phase {
-                        model.start(session: session, address: address, cols: cols, rows: rows)
+                        model.start(session: session, address: address, cols: cols, rows: rows, watch: watchByDefault)
                     } else {
                         model.viewSizeChanged(cols: cols, rows: rows)
                     }
@@ -62,7 +64,9 @@ struct TerminalScreenView: View {
             }
         }
         .navigationTitle(terminal?.nameInSpace ?? address)
-        .navigationSubtitle(terminal.flatMap(spaceName) ?? "")
+        // Watching, the size being watched instead (the screen shows it as an outline).
+        .navigationSubtitle(model.watching && terminal != nil
+            ? "Watching · \(terminal!.cols)×\(terminal!.rows)" : terminal.flatMap(spaceName) ?? "")
         .navigationBarTitleDisplayMode(.inline)
         // The title bar sits on the terminal's background: match its brightness, not the app's.
         .toolbarColorScheme(theme.dark ? .dark : .light, for: .navigationBar)
@@ -70,6 +74,13 @@ struct TerminalScreenView: View {
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if model.phase == .live {
+                    // Watching is remembered for the next terminal; typing ends it only here.
+                    Button(model.watching ? "Take Over" : "Watch Only",
+                           systemImage: model.watching ? "eye.fill" : "eye")
+                    {
+                        watchByDefault = !model.watching
+                        model.setWatching(!model.watching)
+                    }
                     Button(model.wantsKeyboard ? "Hide Keyboard" : "Show Keyboard",
                            systemImage: model.wantsKeyboard ? "keyboard.chevron.compact.down" : "keyboard")
                     {
@@ -119,7 +130,8 @@ struct TerminalScreenView: View {
                 ProgressView("Attaching…").padding(.top, 40).tint(.white).foregroundStyle(.white)
             }
         case .live:
-            if model.sizeOwnedElsewhere {
+            // Watching needs no banner: the subtitle says so, and an outline shows the size.
+            if model.sizeOwnedElsewhere && !model.watching {
                 Banner(text: "Another viewer sets the size. Tap the screen and type to take over.",
                        systemImage: "rectangle.on.rectangle")
             } else if model.scrolledBack {

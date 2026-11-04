@@ -23,6 +23,9 @@ final class TerminalScreenModel {
     private(set) var scrolledBack = false
     /// Whether the software keyboard should be up; the canvas keeps it in sync.
     var wantsKeyboard = false
+    /// Attached as an observer: watching at the size another viewer set, without resizing the
+    /// terminal. The core ignores an observer's typing, so typing attaches again as a viewer.
+    private(set) var watching = false
 
     private var vt: VirtualTerminal?
     private var attached: AttachedTerminal?
@@ -30,6 +33,10 @@ final class TerminalScreenModel {
     private var renderScheduled = false
     /// What this view would like (fits its bounds); sent whenever we act.
     private var preferredSize: (cols: Int, rows: Int)?
+    private var session: HostSession?
+    private var address: String?
+    /// Typed while (re)attaching, e.g. the keys that ended watching; sent once attached.
+    private var pendingInput: [Data] = []
 
     /// The colors to draw with; changing it recolors the live screen (or, before there is one,
     /// the empty screen shown while attaching).
@@ -61,12 +68,15 @@ final class TerminalScreenModel {
         vt.setPalette(theme.ansiRGB)
     }
 
-    /// Starts once the view knows how many cells fit.
-    func start(session: HostSession, address: String, cols: Int, rows: Int) {
+    /// Starts once the view knows how many cells fit; `watch` attaches as an observer.
+    func start(session: HostSession, address: String, cols: Int, rows: Int, watch: Bool = false) {
         preferredSize = (cols, rows)
         guard pump == nil else { return }
+        self.session = session
+        self.address = address
+        watching = watch
         phase = .attaching
-        pump = Task { await run(session: session, address: address, cols: cols, rows: rows) }
+        pump = Task { await run() }
     }
 
     func stop() {
@@ -77,17 +87,45 @@ final class TerminalScreenModel {
         Task { await attached?.detach() }
     }
 
-    private func run(session: HostSession, address: String, cols: Int, rows: Int) async {
+    /// Switches between watching and being a viewer. A channel can't change its kind, so this
+    /// attaches again; the old screen stays up until the new one's first paint.
+    func setWatching(_ watch: Bool) {
+        guard watch != watching else { return }
+        watching = watch
+        // Watching means not typing: put the keyboard away (bringing it back takes over).
+        if watch { wantsKeyboard = false }
+        guard pump != nil, phase == .live else { return }
+        stop()
+        pump = Task { await run() }
+    }
+
+    /// Lines of earlier output to ask for when attaching, so there is something to scroll back to.
+    static let historyLines = 1000
+
+    private func run() async {
+        guard let session, let address, let size = preferredSize else { return }
+        let observe = watching
         do {
-            // Attaching makes us the active viewer: the core resizes the terminal to our size.
+            // Attaching as a viewer makes us the active one: the core resizes the terminal to our
+            // size. An observer leaves it at the size the active viewer (or nobody) set.
             let attached = try await session.attach(
-                address: address, cols: cols, rows: rows, display: theme.displayFacts)
+                address: address, cols: size.cols, rows: size.rows, history: Self.historyLines, observe: observe,
+                display: theme.displayFacts)
+            guard !Task.isCancelled else { return await attached.detach() }
             self.attached = attached
             let vt = try VirtualTerminal(
                 cols: max(attached.terminal.cols, 1), rows: max(attached.terminal.rows, 1))
             Self.apply(theme, to: vt)
             self.vt = vt
+            scrolledBack = false
             phase = .live
+            if !observe {
+                // The grid may have changed while attaching (taking over brings up the keyboard):
+                // claim the size we want now, or the terminal stays at the one we attached with.
+                if let now = preferredSize, now.cols != size.cols || now.rows != size.rows { claimSize() }
+                for data in pendingInput { try? await attached.send(data) }
+            }
+            pendingInput.removeAll()
             for try await chunk in attached.output {
                 vt.write(chunk)
                 scheduleRender()
@@ -95,11 +133,11 @@ final class TerminalScreenModel {
             if !Task.isCancelled { phase = .ended("Detached.") }
         } catch is CancellationError {
         } catch let end as StreamEnd {
-            phase = .ended(end.localizedDescription)
+            if !Task.isCancelled { phase = .ended(end.localizedDescription) }
         } catch {
             if !Task.isCancelled { phase = .failed(error.localizedDescription) }
         }
-        renderNow()
+        if !Task.isCancelled { renderNow() }
     }
 
     // MARK: Size
@@ -118,9 +156,9 @@ final class TerminalScreenModel {
         claimSize()
     }
 
-    /// Makes our size the terminal's size: resizing counts as activity.
+    /// Makes our size the terminal's size: resizing counts as activity (not while watching).
     private func claimSize() {
-        guard let attached, let size = preferredSize else { return }
+        guard !watching, let attached, let size = preferredSize else { return }
         vt?.resize(cols: size.cols, rows: size.rows)
         renderNow()
         Task { try? await attached.resize(cols: size.cols, rows: size.rows) }
@@ -169,13 +207,24 @@ final class TerminalScreenModel {
     }
 
     func focusChanged(_ focused: Bool) {
+        // The keyboard coming up means typing: stop watching.
+        if focused && watching { return setWatching(false) }
         guard let attached else { return }
         if focused && sizeOwnedElsewhere { claimSize() }
         Task { try? await attached.focus(focused) }
     }
 
     private func send(_ data: Data) {
-        guard let attached, !data.isEmpty else { return }
+        guard !data.isEmpty else { return }
+        // Typing while watching takes over: attach as a viewer, then send what was typed.
+        if watching {
+            pendingInput.append(data)
+            return setWatching(false)
+        }
+        guard let attached else {
+            if pump != nil { pendingInput.append(data) }
+            return
+        }
         // Typing makes us the active viewer again; show the live screen.
         if scrolledBack { scroll(toBottom: true) }
         if sizeOwnedElsewhere { claimSize() }
@@ -185,8 +234,16 @@ final class TerminalScreenModel {
     // MARK: Scrolling
 
     /// A scroll gesture over a cell: to the program (mouse wheel / arrows) or our history.
+    /// Watching, only our history scrolls, also under mouse-using programs like coding agents:
+    /// sending to the program would take over. (A full-screen program has no history to scroll.)
     func scroll(lines: Int, column: Int, row: Int) {
         guard let vt, lines != 0 else { return }
+        if watching {
+            guard !vt.isAlternateScreen else { return }
+            vt.scroll(by: lines)
+            scrolledBack = true
+            return renderNow()
+        }
         switch vt.wheel(lines: lines, column: column, row: row) {
         case .scrolledLocally:
             scrolledBack = true
