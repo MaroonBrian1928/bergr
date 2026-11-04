@@ -72,6 +72,28 @@ final class TerminalCanvasView: UIView, UIKeyInput {
     }()
     private let ticks = UISelectionFeedbackGenerator()
     private var pan: UIPanGestureRecognizer?
+    /// A sideways swipe that starts in our left part, for showing or hiding the lists beside us
+    /// (see `onEdgeSwipe`). Not a `UIScreenEdgePanGestureRecognizer`: with the lists showing, our
+    /// left edge is the column border, not the screen's, and a thin strip there was hard to hit.
+    private lazy var edgeSwipe: UIPanGestureRecognizer = {
+        let swipe = UIPanGestureRecognizer(target: self, action: #selector(edgeSwiped(_:)))
+        swipe.maximumNumberOfTouches = 1
+        swipe.delegate = self
+        swipe.isEnabled = false
+        return swipe
+    }()
+    /// How far from our left edge an edge swipe may start: the left third. Sideways swipes do
+    /// nothing else here (scrolling is vertical), but the rest stays free for other gestures.
+    private var edgeWidth: CGFloat { bounds.width / 3 }
+    /// Where the current touch went down, to tell whether it started at the edge.
+    private var edgeTouchStart: CGPoint?
+    /// Whether the current edge swipe has called `onEdgeSwipe` already.
+    private var edgeSwipeFired = false
+    /// Set while a swipe from the left edge should do something: called with `true` for a swipe
+    /// to the right, `false` for one to the left. The edge then isn't used for scrolling.
+    var onEdgeSwipe: ((_ toRight: Bool) -> Void)? {
+        didSet { edgeSwipe.isEnabled = onEdgeSwipe != nil }
+    }
     static let fontRange: ClosedRange<CGFloat> = 7...28
     private let padding: CGFloat = 10
     /// How much of our bottom the keyboard (and key bar) covers. We handle the keyboard
@@ -109,6 +131,7 @@ final class TerminalCanvasView: UIView, UIKeyInput {
         pan.delegate = self
         addGestureRecognizer(pan)
         self.pan = pan
+        addGestureRecognizer(edgeSwipe)
         let press = UILongPressGestureRecognizer(target: self, action: #selector(longPressed))
         press.minimumPressDuration = 0.35
         addGestureRecognizer(press)
@@ -522,6 +545,23 @@ final class TerminalCanvasView: UIView, UIKeyInput {
         }
     }
 
+    /// Fires once the finger has come far enough in, so the sidebar follows the swipe.
+    @objc private func edgeSwiped(_ swipe: UIPanGestureRecognizer) {
+        switch swipe.state {
+        case .began:
+            edgeSwipeFired = false
+        case .changed, .ended:
+            let x = swipe.translation(in: self).x
+            let flick = swipe.state == .ended ? swipe.velocity(in: self).x : 0
+            if !edgeSwipeFired, abs(x) > 40 || abs(flick) > 300 {
+                edgeSwipeFired = true
+                onEdgeSwipe?(abs(x) > 40 ? x > 0 : flick > 0)
+            }
+        default:
+            break
+        }
+    }
+
     @objc private func panned(_ pan: UIPanGestureRecognizer) {
         guard let model else { return }
         if pan.state == .began {
@@ -898,6 +938,8 @@ struct TerminalCanvas: UIViewRepresentable {
     @Binding var fontSize: Double
     var fontFamily: TerminalFont = .jetBrainsMono
     var dark = true
+    /// What a swipe in from the left edge does, if anything.
+    var onEdgeSwipe: ((_ toRight: Bool) -> Void)?
     let onGridSize: (Int, Int) -> Void
 
     func makeUIView(context: Context) -> TerminalCanvasView {
@@ -907,6 +949,7 @@ struct TerminalCanvas: UIViewRepresentable {
         view.fontSize = fontSize
         view.darkKeyboard = dark
         view.onGridSize = onGridSize
+        view.onEdgeSwipe = onEdgeSwipe
         view.onFontSize = { fontSize = Double($0) }
         // The model's screen from the first frame (already in the theme's colors while attaching).
         view.screen = model.frame
@@ -919,6 +962,7 @@ struct TerminalCanvas: UIViewRepresentable {
         view.fontSize = fontSize
         view.darkKeyboard = dark
         view.onGridSize = onGridSize
+        view.onEdgeSwipe = onEdgeSwipe
         view.screen = model.frame
         view.refreshKeyBar()
         // The toolbar's keyboard button flips this; follow it once the view is on screen.
@@ -953,5 +997,29 @@ extension TerminalCanvasView: UIGestureRecognizerDelegate {
     ) -> Bool {
         (gestureRecognizer is UIPinchGestureRecognizer && other === pan)
             || (gestureRecognizer === pan && other is UIPinchGestureRecognizer)
+    }
+
+    /// While the edge swipe is on, a touch at the left edge is its first; anywhere else it fails
+    /// at once, and scrolling goes on as before.
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRequireFailureOf other: UIGestureRecognizer
+    ) -> Bool {
+        gestureRecognizer === pan && other === edgeSwipe && edgeSwipe.isEnabled
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if gestureRecognizer === edgeSwipe { edgeTouchStart = touch.location(in: self) }
+        return true
+    }
+
+    /// An edge swipe starts in the left part and goes clearly sideways; anything else fails it at
+    /// once, so scrolling begins as usual.
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === edgeSwipe, let swipe = gestureRecognizer as? UIPanGestureRecognizer else {
+            return super.gestureRecognizerShouldBegin(gestureRecognizer)
+        }
+        let velocity = swipe.velocity(in: self)
+        return (edgeTouchStart?.x ?? .infinity) <= edgeWidth && abs(velocity.x) > 1.5 * abs(velocity.y)
     }
 }

@@ -13,6 +13,7 @@ struct TerminalScreenView: View {
     @AppStorage(TerminalTheme.lightKey) private var lightTheme = TerminalTheme.defaultLight
     @AppStorage(TerminalTheme.darkKey) private var darkTheme = TerminalTheme.defaultDark
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     private var theme: TerminalTheme { TerminalTheme.current(colorScheme, light: lightTheme, dark: darkTheme) }
 
@@ -37,7 +38,14 @@ struct TerminalScreenView: View {
             // Before the first frame, the theme's background (the frame's afterwards: programs may change it).
             Color(uiColor: UIColor(model.frame.cols == 0 ? theme.backgroundRGB : model.frame.background)).ignoresSafeArea()
             if terminal?.isLive ?? false || model.phase == .live {
-                TerminalCanvas(model: model, fontSize: $fontSize, fontFamily: fontFamily, dark: theme.dark) { cols, rows in
+                TerminalCanvas(
+                    model: model, fontSize: $fontSize, fontFamily: fontFamily, dark: theme.dark,
+                    // Unfolded, from the terminal's left part: swiping right brings back the lists,
+                    // swiping left pushes them away. (Folded, the edge is the stack's back swipe.)
+                    onEdgeSwipe: sizeClass == .regular ? { toRight in
+                        if toRight == expanded { withAnimation { expanded = !toRight } }
+                    } : nil
+                ) { cols, rows in
                     if case .attaching = model.phase {
                         model.start(session: session, address: address, cols: cols, rows: rows)
                     } else {
@@ -68,16 +76,8 @@ struct TerminalScreenView: View {
                         model.wantsKeyboard.toggle()
                     }
                 }
-                Menu {
-                    Button("Info", systemImage: "info.circle") { showingInfo = true }
-                    Button(expanded ? "Show Lists" : "Focus Terminal",
-                           systemImage: expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                    {
-                        withAnimation { expanded.toggle() }
-                    }
-                } label: {
-                    Label("More", systemImage: "ellipsis")
-                }
+                // Hiding and showing the lists is the split view's own sidebar button.
+                Button("Info", systemImage: "info.circle") { showingInfo = true }
             }
         }
         .sheet(isPresented: $showingInfo) {
