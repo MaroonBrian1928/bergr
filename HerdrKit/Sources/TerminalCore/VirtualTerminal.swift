@@ -437,6 +437,17 @@ public final class VirtualTerminal {
 
     private func prepareMouse() {
         ghostty_mouse_encoder_setopt_from_terminal(mouseEncoder, terminal)
+        // Workaround: the first paint of herdr-core 0.1.18 (Ghostty's formatter) replays mode bits
+        // in numeric order, so a program that turned on 1015 then 1006 (btop) ends up in urxvt
+        // format here, and its SGR parser ignores our clicks. Like xterm, let SGR win whenever
+        // its mode is on, and SGR pixels over both.
+        var format: GhosttyMouseFormat?
+        if isPrivateModeEnabled(1016) {
+            format = GHOSTTY_MOUSE_FORMAT_SGR_PIXELS
+        } else if isPrivateModeEnabled(1006) {
+            format = GHOSTTY_MOUSE_FORMAT_SGR
+        }
+        if var format { ghostty_mouse_encoder_setopt(mouseEncoder, GHOSTTY_MOUSE_ENCODER_OPT_FORMAT, &format) }
         var size = GhosttyMouseEncoderSize()
         size.size = MemoryLayout<GhosttyMouseEncoderSize>.size
         size.screen_width = UInt32(cols) * mouseCell.width

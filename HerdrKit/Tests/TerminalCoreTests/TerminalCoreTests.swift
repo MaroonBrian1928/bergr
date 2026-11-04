@@ -220,3 +220,12 @@ private func bytes(_ s: String) -> Data { Data(s.utf8) }
     // The middle of cell (10, 5): 10 × 17 + 8, 5 × 33 + 16.
     #expect(click.hasPrefix("\u{1b}[<0;178;181M"))
 }
+
+/// herdr-core's first paint sets 1006 before 1015 (btop sent them the other way round):
+/// clicks must still be SGR, which is all btop parses.
+@Test func sgrMouseWinsOverUrxvt() throws {
+    let vt = try VirtualTerminal(cols: 80, rows: 24)
+    vt.write(Data("\u{1b}[?1002h\u{1b}[?1006h\u{1b}[?1015h".utf8))
+    let click = String(decoding: vt.click(column: 10, row: 5) ?? Data(), as: UTF8.self)
+    #expect(click == "\u{1b}[<0;11;6M\u{1b}[<0;11;6m")
+}
