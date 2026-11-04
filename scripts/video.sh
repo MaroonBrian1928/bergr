@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# The README video: records the UI test DemoTourTests/testVideoTour on a clean simulator, cuts it to
+# the app and frames it on Hirte's charcoal with rounded corners.
+# Output: .build/video/<device>/hirte.mp4 (and hirte.gif, small, for places that don't play video)
+#
+#   scripts/video.sh [light|dark] [device type]     (default: dark, "iPhone 17 Pro")
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+appearance="${1:-dark}"
+device_type="${2:-iPhone 17 Pro}"
+sim_name="Hirte Screenshots ($device_type)"
+out=".build/video/$(echo "$device_type" | tr 'A-Z ' 'a-z-')"
+
+# A clean, dedicated simulator (sets $device).
+source scripts/simulator.sh
+
+rm -rf "$out"
+mkdir -p "$out/marks"
+case "$device_type" in
+    "iPhone Duo") font=14 ;;
+    "iPhone 17 Pro" | "iPhone 17") font=15 ;;
+    *) font=17 ;;
+esac
+xcodebuild=(xcodebuild -project hirte.xcodeproj -scheme hirte -derivedDataPath .build/xcode
+    ${HIRTE_TEAM:+DEVELOPMENT_TEAM=$HIRTE_TEAM} HIRTE_BUNDLE_ID_PREFIX="${HIRTE_BUNDLE_ID_PREFIX:-com.pavelzw}"
+    -destination "id=$device" -only-testing:hirteUITests/DemoTourTests/testVideoTour)
+# Build first, so the recording doesn't wait for the compiler.
+"${xcodebuild[@]}" build-for-testing | xcbeautify --quiet
+
+# Record the whole run; the test notes when the app is ready (start) and done (end).
+xcrun simctl io "$device" recordVideo --codec h264 --force "$out/raw.mov" 2>"$out/record.log" &
+recorder=$!
+until grep -q "Recording started" "$out/record.log" 2>/dev/null; do sleep 0.1; done
+python3 -I -c 'import time; print(time.time())' >"$out/marks/t0"
+TEST_RUNNER_HIRTE_VIDEO="$PWD/$out/marks" TEST_RUNNER_HIRTE_SHOT_FONT="$font" \
+    "${xcodebuild[@]}" test-without-building | xcbeautify --quiet || { kill -INT $recorder; exit 1; }
+kill -INT $recorder
+wait $recorder || true
+xcrun simctl status_bar "$device" clear
+
+read -r from length < <(python3 -I -c '
+import sys
+t0, start, end = (float(open(p).read()) for p in sys.argv[1:])
+print(f"{max(start - t0, 0):.2f} {end - start:.2f}")' "$out/marks/t0" "$out/marks/start" "$out/marks/end")
+
+# Frame: the recording at 720 px wide with rounded corners, on charcoal with a margin.
+read -r W H < <(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$out/raw.mov" | tr , ' ')
+w=720
+h=$(( (H * w / W) / 2 * 2 ))
+pad=56
+radius=48
+magick -size "${w}x${h}" xc:black -fill white -draw "roundrectangle 0,0,$((w - 1)),$((h - 1)),$radius,$radius" "$out/mask.png"
+ffmpeg -v error -y -ss "$from" -t "$length" -i "$out/raw.mov" -loop 1 -i "$out/mask.png" -filter_complex "
+    [0:v]fps=30,scale=${w}:${h},format=rgba[video];
+    [1:v]format=gray[mask];
+    [video][mask]alphamerge=shortest=1[rounded];
+    color=c=0x303438:s=$((w + 2 * pad))x$((h + 2 * pad)):r=30[bg];
+    [bg][rounded]overlay=${pad}:${pad}:shortest=1,format=yuv420p[out]" \
+    -map "[out]" -t "$length" -c:v libx264 -crf 22 -preset slow -movflags +faststart -an "$out/hirte.mp4"
+ffmpeg -v error -y -i "$out/hirte.mp4" -filter_complex \
+    "fps=12,scale=360:-2:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4" \
+    "$out/hirte.gif"
+rm "$out/mask.png"
+
+echo "Video ($device_type, $appearance, ${length}s): $out/hirte.mp4 ($(du -h "$out/hirte.mp4" | cut -f1)), $out/hirte.gif ($(du -h "$out/hirte.gif" | cut -f1))"

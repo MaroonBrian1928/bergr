@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test and build
+    # Off until GitHub's macOS runners have Xcode 27.
+    if: false
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+
+      # The app targets iOS 27.1, so it needs Xcode 27; use the newest one on the runner.
+      - name: Select Xcode 27
+        run: |
+          xcode="$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$xcode" ]; then
+            echo "::error::No Xcode 27 on this runner. Installed: $(ls -d /Applications/Xcode*.app | xargs)"
+            exit 1
+          fi
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+
+      - name: Install tools
+        run: brew install just xcbeautify pixi
+
+      # libghostty-vt takes a few minutes to build; it only changes with the Ghostty pin.
+      - name: Ghostty pin
+        id: ghostty
+        run: echo "commit=$(git rev-parse HEAD:vendor/ghostty)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: ghostty-cache
+        with:
+          path: HerdrKit/Frameworks/ghostty-vt.xcframework
+          key: ghostty-vt-${{ steps.ghostty.outputs.commit }}-${{ hashFiles('justfile') }}
+      - name: Build libghostty-vt
+        if: steps.ghostty-cache.outputs.cache-hit != 'true'
+        run: just ghostty
+
+      # KeyStoreTests need the data protection keychain, which a CI runner's test process can't use.
+      # The live tests skip themselves without a local herdr-core.
+      - name: HerdrKit tests
+        working-directory: HerdrKit
+        run: swift test --skip KeyStoreTests
+
+      - name: Build the app
+        run: |
+          xcodebuild -project hirte.xcodeproj -scheme hirte -configuration Debug \
+            -destination "generic/platform=iOS" -derivedDataPath .build/xcode \
+            CODE_SIGNING_ALLOWED=NO build | xcbeautify
