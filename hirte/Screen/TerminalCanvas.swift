@@ -316,7 +316,7 @@ final class TerminalCanvasView: UIView, UIKeyInput {
                     x: g.origin.x + CGFloat(selected.lowerBound) * g.cellWidth, y: top,
                     width: CGFloat(selected.count) * g.cellWidth, height: g.cellHeight))
             }
-            drawText(line, top: top, origin: g.origin, cellWidth: g.cellWidth, fonts: g.fonts)
+            drawText(line, top: top, origin: g.origin, cellWidth: g.cellWidth, cellHeight: g.cellHeight, fonts: g.fonts)
         }
         if let cursor = screen.cursor, cursor.y < screen.lines.count {
             drawCursor(cursor, origin: g.origin, cellWidth: g.cellWidth, cellHeight: g.cellHeight, fonts: g.fonts, in: context)
@@ -379,7 +379,9 @@ final class TerminalCanvasView: UIView, UIKeyInput {
 
     /// Groups plain single-width cells of one style into runs; wide or complex
     /// graphemes are drawn on their own so the grid stays aligned.
-    private func drawText(_ line: [ScreenCell], top: CGFloat, origin: CGPoint, cellWidth: CGFloat, fonts: Fonts) {
+    private func drawText(
+        _ line: [ScreenCell], top: CGFloat, origin: CGPoint, cellWidth: CGFloat, cellHeight: CGFloat, fonts: Fonts
+    ) {
         var linked = IndexSet()
         for link in LinkDetector.links(in: line) { linked.insert(integersIn: link.columns) }
         for (column, cell) in line.enumerated() where cell.hyperlink { linked.insert(column) }
@@ -409,6 +411,14 @@ final class TerminalCanvasView: UIView, UIKeyInput {
                     end += 1
                 }
             }
+            if !simple, cell.width == 1, cell.text.unicodeScalars.count == 1,
+               let dots = Self.braille(cell.text.unicodeScalars.first!)
+            {
+                let box = CGRect(x: origin.x + CGFloat(x) * cellWidth, y: top, width: cellWidth, height: cellHeight)
+                drawBraille(dots, in: box, style: cell.style)
+                x = end
+                continue
+            }
             // One cell wide but emoji-capable (Claude Code's ⏺, ⏸, ☑…): ask for the text form, or
             // iOS falls back to Apple Color Emoji for glyphs the terminal font lacks.
             if !simple, cell.width == 1, let scalar = text.unicodeScalars.first, text.unicodeScalars.count == 1,
@@ -421,6 +431,30 @@ final class TerminalCanvasView: UIView, UIKeyInput {
             NSAttributedString(string: text, attributes: attributes(style, fonts: fonts))
                 .draw(at: CGPoint(x: origin.x + CGFloat(x) * cellWidth, y: top))
             x = end
+        }
+    }
+
+    /// The dots of a braille pattern (U+2800–U+28FF), nil for anything else.
+    private static func braille(_ scalar: Unicode.Scalar) -> UInt8? {
+        (0x2800...0x28FF).contains(scalar.value) ? UInt8(scalar.value - 0x2800) : nil
+    }
+
+    /// Braille spread over the whole cell, as Ghostty draws it: from the font, the dots sit in
+    /// the glyph's box, and graphs (btop) show gaps between rows and columns.
+    private func drawBraille(_ dots: UInt8, in box: CGRect, style: CellStyle) {
+        guard dots != 0, let context = UIGraphicsGetCurrentContext() else { return }
+        var color = UIColor(colors(style).fg)
+        if style.faint { color = color.withAlphaComponent(0.6) }
+        color.setFill()
+        // Bits 0–2 and 6 are the left column top to bottom, 3–5 and 7 the right one.
+        let positions: [(column: Int, row: Int)] = [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (0, 3), (1, 3)]
+        let spacingX = box.width / 2, spacingY = box.height / 4
+        let size = max(min(spacingX, spacingY) * 0.6, 1)
+        for (bit, position) in positions.enumerated() where dots & (1 << bit) != 0 {
+            let center = CGPoint(
+                x: box.minX + (CGFloat(position.column) + 0.5) * spacingX,
+                y: box.minY + (CGFloat(position.row) + 0.5) * spacingY)
+            context.fill(CGRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size))
         }
     }
 
