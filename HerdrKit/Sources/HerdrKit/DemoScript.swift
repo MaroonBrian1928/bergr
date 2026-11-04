@@ -24,18 +24,18 @@ enum DemoScript {
                 status: .init(state: "working", app: "agent", title: "Adding a dark mode toggle",
                               msg: "Updating styles (12 of 20 files)", progress: 60),
                 labels: seen(2), foreground: .init(pid: 31_201, name: "agent", argv: ["agent"], cwd: website),
-                createdMs: ago(minutes: 18), turn: 2),
+                createdMs: ago(minutes: 18), turn: 2, statusMs: ago(minutes: 6)),
             DemoTerminal(
                 address: "t2", name: "tests", argv: ["npm", "test", "--", "--watch"], cwd: website,
                 status: .init(state: "working", app: "tests", title: "Running tests", msg: "31 of 48 passed", progress: 65),
                 labels: seen(0), foreground: .init(pid: 31_377, name: "node", argv: ["node", "vitest", "--watch"], cwd: website),
-                createdMs: ago(minutes: 3), parent: "t1"),
+                createdMs: ago(minutes: 3), parent: "t1", statusMs: ago(minutes: 3)),
             DemoTerminal(
                 address: "t3", argv: ["agent"], cwd: shopAPI, title: "agent",
                 status: .init(state: "blocked", app: "agent", title: "Run the database migration?",
                               msg: "npm run migrate", kind: "permission"),
                 labels: seen(1), foreground: .init(pid: 30_822, name: "agent", argv: ["agent"], cwd: shopAPI),
-                createdMs: ago(minutes: 41), turn: 1),
+                createdMs: ago(minutes: 41), turn: 1, statusMs: ago(minutes: 12)),
             DemoTerminal(
                 address: "t4", name: "dev-server", argv: ["npm", "run", "dev"], cwd: website,
                 foreground: .init(pid: 29_910, name: "node", argv: ["node", "vite"], cwd: website),
@@ -49,7 +49,7 @@ enum DemoScript {
                 status: .init(state: "done", app: "agent", title: "Upgraded Postgres to 18", msg: "All checks green"),
                 // Finished a turn nobody has looked at yet.
                 labels: seen(2), foreground: .init(pid: 28_456, name: "agent", argv: ["agent"], cwd: infra),
-                createdMs: ago(minutes: 130), turn: 3),
+                createdMs: ago(minutes: 130), turn: 3, statusMs: ago(minutes: 47)),
             DemoTerminal(
                 address: "t7", name: "nightly-backup", argv: ["./backup.sh"], cwd: infra, state: "finished",
                 createdMs: ago(minutes: 300), exitCode: 0, reason: "exited"),

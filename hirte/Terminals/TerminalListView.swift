@@ -470,19 +470,38 @@ struct TerminalRow: View {
             }
             Spacer(minLength: 8)
             if let agentState {
-                // Tap the dot for what it means.
+                // Tap the dot (or its time) for what it means.
                 Button { explaining = true } label: {
-                    StatusDot(agent: agentState)
-                        .padding(.leading, 12)
-                        .padding(.vertical, 6)
-                        .contentShape(Rectangle())
+                    HStack(spacing: 6) {
+                        if let since = terminal.statusSince {
+                            // Not `.everyMinute`: its dates are minute starts, up to 59 s early.
+                            TimelineView(.periodic(from: .now, by: 30)) { context in
+                                Text(Terminal.shortAge(since, now: context.date))
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        StatusDot(agent: agentState)
+                    }
+                    .padding(.leading, 12)
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel(terminal.statusSince.map {
+                    "\(agentState.title), since \($0.formatted(.relative(presentation: .named)))"
+                } ?? agentState.title)
                 .popover(isPresented: $explaining) {
-                    Label { Text(agentState.explanation) } icon: { StatusDot(agent: agentState) }
-                        .font(.callout)
-                        .padding()
-                        .presentationCompactAdaptation(.popover)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label { Text(agentState.explanation) } icon: { StatusDot(agent: agentState) }
+                        if let since = terminal.statusSince {
+                            Text("Since \(since.formatted(.relative(presentation: .named)))")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.callout)
+                    .padding()
+                    .presentationCompactAdaptation(.popover)
                 }
             } else {
                 StatusDot(state: terminal.isLive ? terminal.status?.state : "finished")
@@ -691,6 +710,21 @@ extension Terminal {
             return exitCode.map { "exited \($0)" } ?? reason
         }
         return Self.abbreviate(cwd)
+    }
+
+    /// When its status word last changed, as herdr-core reports it.
+    var statusSince: Date? {
+        statusMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) }
+    }
+
+    /// "now", "47m", "3h", "2d": how long ago, as short as herdr-app's agents list shows it.
+    /// A machine's clock running ahead reads as now.
+    static func shortAge(_ date: Date, now: Date = .now) -> String {
+        let minutes = Int(now.timeIntervalSince(date) / 60)
+        if minutes < 1 { return "now" }
+        if minutes < 60 { return "\(minutes)m" }
+        if minutes < 24 * 60 { return "\(minutes / 60)h" }
+        return "\(minutes / (24 * 60))d"
     }
 
     static func abbreviate(_ path: String) -> String {

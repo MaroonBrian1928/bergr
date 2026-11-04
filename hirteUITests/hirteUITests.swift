@@ -355,7 +355,10 @@ final class DemoTourTests: XCTestCase {
         shot(app, "status-0-agents")
 
         // The dot explains itself.
-        app.buttons["Needs you"].firstMatch.tap()
+        let dot = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Needs you, since'")).firstMatch
+        XCTAssertTrue(dot.label.contains("12 minutes"), "with how long it has waited: \(dot.label)")
+        XCTAssertTrue(app.staticTexts["12m"].exists, "shown short in the row")
+        dot.tap()
         XCTAssertTrue(app.staticTexts["Needs you: waiting for your answer."].waitForExistence(timeout: 5))
         shot(app, "status-1-legend")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()

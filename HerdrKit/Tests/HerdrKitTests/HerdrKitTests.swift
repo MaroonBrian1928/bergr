@@ -189,6 +189,21 @@ private func terminal(_ address: String, cwd: String = "/tmp", parent: String? =
     #expect(snapshot["t1"]?.turn == 3)
 }
 
+/// `status_ms` comes with records; a status event that changes the word moves it (core leaves
+/// it out of the event), one that only changes the message doesn't.
+@Test func statusEventsMoveTheStatusTime() throws {
+    let json = #"{"address":"t1","state":"live","status":{"state":"working"},"status_ms":1000}"#
+    var snapshot = TerminalSnapshot(seq: 1, terminals: [try JSONDecoder().decode(Terminal.self, from: Data(json.utf8))])
+    #expect(snapshot["t1"]?.statusMs == 1000)
+    func status(_ seq: Int, _ data: String) -> EventMessage {
+        EventMessage.decode(Data(#"{"method":"event","params":{"seq":\#(seq),"type":"status","terminal":"t1","data":{"status":\#(data)}}}"#.utf8))!
+    }
+    snapshot.apply(status(2, #"{"state":"working","msg":"still"}"#))
+    #expect(snapshot["t1"]?.statusMs == 1000)
+    snapshot.apply(status(3, #"{"state":"done"}"#))
+    #expect(snapshot["t1"]!.statusMs! > 1000)
+}
+
 /// herdr-app's `docs/labels.md`: done while a turn ended after the one last seen.
 @Test func agentStateFollowsSharedReadState() throws {
     let seen = Terminal.seenLabel
@@ -341,6 +356,7 @@ func localHerdrCoreTurns() async throws {
     let terminal = try #require(snapshot[ran.address])
     #expect(terminal.turn == 1)
     #expect(terminal.agentState == .done)
+    #expect(terminal.statusMs != nil)
 
     struct Label: Encodable, Sendable { let terminal: String; let labels: [String: String] }
     struct Empty: Codable, Sendable {}

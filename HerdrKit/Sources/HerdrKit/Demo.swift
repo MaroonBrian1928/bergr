@@ -218,6 +218,7 @@ private actor DemoEngine {
             // A template or command: show it as a fresh agent that waits for its first turn.
             terminal.argv = argv
             terminal.status = .init(state: "idle", app: "agent", title: first, msg: argv.dropFirst().joined(separator: " "))
+            terminal.statusMs = DemoScript.now
             terminal.foreground = nil
             roles[address] = .agent(DemoScript.newAgentPaint(task: argv.dropFirst().joined(separator: " ")))
         } else {
@@ -257,6 +258,9 @@ private actor DemoEngine {
         guard let index = terminals.firstIndex(where: { $0.address == address }),
               terminals[index].state == "live" else { return }
         let wasWorking = terminals[index].status?.state == "working"
+        if status?.state != terminals[index].status?.state {
+            terminals[index].statusMs = UInt64(Date().timeIntervalSince1970 * 1000)
+        }
         terminals[index].status = status
         let body = (try? status.map { try json($0) }) ?? nil
         emit("status", address, data: #"{"status":\#(body ?? "null")}"#)
@@ -516,11 +520,12 @@ struct DemoTerminal: Encodable, Sendable {
     var reason: String?
     var parent: String?
     var turn: UInt64 = 0
+    var statusMs: UInt64?
 
     init(address: String, name: String? = nil, argv: [String], cwd: String, state: String = "live",
          title: String? = nil, status: DemoStatus? = nil, labels: [String: String] = [:],
          foreground: DemoForeground? = nil, createdMs: UInt64, exitCode: Int32? = nil,
-         reason: String? = nil, parent: String? = nil, turn: UInt64 = 0) {
+         reason: String? = nil, parent: String? = nil, turn: UInt64 = 0, statusMs: UInt64? = nil) {
         self.address = address
         self.name = name
         self.argv = argv
@@ -535,12 +540,14 @@ struct DemoTerminal: Encodable, Sendable {
         self.reason = reason
         self.parent = parent
         self.turn = turn
+        self.statusMs = statusMs
     }
 
     enum CodingKeys: String, CodingKey {
         case address, name, argv, cwd, state, title, status, foreground, labels, cols, rows, reason, parent, turn
         case createdMs = "created_ms"
         case exitCode = "exit_code"
+        case statusMs = "status_ms"
     }
 }
 

@@ -57,3 +57,17 @@ struct HostTests {
         #expect(reloaded.hasDemo)
     }
 }
+
+struct AgeTests {
+    @Test func shortAgesLikeHerdrApp() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        func age(_ seconds: TimeInterval) -> String { Terminal.shortAge(now.addingTimeInterval(-seconds), now: now) }
+        #expect(age(59) == "now")
+        #expect(age(-30) == "now")  // the machine's clock is ahead
+        #expect(age(60) == "1m")
+        #expect(age(47 * 60 + 59) == "47m")
+        #expect(age(3 * 3600) == "3h")
+        #expect(age(23 * 3600 + 3599) == "23h")
+        #expect(age(2 * 86_400) == "2d")
+    }
+}

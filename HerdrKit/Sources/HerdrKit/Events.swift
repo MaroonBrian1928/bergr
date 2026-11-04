@@ -194,7 +194,14 @@ public struct TerminalSnapshot: Sendable {
             terminal.reason = reason
             terminal.exitCode = exitCode
             terminal.foreground = nil
-        case .status(let status): terminal.status = status
+        case .status(let status):
+            // herdr-core (0.1.18) moves `status_ms` when the word changes but leaves it out of the
+            // `status` event: stamp it on arrival, close enough for "47m". Remove once the
+            // event carries it.
+            if status?.state != terminal.status?.state {
+                terminal.statusMs = UInt64(Date().timeIntervalSince1970 * 1000)
+            }
+            terminal.status = status
         case .title(let title): terminal.title = title
         case .size(let cols, let rows):
             terminal.cols = cols

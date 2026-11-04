@@ -57,6 +57,9 @@ public struct Terminal: Codable, Hashable, Sendable, Identifiable {
     /// core's counter: up by one each time the status leaves `working`. Nil from a core that
     /// doesn't send it.
     public internal(set) var turn: UInt64?
+    /// When the status word last changed (ms since the epoch, the machine's clock); nil if it
+    /// never said.
+    public internal(set) var statusMs: UInt64?
 
     public var id: String { address }
 
@@ -74,6 +77,7 @@ public struct Terminal: Codable, Hashable, Sendable, Identifiable {
         case address, name, argv, cwd, state, title, status, foreground, labels, cols, rows, reason, parent, turn
         case createdMs = "created_ms"
         case exitCode = "exit_code"
+        case statusMs = "status_ms"
     }
 
     public init(from decoder: Decoder) throws {
@@ -96,6 +100,7 @@ public struct Terminal: Codable, Hashable, Sendable, Identifiable {
         reason = try c.decodeIfPresent(String.self, forKey: .reason)
         parent = try c.decodeIfPresent(String.self, forKey: .parent)
         turn = try c.decodeIfPresent(UInt64.self, forKey: .turn)
+        statusMs = try c.decodeIfPresent(UInt64.self, forKey: .statusMs)
     }
 }
 
