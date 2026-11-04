@@ -29,7 +29,9 @@ public struct TerminalEvent: Sendable {
         case size(cols: Int, rows: Int)
         case foreground(Foreground?)
         case doc(name: String)
-        /// Kinds we do not model (`keep`, `turn`, newer ones).
+        /// A turn ended: the status left `working`.
+        case turn(UInt64)
+        /// Kinds we do not model (`keep`, newer ones).
         case other(type: String)
     }
 }
@@ -92,6 +94,7 @@ extension EventMessage {
             let rows: Int
         }
         struct Doc: Decodable { let name: String }
+        struct Turn: Decodable { let turn: UInt64 }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -117,6 +120,7 @@ extension EventMessage {
                 change = .size(cols: size.cols, rows: size.rows)
             case "foreground": change = .foreground(try c.decodeIfPresent(Foreground.self, forKey: .data))
             case "doc": change = .doc(name: try c.decode(Doc.self, forKey: .data).name)
+            case "turn": change = .turn(try c.decode(Turn.self, forKey: .data).turn)
             default: change = .other(type: type)
             }
             event = TerminalEvent(
@@ -196,6 +200,7 @@ public struct TerminalSnapshot: Sendable {
             terminal.cols = cols
             terminal.rows = rows
         case .foreground(let foreground): terminal.foreground = foreground
+        case .turn(let turn): terminal.turn = turn
         case .created, .restarted, .removed, .labels, .doc, .other: break
         }
     }

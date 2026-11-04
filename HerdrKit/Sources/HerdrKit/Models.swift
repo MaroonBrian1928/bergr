@@ -54,6 +54,9 @@ public struct Terminal: Codable, Hashable, Sendable, Identifiable {
     public internal(set) var exitCode: Int32?
     public internal(set) var reason: String?
     public internal(set) var parent: String?
+    /// core's counter: up by one each time the status leaves `working`. Nil from a core that
+    /// doesn't send it.
+    public internal(set) var turn: UInt64?
 
     public var id: String { address }
 
@@ -68,7 +71,7 @@ public struct Terminal: Codable, Hashable, Sendable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case address, name, argv, cwd, state, title, status, foreground, labels, cols, rows, reason, parent
+        case address, name, argv, cwd, state, title, status, foreground, labels, cols, rows, reason, parent, turn
         case createdMs = "created_ms"
         case exitCode = "exit_code"
     }
@@ -92,6 +95,7 @@ public struct Terminal: Codable, Hashable, Sendable, Identifiable {
         exitCode = try c.decodeIfPresent(Int32.self, forKey: .exitCode)
         reason = try c.decodeIfPresent(String.self, forKey: .reason)
         parent = try c.decodeIfPresent(String.self, forKey: .parent)
+        turn = try c.decodeIfPresent(UInt64.self, forKey: .turn)
     }
 }
 

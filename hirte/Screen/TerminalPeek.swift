@@ -57,6 +57,8 @@ struct TerminalPeek: View {
             // Again after an earlier long-press (it stopped when that menu closed).
             if grid != nil { start() }
         }
+        // A peek leaves an unread agent unread (herdr-app's labels.md counts peeks as looking;
+        // here a glance isn't reading it). Opening it reads it.
         .onDisappear { model.stop() }
     }
 

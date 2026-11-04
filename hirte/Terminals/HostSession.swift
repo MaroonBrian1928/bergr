@@ -38,6 +38,12 @@ final class HostSession {
     private var lastHeard = Date.distantPast
     private let knownHosts: any KnownHostsStore
 
+    /// Terminals on screen now (the terminal screen, a peek), counted: both can show one at once.
+    private var looking: [String: Int] = [:]
+    /// The turn `herdr.seen` was written for while on screen: once per turn, so a "mark unread"
+    /// from another client isn't overruled by a screen nobody watches.
+    private var seenWritten: [String: UInt64] = [:]
+
     /// herdr-core sends a heartbeat every 15 s; this much silence means the line is dead.
     private static let silenceLimit: TimeInterval = 40
 
@@ -94,6 +100,36 @@ final class HostSession {
 
     func remove(_ address: String) async throws {
         try await connectedClient().remove(address)
+    }
+
+    // MARK: Read state
+
+    /// Someone is looking at this terminal (the app is in front: in the background, sessions
+    /// are paused). Marks its agent read, now and after each turn while it stays on screen.
+    func startLooking(at address: String) {
+        looking[address, default: 0] += 1
+        markLookedAt()
+    }
+
+    func stopLooking(at address: String) {
+        looking[address, default: 0] -= 1
+        guard looking[address, default: 0] <= 0 else { return }
+        looking.removeValue(forKey: address)
+        // Looking again later raises it again.
+        seenWritten.removeValue(forKey: address)
+    }
+
+    /// Raises `herdr.seen` on the agents on screen (herdr-app's `docs/labels.md`). Called when
+    /// one comes on screen and after every event, which covers the `turn` event that ends a turn.
+    private func markLookedAt() {
+        guard state == .connected, let client else { return }
+        for address in looking.keys {
+            guard let terminal = terminal(address), terminal.isLive, terminal.status != nil,
+                  let labels = terminal.markSeen, let turn = terminal.turn, seenWritten[address] != turn
+            else { continue }
+            seenWritten[address] = turn
+            Task { try? await client.label(address, labels) }
+        }
     }
 
     /// The user's home folder there, guessed from where terminals run (`/Users/me`, `/home/me`).
@@ -191,6 +227,7 @@ final class HostSession {
         layout = try? await client.herdrAppLayout()
         lastHeard = .now
         state = .connected
+        markLookedAt()
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
@@ -213,6 +250,7 @@ final class HostSession {
     private func apply(_ message: EventMessage) async {
         lastHeard = .now
         snapshot?.apply(message)
+        markLookedAt()
         guard let client else { return }
         switch message {
         case .missed:

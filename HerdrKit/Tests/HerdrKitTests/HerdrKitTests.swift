@@ -174,11 +174,51 @@ private let terminalJSON = #"{"address":"t7","argv":["fish"],"cwd":"/tmp","state
 }
 
 private func terminal(_ address: String, cwd: String = "/tmp", parent: String? = nil, labels: [String: String] = [:],
-                      status: String? = nil, created: UInt64 = 0) throws -> Terminal {
+                      status: String? = nil, turn: UInt64? = nil, created: UInt64 = 0) throws -> Terminal {
     var json: [String: Any] = ["address": address, "state": "live", "cwd": cwd, "labels": labels, "created_ms": created]
     if let parent { json["parent"] = parent }
+    if let turn { json["turn"] = turn }
     if let status { json["status"] = ["state": status] }
     return try JSONDecoder().decode(Terminal.self, from: JSONSerialization.data(withJSONObject: json))
+}
+
+@Test func turnEventsUpdateTheTurn() throws {
+    var snapshot = TerminalSnapshot(seq: 1, terminals: [try terminal("t1", status: "working", turn: 2)])
+    let line = #"{"method":"event","params":{"seq":2,"type":"turn","terminal":"t1","data":{"turn":3,"state":"done"}}}"#
+    snapshot.apply(EventMessage.decode(Data(line.utf8))!)
+    #expect(snapshot["t1"]?.turn == 3)
+}
+
+/// herdr-app's `docs/labels.md`: done while a turn ended after the one last seen.
+@Test func agentStateFollowsSharedReadState() throws {
+    let seen = Terminal.seenLabel
+    #expect(try terminal("t1").agentState == nil)
+    #expect(try terminal("t1", labels: [seen: "0"], status: "blocked", turn: 4).agentState == .needsYou)
+    #expect(try terminal("t1", labels: [seen: "0"], status: "error", turn: 4).agentState == .error)
+    #expect(try terminal("t1", labels: [seen: "0"], status: "working", turn: 4).agentState == .working)
+    // Unread, read, whatever the program called it.
+    #expect(try terminal("t1", labels: [seen: "3"], status: "idle", turn: 4).agentState == .done)
+    #expect(try terminal("t1", labels: [seen: "4"], status: "done", turn: 4).agentState == .idle)
+    // Without the label (or a turn), the program's own word.
+    #expect(try terminal("t1", status: "done", turn: 4).agentState == .done)
+    #expect(try terminal("t1", status: "idle", turn: 4).agentState == .idle)
+    #expect(try terminal("t1", labels: [seen: "9"], status: "done").agentState == .done)
+}
+
+@Test func seenOnlyRisesExceptForMarkUnread() throws {
+    let seen = Terminal.seenLabel
+    #expect(try terminal("t1", status: "done", turn: 4).markSeen == [seen: "4"])  // missing: joins
+    #expect(try terminal("t1", labels: [seen: "2"], status: "working", turn: 4).markSeen == [seen: "4"])
+    #expect(try terminal("t1", labels: [seen: "4"], status: "idle", turn: 4).markSeen == nil)
+    #expect(try terminal("t1", labels: [seen: "5"], status: "idle", turn: 4).markSeen == nil)
+    #expect(try terminal("t1", status: "done").markSeen == nil)  // core without turns
+
+    #expect(try terminal("t1", labels: [seen: "3"], status: "done", turn: 4).markRead == [seen: "4"])
+    #expect(try terminal("t1", labels: [seen: "4"], status: "done", turn: 4).markRead == nil)
+    #expect(try terminal("t1", labels: [seen: "4"], status: "idle", turn: 4).markUnread == [seen: "3"])
+    #expect(try terminal("t1", labels: [seen: "0"], status: "idle", turn: 0).markUnread == nil)
+    #expect(try terminal("t1", labels: [seen: "3"], status: "done", turn: 4).markUnread == nil)
+    #expect(try terminal("t1", labels: [seen: "3"], status: "blocked", turn: 4).markUnread == nil)
 }
 
 private let layoutJSON = #"""
@@ -277,6 +317,44 @@ func localHerdrCoreEvents() async throws {
     let _: Empty? = try? await client.call("server.stop", Empty())
     await client.close()
 }
+/// A program reports working, then done (OSC 7501): core counts the turn, in the snapshot and as
+/// a `turn` event, and the agent shows as unread until `herdr.seen` reaches it.
+@Test(.enabled(if: FileManager.default.isExecutableFile(atPath: localCore.path)), .timeLimit(.minutes(1)))
+func localHerdrCoreTurns() async throws {
+    let client = try await HerdrClient.connect(
+        over: try ProcessTransport(executable: localCore, environment: ["HC_SESSION": "herdrkit-test-turns"]))
+    let subscription = try await client.subscribeEvents()
+    var snapshot = subscription.snapshot
+
+    struct Run: Encodable, Sendable { let argv: [String]; let name: String }
+    struct Ran: Decodable, Sendable { let address: String }
+    let script = #"printf '\033]7501;state=working\033\\'; sleep 0.2; printf '\033]7501;state=done\033\\'; sleep 30"#
+    let ran: Ran = try await client.call("terminal.run", Run(
+        argv: ["sh", "-c", script], name: "herdrkit-\(UUID().uuidString.prefix(6).lowercased())"))
+
+    var sawTurnEvent = false
+    for try await message in subscription.messages {
+        if case .event(let event) = message, event.terminal == ran.address, case .turn = event.change { sawTurnEvent = true }
+        snapshot.apply(message)
+        if sawTurnEvent, snapshot[ran.address]?.status?.state == "done" { break }
+    }
+    let terminal = try #require(snapshot[ran.address])
+    #expect(terminal.turn == 1)
+    #expect(terminal.agentState == .done)
+
+    struct Label: Encodable, Sendable { let terminal: String; let labels: [String: String] }
+    struct Empty: Codable, Sendable {}
+    let _: Empty? = try? await client.call("terminal.label", Label(terminal: ran.address, labels: try #require(terminal.markSeen)))
+    for try await message in subscription.messages {
+        snapshot.apply(message)
+        if snapshot[ran.address]?.seenTurn == 1 { break }
+    }
+    #expect(snapshot[ran.address]?.agentState == .idle)
+
+    let _: Empty? = try? await client.call("server.stop", Empty())
+    await client.close()
+}
+
 /// Attach to a real terminal, render it with libghostty-vt, type into it, and see it exit.
 @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: localCore.path)), .timeLimit(.minutes(1)))
 func localHerdrCoreAttach() async throws {

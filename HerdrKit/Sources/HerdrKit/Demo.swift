@@ -256,9 +256,16 @@ private actor DemoEngine {
     private func setStatus(_ address: String, _ status: DemoStatus?) {
         guard let index = terminals.firstIndex(where: { $0.address == address }),
               terminals[index].state == "live" else { return }
+        let wasWorking = terminals[index].status?.state == "working"
         terminals[index].status = status
         let body = (try? status.map { try json($0) }) ?? nil
         emit("status", address, data: #"{"status":\#(body ?? "null")}"#)
+        // Like herdr-core: a turn ends when the status leaves working, status event first.
+        if wasWorking, status?.state != "working" {
+            terminals[index].turn += 1
+            let state = status.map { #""\#($0.state)""# } ?? "null"
+            emit("turn", address, data: #"{"turn":\#(terminals[index].turn),"state":\#(state)}"#)
+        }
     }
 
     // MARK: Screens
@@ -508,11 +515,12 @@ struct DemoTerminal: Encodable, Sendable {
     var exitCode: Int32?
     var reason: String?
     var parent: String?
+    var turn: UInt64 = 0
 
     init(address: String, name: String? = nil, argv: [String], cwd: String, state: String = "live",
          title: String? = nil, status: DemoStatus? = nil, labels: [String: String] = [:],
          foreground: DemoForeground? = nil, createdMs: UInt64, exitCode: Int32? = nil,
-         reason: String? = nil, parent: String? = nil) {
+         reason: String? = nil, parent: String? = nil, turn: UInt64 = 0) {
         self.address = address
         self.name = name
         self.argv = argv
@@ -526,10 +534,11 @@ struct DemoTerminal: Encodable, Sendable {
         self.exitCode = exitCode
         self.reason = reason
         self.parent = parent
+        self.turn = turn
     }
 
     enum CodingKeys: String, CodingKey {
-        case address, name, argv, cwd, state, title, status, foreground, labels, cols, rows, reason, parent
+        case address, name, argv, cwd, state, title, status, foreground, labels, cols, rows, reason, parent, turn
         case createdMs = "created_ms"
         case exitCode = "exit_code"
     }

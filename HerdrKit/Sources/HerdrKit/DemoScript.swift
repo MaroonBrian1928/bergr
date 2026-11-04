@@ -12,6 +12,9 @@ enum DemoScript {
 
     private static func ago(minutes: UInt64) -> UInt64 { now - minutes * 60_000 }
 
+    /// herdr's shared read state: the last turn someone looked at.
+    private static func seen(_ turn: UInt64) -> [String: String] { [Terminal.seenLabel: String(turn)] }
+
     // MARK: Terminals
 
     static func terminals() -> [DemoTerminal] {
@@ -20,19 +23,19 @@ enum DemoScript {
                 address: "t1", argv: ["agent"], cwd: website, title: "agent",
                 status: .init(state: "working", app: "agent", title: "Adding a dark mode toggle",
                               msg: "Updating styles (12 of 20 files)", progress: 60),
-                foreground: .init(pid: 31_201, name: "agent", argv: ["agent"], cwd: website),
-                createdMs: ago(minutes: 18)),
+                labels: seen(2), foreground: .init(pid: 31_201, name: "agent", argv: ["agent"], cwd: website),
+                createdMs: ago(minutes: 18), turn: 2),
             DemoTerminal(
                 address: "t2", name: "tests", argv: ["npm", "test", "--", "--watch"], cwd: website,
                 status: .init(state: "working", app: "tests", title: "Running tests", msg: "31 of 48 passed", progress: 65),
-                foreground: .init(pid: 31_377, name: "node", argv: ["node", "vitest", "--watch"], cwd: website),
+                labels: seen(0), foreground: .init(pid: 31_377, name: "node", argv: ["node", "vitest", "--watch"], cwd: website),
                 createdMs: ago(minutes: 3), parent: "t1"),
             DemoTerminal(
                 address: "t3", argv: ["agent"], cwd: shopAPI, title: "agent",
                 status: .init(state: "blocked", app: "agent", title: "Run the database migration?",
                               msg: "npm run migrate", kind: "permission"),
-                foreground: .init(pid: 30_822, name: "agent", argv: ["agent"], cwd: shopAPI),
-                createdMs: ago(minutes: 41)),
+                labels: seen(1), foreground: .init(pid: 30_822, name: "agent", argv: ["agent"], cwd: shopAPI),
+                createdMs: ago(minutes: 41), turn: 1),
             DemoTerminal(
                 address: "t4", name: "dev-server", argv: ["npm", "run", "dev"], cwd: website,
                 foreground: .init(pid: 29_910, name: "node", argv: ["node", "vite"], cwd: website),
@@ -44,8 +47,9 @@ enum DemoScript {
             DemoTerminal(
                 address: "t6", argv: ["agent"], cwd: infra, title: "agent",
                 status: .init(state: "done", app: "agent", title: "Upgraded Postgres to 18", msg: "All checks green"),
-                foreground: .init(pid: 28_456, name: "agent", argv: ["agent"], cwd: infra),
-                createdMs: ago(minutes: 130)),
+                // Finished a turn nobody has looked at yet.
+                labels: seen(2), foreground: .init(pid: 28_456, name: "agent", argv: ["agent"], cwd: infra),
+                createdMs: ago(minutes: 130), turn: 3),
             DemoTerminal(
                 address: "t7", name: "nightly-backup", argv: ["./backup.sh"], cwd: infra, state: "finished",
                 createdMs: ago(minutes: 300), exitCode: 0, reason: "exited"),

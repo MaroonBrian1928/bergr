@@ -20,7 +20,7 @@ final class DemoTourTests: XCTestCase {
 
         startDemo(app)
 
-        XCTAssertTrue(app.staticTexts["website"].waitForExistence(timeout: 10), "demo spaces appear")
+        XCTAssertTrue(blockedRow(app).waitForExistence(timeout: 10), "demo spaces appear")
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "t3").firstMatch.exists)
         sleep(1)
         shot(app, "1-terminals")
@@ -74,7 +74,7 @@ final class DemoTourTests: XCTestCase {
         tryDemo.tap()
 
         // Everything at a glance; the blocked agent sits on top.
-        XCTAssertTrue(app.staticTexts["website"].waitForExistence(timeout: 10))
+        XCTAssertTrue(blockedRow(app).waitForExistence(timeout: 10))
         pause(3)
 
         // An agent at work.
@@ -131,7 +131,7 @@ final class DemoTourTests: XCTestCase {
         if let fontSize = environment["HIRTE_SHOT_FONT"] { app.launchArguments += ["-terminal.fontSize", fontSize] }
         app.launch()
         allowScreenRecording(app)
-        XCTAssertTrue(app.staticTexts["website"].waitForExistence(timeout: 10), "the demo's terminals show")
+        XCTAssertTrue(blockedRow(app).waitForExistence(timeout: 10), "the demo's terminals show")
         pause(2.5)
 
         // An agent at work.
@@ -197,7 +197,7 @@ final class DemoTourTests: XCTestCase {
     /// Two columns (unfolded Duo) keep the list next to the terminal; a stack needs going back.
     @MainActor
     private func backIfStacked(_ app: XCUIApplication) {
-        let list = app.staticTexts["website"]
+        let list = blockedRow(app)
         if !(list.exists && list.isHittable) { back(app) }
         pause(1)
     }
@@ -335,6 +335,53 @@ final class DemoTourTests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "t3").firstMatch.waitForExistence(timeout: 5))
     }
 
+    /// Agents are grouped by status, "Needs you" first; done means unread (herdr's shared
+    /// `herdr.seen`): looking at one makes it idle, and Mark as Unread brings it back.
+    @MainActor
+    func testAgentsByStatus() throws {
+        let app = XCUIApplication()
+        app.launch()
+        startDemo(app)
+        app.buttons["Agents"].tap()
+        func section(_ state: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: "section-\(state)").firstMatch
+        }
+        for state in ["needsYou", "done", "working"] {
+            XCTAssertTrue(section(state).waitForExistence(timeout: 5), "a \(state) section")
+        }
+        let upgrade = app.descendants(matching: .any).matching(identifier: "t6").firstMatch
+        XCTAssertTrue(upgrade.exists, "the unread upgrade is under Done")
+        XCTAssertLessThan(blockedRow(app).frame.minY, upgrade.frame.minY, "what needs you comes first")
+        shot(app, "status-0-agents")
+
+        // The dot explains itself.
+        app.buttons["Needs you"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Needs you: waiting for your answer."].waitForExistence(timeout: 5))
+        shot(app, "status-1-legend")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
+
+        // Looking at it reads it: it moves to Idle, which starts collapsed.
+        open(app, "t6")
+        sleep(2)
+        back(app)
+        let idle = section("idle")
+        XCTAssertTrue(idle.waitForExistence(timeout: 5), "an Idle section once it's read")
+        if !upgrade.waitForExistence(timeout: 2) { idle.tap() }
+        XCTAssertTrue(upgrade.waitForExistence(timeout: 5))
+        XCTAssertLessThan(idle.frame.minY, upgrade.frame.minY, "it's under Idle now")
+        shot(app, "status-2-read")
+
+        // Swipe from the left: Mark as Unread puts it back under Done.
+        upgrade.swipeRight()
+        let unread = app.buttons["Mark as Unread"]
+        XCTAssertTrue(unread.waitForExistence(timeout: 5))
+        unread.tap()
+        XCTAssertTrue(section("done").waitForExistence(timeout: 5), "back under Done")
+        sleep(1)
+        XCTAssertLessThan(upgrade.frame.minY, idle.exists ? idle.frame.minY : .infinity, "above Idle again")
+        shot(app, "status-3-unread")
+    }
+
     /// "Clear" in the open Finished section removes all finished terminals, after asking.
     @MainActor
     func testClearFinished() throws {
@@ -389,7 +436,7 @@ final class DemoTourTests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
         startDemo(app)
-        XCTAssertTrue(app.staticTexts["website"].waitForExistence(timeout: 10), "the demo's terminals show")
+        XCTAssertTrue(blockedRow(app).waitForExistence(timeout: 10), "the demo's terminals show")
         shot(app, "switcher-0-list")
         // The title is a menu button: "Demo machine ⌄".
         app.navigationBars.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Demo machine'")).firstMatch.tap()
@@ -464,11 +511,16 @@ final class DemoTourTests: XCTestCase {
     }
 
     /// A fresh install offers the demo in its empty state; later launches open on the last machine.
+    /// The demo's blocked agent: listed in both views, so the list is on screen when it is.
+    private func blockedRow(_ app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "t3").firstMatch
+    }
+
     @MainActor
     private func startDemo(_ app: XCUIApplication) {
         let tryDemo = app.buttons["Try the Demo"]
         if tryDemo.waitForExistence(timeout: 5) { tryDemo.tap() }
-        XCTAssertTrue(app.staticTexts["website"].waitForExistence(timeout: 10), "the demo's terminals show")
+        XCTAssertTrue(blockedRow(app).waitForExistence(timeout: 10), "the demo's terminals show")
     }
 
     /// Settings is in the title menu, below the machines.

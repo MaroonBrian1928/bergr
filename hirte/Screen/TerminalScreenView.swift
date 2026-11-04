@@ -119,7 +119,12 @@ struct TerminalScreenView: View {
             session.watchNext = nil
             model.setWatching(true)
         }
-        .onDisappear { model.stop() }
+        // On screen: its agent counts as read (herdr's shared `herdr.seen`).
+        .onAppear { session.startLooking(at: address) }
+        .onDisappear {
+            model.stop()
+            session.stopLooking(at: address)
+        }
     }
 
     /// The space (or machine) the terminal belongs to, as the list shows it.

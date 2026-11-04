@@ -200,13 +200,16 @@ struct NewTerminalView: View {
         let folder = folder.trimmingCharacters(in: .whitespaces)
         request.cwd = folder.isEmpty ? (machine == nil ? session.homeFolder : nil) : folder
         request.name = name.isEmpty ? nil : name
+        // Nothing has finished yet: it starts read (herdr's shared `herdr.seen`).
+        var labels = [Terminal.seenLabel: "0"]
         if machine == nil {
             switch placement {
-            case .newSpace: request.labels = [HerdrAppLayout.spaceLabel: HerdrAppLayout.newSpaceID()]
-            case .space(let id): request.labels = [HerdrAppLayout.spaceLabel: id]
+            case .newSpace: labels[HerdrAppLayout.spaceLabel] = HerdrAppLayout.newSpaceID()
+            case .space(let id): labels[HerdrAppLayout.spaceLabel] = id
             case .hidden: break
             }
         }
+        request.labels = labels
         do {
             let terminal = try await session.run(request)
             dismiss()
