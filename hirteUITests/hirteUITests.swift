@@ -269,6 +269,40 @@ final class DemoTourTests: XCTestCase {
         XCTAssertFalse(banner.exists)
     }
 
+    /// Long-pressing a live row shows its screen above the menu, watched (no attach, no resize).
+    @MainActor
+    func testRowPreview() throws {
+        let app = XCUIApplication()
+        app.launch()
+        startDemo(app)
+        app.buttons["Terminals"].tap()
+        let row = app.descendants(matching: .any).matching(identifier: "t5").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Copy Address"].waitForExistence(timeout: 5), "the menu opens")
+        let screen = app.descendants(matching: .any).matching(identifier: "terminal-screen").firstMatch
+        XCTAssertTrue(screen.waitForExistence(timeout: 5), "with the terminal's screen above it")
+        sleep(1)
+        shot(app, "preview-0-menu")
+        // Closing the menu leaves the list as it was.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: screen)
+        wait(for: [gone], timeout: 5)
+
+        // "Watch" opens it watching, without changing what the eye button remembers.
+        row.press(forDuration: 1.2)
+        let watch = app.buttons["Watch"]
+        XCTAssertTrue(watch.waitForExistence(timeout: 5))
+        watch.tap()
+        let watching = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Watching'")).firstMatch
+        XCTAssertTrue(watching.waitForExistence(timeout: 5), "the terminal opens watching")
+        shot(app, "preview-1-watch")
+        back(app)
+        open(app, "t5")
+        XCTAssertTrue(app.buttons["Watch Only"].waitForExistence(timeout: 5), "opening it normally doesn't watch")
+        XCTAssertFalse(watching.exists)
+    }
+
     /// Agents lists only agents, with their status; Terminals lists every terminal by space.
     @MainActor
     func testAgentsAndTerminals() throws {

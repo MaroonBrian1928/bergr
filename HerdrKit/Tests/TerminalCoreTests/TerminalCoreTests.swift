@@ -186,3 +186,12 @@ private func bytes(_ s: String) -> Data { Data(s.utf8) }
     vt.write(Data("\u{1b}[31mx".utf8))
     #expect(vt.frame().lines[0][0].style.foreground == RGB(r: 0xe0, g: 0x6c, b: 0x75))
 }
+
+/// Spinners and coding agents hide the cursor; its row still says where the action is.
+@Test func hiddenCursorKeepsItsRow() throws {
+    let vt = try VirtualTerminal(cols: 20, rows: 10)
+    vt.write(bytes("one\r\ntwo\r\n\u{1b}[?25l⠋ Loading..."))
+    let frame = vt.frame()
+    #expect(frame.cursor == nil)
+    #expect(frame.cursorRow == 2)
+}

@@ -100,7 +100,8 @@ struct TerminalListView: View {
         var add: ((Terminal) -> Void)?
         if canAddToHerdrApp(terminal) { add = { addToHerdrApp($0) } }
         let actions = TerminalActions(
-            terminal: terminal, kill: { confirmKill = $0 }, remove: { remove($0) }, addToHerdrApp: add)
+            terminal: terminal, session: session, kill: { confirmKill = $0 }, remove: { remove($0) },
+            addToHerdrApp: add, watch: { watch($0) })
         return row.tag(terminal.address).modifier(actions)
     }
 
@@ -116,6 +117,12 @@ struct TerminalListView: View {
     /// Labels it with a fresh space id: a running herdr-app opens a new space for it.
     private func addToHerdrApp(_ terminal: Terminal) {
         perform { try await session.label(terminal.address, [HerdrAppLayout.spaceLabel: HerdrAppLayout.newSpaceID()]) }
+    }
+
+    /// Opens it watching, this once.
+    private func watch(_ terminal: Terminal) {
+        session.watchNext = terminal.address
+        selection = terminal.address
     }
 
     private func remove(_ terminal: Terminal) {
@@ -435,36 +442,58 @@ struct RowVisibility: ViewModifier {
     }
 }
 
-/// Kill (live) or remove (finished) from a row's context menu or swipe.
+/// Kill (live) or remove (finished) from a row's context menu or swipe. A live terminal's
+/// menu shows its screen above, watched.
 struct TerminalActions: ViewModifier {
     let terminal: Terminal
+    let session: HostSession
     let kill: (Terminal) -> Void
     let remove: (Terminal) -> Void
     /// Set for live local terminals herdr-app doesn't show yet.
     var addToHerdrApp: ((Terminal) -> Void)?
+    /// Opens a live terminal watching.
+    var watch: ((Terminal) -> Void)?
+    /// The row's width: the preview may not be wider than the column it opens in, or the
+    /// system crops it (seen on the unfolded Duo).
+    @State private var rowWidth: CGFloat = 0
 
     func body(content: Content) -> some View {
-        content
-            .contextMenu {
-                Button("Copy Address", systemImage: "doc.on.doc") {
-                    UIPasteboard.general.string = terminal.address
-                }
-                if let addToHerdrApp {
-                    Button("Add to herdr-app", systemImage: "square.stack.badge.plus") { addToHerdrApp(terminal) }
-                }
-                if terminal.isLive {
-                    Button("Kill", systemImage: "xmark.octagon", role: .destructive) { kill(terminal) }
-                } else {
-                    Button("Remove", systemImage: "trash", role: .destructive) { remove(terminal) }
-                }
+        Group {
+            if terminal.isLive {
+                content
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
+                    .contextMenu { menu } preview: {
+                        TerminalPeek(session: session, terminal: terminal, maxWidth: rowWidth)
+                    }
+            } else {
+                content.contextMenu { menu }
             }
-            .swipeActions(edge: .trailing) {
-                if terminal.isLive {
-                    Button("Kill", systemImage: "xmark.octagon") { kill(terminal) }.tint(.red)
-                } else {
-                    Button("Remove", systemImage: "trash", role: .destructive) { remove(terminal) }
-                }
+        }
+        .swipeActions(edge: .trailing) {
+            if terminal.isLive {
+                Button("Kill", systemImage: "xmark.octagon") { kill(terminal) }.tint(.red)
+            } else {
+                Button("Remove", systemImage: "trash", role: .destructive) { remove(terminal) }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var menu: some View {
+        if terminal.isLive, let watch {
+            Button("Watch", systemImage: "eye") { watch(terminal) }
+        }
+        Button("Copy Address", systemImage: "doc.on.doc") {
+            UIPasteboard.general.string = terminal.address
+        }
+        if let addToHerdrApp {
+            Button("Add to herdr-app", systemImage: "square.stack.badge.plus") { addToHerdrApp(terminal) }
+        }
+        if terminal.isLive {
+            Button("Kill", systemImage: "xmark.octagon", role: .destructive) { kill(terminal) }
+        } else {
+            Button("Remove", systemImage: "trash", role: .destructive) { remove(terminal) }
+        }
     }
 }
 

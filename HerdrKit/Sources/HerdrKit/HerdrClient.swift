@@ -33,6 +33,8 @@ public actor HerdrClient {
     private var channels: [UInt32: AsyncThrowingStream<Data, Error>.Continuation] = [:]
     /// Stream bytes that arrived before their channel was claimed (the subscribe reply races its first data).
     private var early: [UInt32: [Frame]] = [:]
+    /// Channels we closed: what the core still sends on them until its CLOSE is dropped.
+    private var closedChannels: Set<UInt32> = []
 
     /// The core's answer to `hello`.
     public private(set) var hello: HelloResult?
@@ -191,6 +193,7 @@ public actor HerdrClient {
 
     func closeChannel(_ channel: UInt32) async {
         guard channels.removeValue(forKey: channel) != nil else { return }
+        closedChannels.insert(channel)
         try? await sendFrame(Frame(channel: channel, kind: .close))
     }
 
@@ -248,6 +251,10 @@ public actor HerdrClient {
             return
         }
         guard let continuation = channels[frame.channel] else {
+            if closedChannels.contains(frame.channel) {
+                if frame.kind == Frame.Kind.close.rawValue { closedChannels.remove(frame.channel) }
+                return
+            }
             early[frame.channel, default: []].append(frame)
             return
         }

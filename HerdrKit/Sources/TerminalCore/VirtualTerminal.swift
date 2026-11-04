@@ -75,6 +75,9 @@ public struct ScreenFrame: Sendable {
     /// Lines whose content changed since the previous frame; nil means everything.
     public var changedLines: IndexSet?
     public var scrollbar: Scrollbar?
+    /// The cursor's row in the viewport, also while the program hides the cursor (spinners and
+    /// coding agents do): where the action is.
+    public var cursorRow: Int?
 
     public static let empty = ScreenFrame(
         cols: 0, rows: 0, lines: [], cursor: nil,
@@ -279,7 +282,8 @@ public final class VirtualTerminal {
             cols: cols, rows: rows, lines: lines, cursor: cursor,
             foreground: RGB(colors.foreground), background: RGB(colors.background),
             cursorColor: colors.cursor_has_value ? RGB(colors.cursor) : nil,
-            selection: selection, changedLines: rebuildAll ? nil : changed, scrollbar: scrollbar())
+            selection: selection, changedLines: rebuildAll ? nil : changed, scrollbar: scrollbar(),
+            cursorRow: cursorState.viewport_has_value ? Int(cursorState.viewport_y) : nil)
     }
 
     private func readCell(_ codepoints: inout [UInt32]) -> ScreenCell {

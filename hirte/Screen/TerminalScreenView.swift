@@ -49,7 +49,9 @@ struct TerminalScreenView: View {
                     } : nil
                 ) { cols, rows in
                     if case .attaching = model.phase {
-                        model.start(session: session, address: address, cols: cols, rows: rows, watch: watchByDefault)
+                        let watch = watchByDefault || session.watchNext == address
+                        if session.watchNext == address { session.watchNext = nil }
+                        model.start(session: session, address: address, cols: cols, rows: rows, watch: watch)
                     } else {
                         model.viewSizeChanged(cols: cols, rows: rows)
                     }
@@ -110,6 +112,12 @@ struct TerminalScreenView: View {
                 // With the current theme: onChange(of: theme) won't fire again for the new model.
                 model = TerminalScreenModel(theme: theme)
             }
+        }
+        // "Watch" from the list while this terminal is already open.
+        .onChange(of: session.watchNext) { _, next in
+            guard next == address, model.phase == .live else { return }
+            session.watchNext = nil
+            model.setWatching(true)
         }
         .onDisappear { model.stop() }
     }

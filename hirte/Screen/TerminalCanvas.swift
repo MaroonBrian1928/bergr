@@ -84,6 +84,11 @@ final class TerminalCanvasView: UIView, UIKeyInput {
     var watching = false {
         didSet { if watching != oldValue { setNeedsDisplay() } }
     }
+    /// For a quick look (the list's long-press preview): the font as set, never shrunk to fit;
+    /// what doesn't fit is cut off on the right and above the cursor row.
+    var cropped = false {
+        didSet { if cropped != oldValue { setNeedsDisplay() } }
+    }
     /// A sideways swipe that starts in our left part, for showing or hiding the lists beside us
     /// (see `onEdgeSwipe`). Not a `UIScreenEdgePanGestureRecognizer`: with the lists showing, our
     /// left edge is the column border, not the screen's, and a thin strip there was hard to hit.
@@ -107,7 +112,8 @@ final class TerminalCanvasView: UIView, UIKeyInput {
         didSet { edgeSwipe.isEnabled = onEdgeSwipe != nil }
     }
     static let fontRange: ClosedRange<CGFloat> = 7...28
-    private let padding: CGFloat = 10
+    static let padding: CGFloat = 10
+    private var padding: CGFloat { Self.padding }
     /// How much of our bottom the keyboard (and key bar) covers. We handle the keyboard
     /// ourselves instead of letting SwiftUI animate our frame: an animated frame made the
     /// screen slide down and back up every time the keyboard opened or closed.
@@ -237,14 +243,18 @@ final class TerminalCanvasView: UIView, UIKeyInput {
         if watching {
             scale = min(scale, usable.height / (CGFloat(screen.rows) * fonts.cellHeight), Self.fontRange.upperBound / fontSize)
         }
+        if cropped {
+            scale = 1
+        }
         if scale < 1 || (watching && scale > 1) {
             let size = (fontSize * scale * 4).rounded(.down) / 4
             if scaledFonts?.size != size { scaledFonts = Fonts(size: size, family: fontFamily) }
             drawFonts = scaledFonts!
         }
         let visibleRows = Int(usable.height / drawFonts.cellHeight)
-        if screen.rows > visibleRows, let cursor = screen.cursor, cursor.y >= visibleRows {
-            origin.y -= CGFloat(cursor.y - visibleRows + 1) * drawFonts.cellHeight
+        // The cursor's row even when hidden (spinners, coding agents).
+        if screen.rows > visibleRows, let row = screen.cursor?.y ?? screen.cursorRow, row >= visibleRows {
+            origin.y -= CGFloat(row - visibleRows + 1) * drawFonts.cellHeight
         }
         return Geometry(origin: origin, fonts: drawFonts)
     }
@@ -398,6 +408,13 @@ final class TerminalCanvasView: UIView, UIKeyInput {
                     }
                     end += 1
                 }
+            }
+            // One cell wide but emoji-capable (Claude Code's ⏺, ⏸, ☑…): ask for the text form, or
+            // iOS falls back to Apple Color Emoji for glyphs the terminal font lacks.
+            if !simple, cell.width == 1, let scalar = text.unicodeScalars.first, text.unicodeScalars.count == 1,
+               scalar.properties.isEmoji, !scalar.isASCII
+            {
+                text.unicodeScalars.append("\u{FE0E}")
             }
             var style = cell.style
             if linked.contains(x) { style.underline = true }
@@ -966,6 +983,8 @@ struct TerminalCanvas: UIViewRepresentable {
     var dark = true
     /// What a swipe in from the left edge does, if anything.
     var onEdgeSwipe: ((_ toRight: Bool) -> Void)?
+    /// A quick look: see `TerminalCanvasView.cropped`.
+    var cropped = false
     let onGridSize: (Int, Int) -> Void
 
     func makeUIView(context: Context) -> TerminalCanvasView {
@@ -989,8 +1008,9 @@ struct TerminalCanvas: UIViewRepresentable {
         view.darkKeyboard = dark
         view.onGridSize = onGridSize
         view.onEdgeSwipe = onEdgeSwipe
-        view.pinchEnabled = !model.watching
-        view.watching = model.watching
+        view.pinchEnabled = !model.watching && !cropped
+        view.watching = model.watching && !cropped
+        view.cropped = cropped
         view.screen = model.frame
         view.refreshKeyBar()
         // The toolbar's keyboard button flips this; follow it once the view is on screen.

@@ -25,6 +25,9 @@ final class HostSession {
 
     /// Set while the user must decide whether to trust an unknown host key.
     private(set) var pendingHostKey: HostKey?
+    /// A terminal to open watching this once (the list's "Watch"), whatever the eye button
+    /// remembers; the terminal screen takes it when it opens it.
+    var watchNext: String?
     private var hostKeyDecision: CheckedContinuation<Bool, Never>?
 
     private var runner: Task<Void, Never>?
