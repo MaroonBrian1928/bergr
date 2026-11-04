@@ -16,6 +16,9 @@ public struct Frame: Equatable, Sendable {
         case focus = 4
         /// Viewer → core: JSON display facts.
         case facts = 5
+        /// Viewer → core: bytes the viewer's emulator generated (query answers, mode 2048 size
+        /// reports), not a person typing. Only once `terminal.attach` confirmed `automatic_input`.
+        case automaticInput = 6
     }
 
     public static let headerSize = 9

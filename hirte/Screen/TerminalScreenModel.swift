@@ -35,6 +35,10 @@ final class TerminalScreenModel {
     private var preferredSize: (cols: Int, rows: Int)?
     private var session: HostSession?
     private var address: String?
+    /// A cell's size in pixels at our font, for the size reports programs can ask for (mode 2048).
+    var cellPixels: (width: Int, height: Int) = (0, 0) {
+        didSet { vt?.cellPixels = cellPixels }
+    }
     /// Typed while (re)attaching, e.g. the keys that ended watching; sent once attached.
     private var pendingInput: [Data] = []
 
@@ -116,6 +120,7 @@ final class TerminalScreenModel {
             let vt = try VirtualTerminal(
                 cols: max(attached.terminal.cols, 1), rows: max(attached.terminal.rows, 1))
             Self.apply(theme, to: vt)
+            vt.cellPixels = cellPixels
             self.vt = vt
             scrolledBack = false
             phase = .live
@@ -128,6 +133,10 @@ final class TerminalScreenModel {
             pendingInput.removeAll()
             for try await chunk in attached.output {
                 vt.write(chunk)
+                // The first paint turns mode 2048 back on, which answers with our size: that's
+                // how a Textual app learns the size we attached with.
+                let replies = vt.takeReplies()
+                if !replies.isEmpty { try? await attached.sendAutomatic(replies) }
                 scheduleRender()
             }
             if !Task.isCancelled { phase = .ended("Detached.") }
@@ -146,6 +155,7 @@ final class TerminalScreenModel {
     func remoteSizeChanged(cols: Int, rows: Int) {
         guard let vt, cols > 0, rows > 0, cols != vt.cols || rows != vt.rows else { return }
         vt.resize(cols: cols, rows: rows)
+        sendReplies()
         renderNow()
     }
 
@@ -160,8 +170,13 @@ final class TerminalScreenModel {
     private func claimSize() {
         guard !watching, let attached, let size = preferredSize else { return }
         vt?.resize(cols: size.cols, rows: size.rows)
+        // With mode 2048 on, the resize queued a size report: after the RESIZE it describes.
+        let replies = vt?.takeReplies() ?? Data()
         renderNow()
-        Task { try? await attached.resize(cols: size.cols, rows: size.rows) }
+        Task {
+            try? await attached.resize(cols: size.cols, rows: size.rows)
+            if !replies.isEmpty { try? await attached.sendAutomatic(replies) }
+        }
     }
 
     /// Whether another viewer currently sets a different size than ours.
@@ -212,6 +227,12 @@ final class TerminalScreenModel {
         guard let attached else { return }
         if focused && sizeOwnedElsewhere { claimSize() }
         Task { try? await attached.focus(focused) }
+    }
+
+    /// Passes on what the emulator answered by itself (see `VirtualTerminal.takeReplies()`).
+    private func sendReplies() {
+        guard let attached, let replies = vt?.takeReplies(), !replies.isEmpty else { return }
+        Task { try? await attached.sendAutomatic(replies) }
     }
 
     private func send(_ data: Data) {

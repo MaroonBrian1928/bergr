@@ -113,6 +113,10 @@ public final class VirtualTerminal {
     private var mouseEvent: GhosttyMouseEvent?
     /// Lines from the previous frame, reused when libghostty-vt says a row is clean.
     private var cachedLines: [[ScreenCell]] = []
+    /// What the emulator answered (queries, mode 2048 size reports) since the last `takeReplies()`.
+    private var replies = Data()
+    /// A cell's size in pixels, for size reports (mode 2048, XTWINOPS); 0 when unknown.
+    public var cellPixels: (width: Int, height: Int) = (0, 0)
 
     public init(cols: Int, rows: Int, scrollbackLines: Int = 10_000) throws {
         self.cols = max(cols, 1)
@@ -120,6 +124,23 @@ public final class VirtualTerminal {
         try check(ghostty_terminal_new(nil, &terminal, UInt16(self.cols), UInt16(self.rows)), "terminal_new")
         var lines = UInt(scrollbackLines)
         _ = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &lines)
+        // Replies go back to the program: Textual, for one, ignores SIGWINCH once mode 2048 is on
+        // and only learns a new size from the in-band report.
+        _ = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_USERDATA, Unmanaged.passUnretained(self).toOpaque())
+        let writePty: GhosttyTerminalWritePtyFn = { _, userdata, data, length in
+            guard let userdata, let data else { return }
+            Unmanaged<VirtualTerminal>.fromOpaque(userdata).takeUnretainedValue().replies.append(data, count: length)
+        }
+        _ = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY, unsafeBitCast(writePty, to: UnsafeRawPointer.self))
+        let size: GhosttyTerminalSizeFn = { _, userdata, out in
+            guard let userdata, let out else { return false }
+            let vt = Unmanaged<VirtualTerminal>.fromOpaque(userdata).takeUnretainedValue()
+            out.pointee = GhosttySizeReportSize(
+                rows: UInt16(clamping: vt.rows), columns: UInt16(clamping: vt.cols),
+                cell_width: UInt32(clamping: vt.cellPixels.width), cell_height: UInt32(clamping: vt.cellPixels.height))
+            return true
+        }
+        _ = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SIZE, unsafeBitCast(size, to: UnsafeRawPointer.self))
         try check(ghostty_render_state_new(nil, &renderState), "render_state_new")
         try check(ghostty_render_state_row_iterator_new(nil, &rowIterator), "row_iterator_new")
         try check(ghostty_render_state_row_cells_new(nil, &rowCells), "row_cells_new")
@@ -172,10 +193,20 @@ public final class VirtualTerminal {
         }
     }
 
-    public func resize(cols: Int, rows: Int, cellWidth: Int = 0, cellHeight: Int = 0) {
+    /// Bytes the emulator wants sent to the program (answers to queries, size reports while mode
+    /// 2048 is on), collected while writing and resizing. Send them as automatic input.
+    public func takeReplies() -> Data {
+        defer { replies = Data() }
+        return replies
+    }
+
+    /// Changes the grid; with mode 2048 on, this queues an in-band size report (`takeReplies()`).
+    public func resize(cols: Int, rows: Int) {
         let cols = max(cols, 1), rows = max(rows, 1)
         guard cols != self.cols || rows != self.rows else { return }
-        if ghostty_terminal_resize(terminal, UInt16(cols), UInt16(rows), UInt32(cellWidth), UInt32(cellHeight))
+        if ghostty_terminal_resize(
+            terminal, UInt16(cols), UInt16(rows),
+            UInt32(clamping: cellPixels.width), UInt32(clamping: cellPixels.height))
             == GHOSTTY_SUCCESS
         {
             self.cols = cols
@@ -397,7 +428,12 @@ public final class VirtualTerminal {
         return out
     }
 
-    private let mouseCell = (width: UInt32(10), height: UInt32(20))
+    /// The cell size behind pixel mouse reports (mode 1016): the one size reports give (programs
+    /// like Textual turn pixels back into cells with it), or a made-up one when unknown.
+    private var mouseCell: (width: UInt32, height: UInt32) {
+        cellPixels.width > 0 && cellPixels.height > 0
+            ? (UInt32(clamping: cellPixels.width), UInt32(clamping: cellPixels.height)) : (10, 20)
+    }
 
     private func prepareMouse() {
         ghostty_mouse_encoder_setopt_from_terminal(mouseEncoder, terminal)

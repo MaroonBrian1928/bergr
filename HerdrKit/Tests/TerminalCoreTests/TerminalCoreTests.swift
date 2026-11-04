@@ -195,3 +195,28 @@ private func bytes(_ s: String) -> Data { Data(s.utf8) }
     #expect(frame.cursor == nil)
     #expect(frame.cursorRow == 2)
 }
+
+/// Textual ignores SIGWINCH once mode 2048 is on: the size has to come back as an in-band report.
+@Test func reportsSizeInBandWithMode2048() throws {
+    let vt = try VirtualTerminal(cols: 80, rows: 24)
+    vt.cellPixels = (10, 20)
+    vt.resize(cols: 100, rows: 30)
+    #expect(vt.takeReplies().isEmpty)
+
+    vt.write(Data("\u{1b}[?2048h".utf8))
+    #expect(String(decoding: vt.takeReplies(), as: UTF8.self) == "\u{1b}[48;30;100;600;1000t")
+
+    vt.resize(cols: 120, rows: 40)
+    #expect(String(decoding: vt.takeReplies(), as: UTF8.self) == "\u{1b}[48;40;120;800;1200t")
+    #expect(vt.takeReplies().isEmpty)
+}
+
+/// Pixel mouse reports (mode 1016) use the cell size the size reports give, or clicks land elsewhere.
+@Test func pixelMouseReportsUseTheReportedCellSize() throws {
+    let vt = try VirtualTerminal(cols: 80, rows: 24)
+    vt.cellPixels = (17, 33)
+    vt.write(Data("\u{1b}[?1000h\u{1b}[?1006h\u{1b}[?1016h".utf8))
+    let click = String(decoding: vt.click(column: 10, row: 5) ?? Data(), as: UTF8.self)
+    // The middle of cell (10, 5): 10 × 17 + 8, 5 × 33 + 16.
+    #expect(click.hasPrefix("\u{1b}[<0;178;181M"))
+}

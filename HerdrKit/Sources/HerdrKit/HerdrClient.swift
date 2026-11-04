@@ -144,7 +144,10 @@ public actor HerdrClient {
             pump.cancel()
             Task { await self.closeChannel(channel) }
         }
-        return AttachedTerminal(terminal: result.terminal, channel: channel, output: output, client: self)
+        // Both sides must support it: an old core drops frame kinds it doesn't know.
+        let automaticInput = result.automaticInput == true && hello?.features.contains("automatic_input") == true
+        return AttachedTerminal(
+            terminal: result.terminal, channel: channel, output: output, automaticInput: automaticInput, client: self)
     }
 
     /// Calls any method by name.
@@ -384,11 +387,19 @@ public struct AttachedTerminal: Sendable {
     /// The first paint, then the program's raw output. Feed it to a `VirtualTerminal`.
     /// Ends when the viewer detaches; throws `StreamEnd` when the program ends.
     public let output: AsyncThrowingStream<Data, Error>
+    /// Whether the core takes `sendAutomatic` input as such (not as typing).
+    let automaticInput: Bool
     let client: HerdrClient
 
     /// Sends typed input (already encoded, e.g. by `VirtualTerminal.encode`).
     public func send(_ input: Data) async throws {
         try await client.sendFrame(Frame(channel: channel, kind: .data, payload: input))
+    }
+
+    /// Sends what the emulator answered by itself (`VirtualTerminal.takeReplies()`). It reaches
+    /// the program without counting as activity; an observer's is dropped by the core.
+    public func sendAutomatic(_ input: Data) async throws {
+        try await client.sendFrame(Frame(channel: channel, kind: automaticInput ? .automaticInput : .data, payload: input))
     }
 
     public func resize(cols: Int, rows: Int) async throws {
@@ -416,6 +427,12 @@ struct AttachParams: Encodable, Sendable {
 struct AttachResult: Decodable, Sendable {
     let channel: UInt32
     let terminal: Terminal
+    let automaticInput: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case channel, terminal
+        case automaticInput = "automatic_input"
+    }
 }
 
 struct HelloParams: Encodable, Sendable {

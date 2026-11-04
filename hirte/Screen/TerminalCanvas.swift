@@ -203,6 +203,8 @@ final class TerminalCanvasView: UIView, UIKeyInput {
         guard force || lastGrid.map({ $0.cols != cols || $0.rows != rows }) ?? true else { return }
         let first = lastGrid == nil
         lastGrid = (cols, rows)
+        let scale = window?.screen.scale ?? traitCollection.displayScale
+        model?.cellPixels = (Int((fonts.cellWidth * scale).rounded()), Int((fonts.cellHeight * scale).rounded()))
         pendingGridReport?.cancel()
         if first || immediately {
             onGridSize?(cols, rows)
