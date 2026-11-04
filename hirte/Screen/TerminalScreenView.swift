@@ -6,7 +6,7 @@ struct TerminalScreenView: View {
     let session: HostSession
     let address: String
     @Binding var expanded: Bool
-    @State private var model = TerminalScreenModel()
+    @State private var model: TerminalScreenModel
     @State private var showingInfo = false
     @AppStorage(TerminalFont.sizeKey) private var fontSize = TerminalFont.defaultSize
     @AppStorage(TerminalFont.storageKey) private var fontFamily = TerminalFont.jetBrainsMono
@@ -15,6 +15,21 @@ struct TerminalScreenView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var theme: TerminalTheme { TerminalTheme.current(colorScheme, light: lightTheme, dark: darkTheme) }
+
+    init(session: HostSession, address: String, expanded: Binding<Bool>) {
+        self.session = session
+        self.address = address
+        _expanded = expanded
+        // The theme from the start, so the screen never shows other colors while it attaches.
+        // (The color scheme isn't known yet here; onChange below corrects it before the first frame.)
+        let defaults = UserDefaults.standard
+        let style = UITraitCollection.current.userInterfaceStyle
+        let theme = TerminalTheme.current(
+            style == .dark ? .dark : .light,
+            light: defaults.string(forKey: TerminalTheme.lightKey) ?? TerminalTheme.defaultLight,
+            dark: defaults.string(forKey: TerminalTheme.darkKey) ?? TerminalTheme.defaultDark)
+        _model = State(initialValue: TerminalScreenModel(theme: theme))
+    }
 
     var body: some View {
         let terminal = session.terminal(address)
@@ -81,7 +96,8 @@ struct TerminalScreenView: View {
             // The line dropped and came back: attach again.
             if state == .connected, case .failed = model.phase {
                 model.stop()
-                model = TerminalScreenModel()
+                // With the current theme: onChange(of: theme) won't fire again for the new model.
+                model = TerminalScreenModel(theme: theme)
             }
         }
         .onDisappear { model.stop() }

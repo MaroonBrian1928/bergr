@@ -31,13 +31,29 @@ final class TerminalScreenModel {
     /// What this view would like (fits its bounds); sent whenever we act.
     private var preferredSize: (cols: Int, rows: Int)?
 
-    /// The colors to draw with; changing it recolors the live screen.
-    var theme = TerminalTheme.find(TerminalTheme.defaultDark, dark: true) {
+    /// The colors to draw with; changing it recolors the live screen (or, before there is one,
+    /// the empty screen shown while attaching).
+    var theme: TerminalTheme {
         didSet {
-            guard theme != oldValue, let vt else { return }
+            guard theme != oldValue else { return }
+            guard let vt else { return frame = Self.blank(theme) }
             Self.apply(theme, to: vt)
             renderNow()
         }
+    }
+
+    /// Pass the theme it will show: the empty screen while attaching is drawn in its colors.
+    init(theme: TerminalTheme) {
+        self.theme = theme
+        frame = Self.blank(theme)
+    }
+
+    /// No content yet, in the theme's colors (not the dark default, which flashed in light mode).
+    private static func blank(_ theme: TerminalTheme) -> ScreenFrame {
+        var frame = ScreenFrame.empty
+        frame.foreground = theme.foregroundRGB
+        frame.background = theme.backgroundRGB
+        return frame
     }
 
     private static func apply(_ theme: TerminalTheme, to vt: VirtualTerminal) {

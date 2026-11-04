@@ -15,7 +15,11 @@ final class TerminalCanvasView: UIView, UIKeyInput {
         }
     }
     var screen: ScreenFrame = .empty {
-        didSet { invalidate(from: oldValue) }
+        didSet {
+            // What shows before (and around) the drawn cells: the screen's own background.
+            if screen.background != oldValue.background { backgroundColor = UIColor(screen.background) }
+            invalidate(from: oldValue)
+        }
     }
     var fontSize: CGFloat = 13 {
         didSet {
@@ -904,6 +908,8 @@ struct TerminalCanvas: UIViewRepresentable {
         view.darkKeyboard = dark
         view.onGridSize = onGridSize
         view.onFontSize = { fontSize = Double($0) }
+        // The model's screen from the first frame (already in the theme's colors while attaching).
+        view.screen = model.frame
         return view
     }
 
