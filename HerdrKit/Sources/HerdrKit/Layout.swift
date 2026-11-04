@@ -124,6 +124,12 @@ public struct TerminalSection: Hashable, Sendable, Identifiable {
         /// The tab it sits in, when its space has more than one tab.
         public let tab: String?
         public var id: String { terminal.address }
+
+        public init(terminal: Terminal, depth: Int, tab: String?) {
+            self.terminal = terminal
+            self.depth = depth
+            self.tab = tab
+        }
     }
 
     public let kind: Kind
@@ -131,6 +137,13 @@ public struct TerminalSection: Hashable, Sendable, Identifiable {
     /// The folder a space works in.
     public let subtitle: String?
     public let rows: [Row]
+
+    public init(kind: Kind, title: String, subtitle: String?, rows: [Row]) {
+        self.kind = kind
+        self.title = title
+        self.subtitle = subtitle
+        self.rows = rows
+    }
 
     public var id: String {
         switch kind {

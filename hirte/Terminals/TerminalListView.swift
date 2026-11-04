@@ -1,23 +1,30 @@
 import HerdrKit
 import SwiftUI
 
-/// A machine's terminals, grouped by what they need from you. Updates live from events.
+/// A machine's terminals, live from events, in two views like herdr-app's sidebar: the agents
+/// (what each is doing, with its status) or all terminals by space and tab.
 struct TerminalListView: View {
     @Environment(KeyLibrary.self) private var keys
     let session: HostSession
     @Binding var selection: String?
     @State private var showFinished = false
-    @AppStorage("terminals.grouping") private var grouping = Grouping.spaces
+    @AppStorage("terminals.view") private var mode = Mode.agents
+    /// The rows each view had on screen, so switching back scrolls to where it was.
+    @State private var visibleRows: [Mode: Set<String>] = [:]
+    /// Set while a view is swapped in and scrolled back; rows coming and going then don't count.
+    @State private var restoring: Mode?
+    /// Hides a swapped-in list until it's scrolled back, so its top doesn't flash.
+    @State private var concealed = false
     @State private var newTerminal: NewTerminalContext?
     @State private var confirmKill: Terminal?
     @State private var actionError: String?
     /// Collapsed sections as "hostID|sectionID" lines, remembered across launches.
     @AppStorage("terminals.collapsed") private var collapsed = ""
 
-    enum Grouping: String, CaseIterable, Identifiable {
-        case spaces, status
+    enum Mode: String, CaseIterable, Identifiable {
+        case agents, terminals
         var id: Self { self }
-        var title: String { self == .spaces ? "Spaces" : "Status" }
+        var title: String { self == .agents ? "Agents" : "Terminals" }
     }
 
     var body: some View {
@@ -32,9 +39,6 @@ struct TerminalListView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Picker("Group by", selection: $grouping) {
-                            ForEach(Grouping.allCases) { Text($0.title).tag($0) }
-                        }
                         Toggle("Show Finished", isOn: $showFinished)
                     } label: {
                         Label("View Options", systemImage: "line.3.horizontal.decrease.circle")
@@ -152,24 +156,104 @@ struct TerminalListView: View {
         return TerminalGrouping.bySpace(shown, layout: session.layout)
     }
 
+    /// The agents (terminals that report a status), by space, without nesting.
+    private var agentSections: [TerminalSection] {
+        TerminalGrouping.bySpace(session.terminals.filter(\.isAgent), layout: session.layout).compactMap { section in
+            let rows = section.rows.filter { $0.terminal.isAgent }
+                .map { TerminalSection.Row(terminal: $0.terminal, depth: 0, tab: nil) }
+            return rows.isEmpty ? nil
+                : TerminalSection(kind: section.kind, title: section.title, subtitle: section.subtitle, rows: rows)
+        }
+    }
+
+    /// One list per view (`.id`), swapped without animation: agents are rows in both, and
+    /// diffing one into the other slid them across while the rest faded over them. Switching back
+    /// scrolls to the row that was at the top. (Keeping both lists alive would keep the position
+    /// for free, but a hidden List stays in the accessibility tree; and `ScrollPosition` doesn't
+    /// move a List.)
     private var terminalList: some View {
-        let groups = TerminalGroup.group(session.terminals, showFinished: showFinished)
-        return List(selection: $selection) {
+        ScrollViewReader { proxy in
+            list(mode)
+                .id(mode)
+                .opacity(concealed ? 0 : 1)
+                .onChange(of: mode) { _, mode in
+                    restoring = mode
+                    let seen = visibleRows[mode] ?? []
+                    let top = rowOrder(mode).first { seen.contains($0) }
+                    // At the top already: nothing to hide.
+                    concealed = top != nil && top != rowOrder(mode).first
+                    Task { @MainActor in
+                        // The new list lays out its rows first.
+                        try? await Task.sleep(for: .milliseconds(30))
+                        if let top { proxy.scrollTo(top, anchor: .top) }
+                        // Show it once the scroll has been drawn.
+                        try? await Task.sleep(for: .milliseconds(20))
+                        concealed = false
+                        try? await Task.sleep(for: .milliseconds(180))
+                        visibleRows[mode] = seen
+                        if restoring == mode { restoring = nil }
+                    }
+                }
+        }
+            .safeAreaInset(edge: .top, spacing: 0) {
+            Picker("View", selection: $mode) {
+                ForEach(Mode.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(.bar)
+        }
+    }
+
+    /// The rows of a view, top to bottom.
+    private func rowOrder(_ shown: Mode) -> [String] {
+        (shown == .agents ? agentSections : spaceSections).flatMap { $0.rows.map(\.terminal.address) }
+    }
+
+    private func tracking(_ address: String, in shown: Mode) -> RowVisibility {
+        RowVisibility { isVisible in
+            guard restoring == nil, mode == shown else { return }
+            if isVisible { visibleRows[shown, default: []].insert(address) }
+            else { visibleRows[shown]?.remove(address) }
+        }
+    }
+
+    private func list(_ shown: Mode) -> some View {
+        List(selection: $selection) {
             // Keep the last list visible while reconnecting, with a banner on top.
             if session.state != .connected {
                 ConnectionBanner(state: session.state, session: session)
             }
-            if session.terminals.filter({ showFinished || $0.isLive }).isEmpty {
-                ContentUnavailableView(
-                    "No live terminals", systemImage: "terminal",
-                    description: Text("Start one with `hc run --bg` on the machine."))
-            }
-            switch grouping {
-            case .spaces:
+            switch shown {
+            case .agents:
+                if agentSections.isEmpty {
+                    ContentUnavailableView(
+                        "No agents", systemImage: "sparkles",
+                        description: Text("Agents that report their status to herdr show up here."))
+                }
+                ForEach(agentSections) { section in
+                    Section(isExpanded: expanded("agents:\(section.id)")) {
+                        ForEach(section.rows) { row in
+                            rowView(TerminalRow(terminal: row.terminal, inSpace: true, style: .agent))
+                                .modifier(tracking(row.terminal.address, in: shown))
+                        }
+                    } header: {
+                        SpaceHeader(section: section)
+                    }
+                }
+            case .terminals:
+                if session.terminals.filter({ showFinished || $0.isLive }).isEmpty {
+                    ContentUnavailableView(
+                        "No live terminals", systemImage: "terminal",
+                        description: Text("Start one with `hc run --bg` on the machine."))
+                }
                 ForEach(spaceSections) { section in
                     Section(isExpanded: expanded(section.id)) {
                         ForEach(section.rows) { row in
-                            rowView(TerminalRow(terminal: row.terminal, depth: row.depth, tab: row.tab, inSpace: true))
+                            rowView(TerminalRow(
+                                terminal: row.terminal, depth: row.depth, tab: row.tab, inSpace: true, style: .terminal))
+                                .modifier(tracking(row.terminal.address, in: shown))
                         }
                     } header: {
                         SpaceHeader(section: section)
@@ -182,14 +266,6 @@ struct TerminalListView: View {
                                     }
                                 }
                             }
-                    }
-                }
-            case .status:
-                ForEach(groups) { group in
-                    Section(group.title, isExpanded: expanded("status:\(group.title)")) {
-                        ForEach(group.terminals) { terminal in
-                            rowView(TerminalRow(terminal: terminal))
-                        }
                     }
                 }
             }
@@ -209,35 +285,6 @@ struct TerminalListView: View {
         }
         .listStyle(.sidebar)
         .animation(.default, value: session.terminals.map(\.address))
-    }
-}
-
-/// Sections in the order a person cares about them.
-struct TerminalGroup: Identifiable {
-    let title: String
-    let terminals: [Terminal]
-    var id: String { title }
-
-    static func group(_ terminals: [Terminal], showFinished: Bool) -> [TerminalGroup] {
-        let live = terminals.filter(\.isLive)
-        func with(_ states: Set<String>) -> [Terminal] {
-            live.filter { states.contains($0.status?.state ?? "") }
-        }
-        let needsYou = with(["blocked", "error"])
-        let working = with(["working"])
-        let done = with(["done"])
-        let known = Set((needsYou + working + done).map(\.address))
-        let other = live.filter { !known.contains($0.address) }
-        var groups = [
-            TerminalGroup(title: "Needs you", terminals: needsYou),
-            TerminalGroup(title: "Working", terminals: working),
-            TerminalGroup(title: "Done", terminals: done),
-            TerminalGroup(title: known.isEmpty ? "Terminals" : "Other", terminals: other),
-        ]
-        if showFinished {
-            groups.append(TerminalGroup(title: "Finished", terminals: terminals.filter { !$0.isLive }))
-        }
-        return groups.filter { !$0.terminals.isEmpty }
     }
 }
 
@@ -293,8 +340,44 @@ struct TerminalRow: View {
     var tab: String?
     /// Inside a space section the space name is already the header.
     var inSpace = false
+    var style = Style.agent
+
+    enum Style {
+        /// What it is doing first, its status as a dot on the right.
+        case agent
+        /// Its name, program and folder; no status.
+        case terminal
+    }
 
     var body: some View {
+        switch style {
+        case .agent: agentRow
+        case .terminal: terminalRow
+        }
+    }
+
+    private var agentRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(terminal.headline(inSpace: inSpace)).lineLimit(1)
+                if let detail = terminal.detail(inSpace: inSpace) {
+                    Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                if let progress = terminal.status?.progress, terminal.isLive, terminal.status?.state == "working" {
+                    ProgressView(value: Double(min(max(progress, 0), 100)), total: 100)
+                        .tint(StatusDot.color(for: "working"))
+                        .scaleEffect(y: 0.6)
+                        .padding(.top, 2)
+                }
+            }
+            Spacer(minLength: 8)
+            StatusDot(state: terminal.isLive ? terminal.status?.state : "finished")
+                .padding(.top, 6)
+        }
+        .accessibilityIdentifier(terminal.address)
+    }
+
+    private var terminalRow: some View {
         HStack(alignment: .top, spacing: 12) {
             if depth > 0 {
                 Image(systemName: "arrow.turn.down.right")
@@ -304,11 +387,10 @@ struct TerminalRow: View {
                     .padding(.top, 3)
                     .accessibilityLabel("Started by its parent")
             }
-            StatusDot(state: terminal.isLive ? terminal.status?.state : "finished")
-                .padding(.top, 6)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(terminal.headline(inSpace: inSpace)).lineLimit(1)
+                    Text(inSpace ? terminal.nameInSpace : terminal.displayName).lineLimit(1)
+                        .foregroundStyle(terminal.isLive ? .primary : .secondary)
                     Spacer(minLength: 8)
                     if let tab {
                         Text(tab)
@@ -320,18 +402,23 @@ struct TerminalRow: View {
                             .accessibilityLabel("Tab \(tab)")
                     }
                 }
-                if let detail = terminal.detail(inSpace: inSpace) {
-                    Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                if let progress = terminal.status?.progress, terminal.isLive, terminal.status?.state == "working" {
-                    ProgressView(value: Double(min(max(progress, 0), 100)), total: 100)
-                        .tint(StatusDot.color(for: "working"))
-                        .scaleEffect(y: 0.6)
-                        .padding(.top, 2)
+                if let place = terminal.place {
+                    Text(place).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
         }
         .accessibilityIdentifier(terminal.address)
+    }
+}
+
+/// Reports when a row comes on screen or goes off it.
+struct RowVisibility: ViewModifier {
+    let changed: (Bool) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { changed(true) }
+            .onDisappear { changed(false) }
     }
 }
 
@@ -368,13 +455,17 @@ struct TerminalActions: ViewModifier {
     }
 }
 
-/// A space's name, folder, and how many of its terminals need you.
+/// A section's name and how many of its terminals need you. Spaces, by far the most common,
+/// are just their name, like in herdr-app; only another machine's terminals get an icon.
 struct SpaceHeader: View {
     let section: TerminalSection
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: icon)
+            if case .machine = section.kind {
+                Image(systemName: "server.rack")
+                    .accessibilityLabel("Machine")
+            }
             Text(section.title)
             Spacer()
             if section.needsYou > 0 {
@@ -382,17 +473,22 @@ struct SpaceHeader: View {
             }
         }
     }
-
-    private var icon: String {
-        switch section.kind {
-        case .space: "square.stack"
-        case .machine: "server.rack"
-        case .other: "terminal"
-        }
-    }
 }
 
 extension Terminal {
+    /// A live terminal whose program reports its status to herdr (an agent).
+    var isAgent: Bool { isLive && status != nil }
+
+    /// For the terminals view: the program and folder, or how it ended.
+    var place: String? {
+        if !isLive { return exitCode.map { "exited \($0)" } ?? reason ?? "finished" }
+        if let foreground {
+            return foreground.name == nameInSpace ? Self.abbreviate(foreground.cwd)
+                : "\(foreground.name) · \(Self.abbreviate(foreground.cwd))"
+        }
+        return Self.abbreviate(cwd)
+    }
+
     /// Its name inside a space: without herdr-app's "space / tab" label, which the header already says.
     var nameInSpace: String {
         if let name, !name.isEmpty { return name }

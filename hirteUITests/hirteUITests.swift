@@ -230,6 +230,47 @@ final class DemoTourTests: XCTestCase {
         shot(app, "zoom-2-out")
     }
 
+    /// Agents lists only agents, with their status; Terminals lists every terminal by space.
+    @MainActor
+    func testAgentsAndTerminals() throws {
+        let app = XCUIApplication()
+        app.launch()
+        startDemo(app)
+        // Not a launch argument: those win over what the app saves, so switching wouldn't stick.
+        app.buttons["Agents"].tap()
+        let shell = app.descendants(matching: .any).matching(identifier: "t5").firstMatch
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "t3").firstMatch.exists, "the blocked agent")
+        XCTAssertFalse(shell.exists, "the shell is not an agent")
+        shot(app, "view-agents")
+        app.buttons["Terminals"].tap()
+        XCTAssertTrue(shell.waitForExistence(timeout: 5), "the terminals view lists the shell")
+        shot(app, "view-terminals")
+        app.buttons["Agents"].tap()
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "t3").firstMatch.waitForExistence(timeout: 5))
+    }
+
+    /// Each view keeps its scroll position when switching away and back. Large text makes the
+    /// demo list longer than the screen.
+    @MainActor
+    func testViewsKeepScrollPosition() throws {
+        let app = XCUIApplication()
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityL"]
+        app.launch()
+        startDemo(app)
+        app.buttons["Terminals"].tap()
+        let infra = app.descendants(matching: .any).matching(identifier: "t6").firstMatch
+        let list = app.collectionViews.firstMatch
+        for _ in 0..<4 where !(infra.exists && infra.isHittable) { list.swipeUp() }
+        XCTAssertTrue(infra.isHittable, "scrolled down to the last terminal")
+        shot(app, "scroll-0-terminals-bottom")
+        app.buttons["Agents"].tap()
+        sleep(1)
+        app.buttons["Terminals"].tap()
+        sleep(1)
+        shot(app, "scroll-1-terminals-back")
+        XCTAssertTrue(infra.waitForExistence(timeout: 3) && infra.isHittable, "still scrolled down after switching back")
+    }
+
     /// One sidebar: the machine is picked from the list's title.
     @MainActor
     func testMachineSwitcher() throws {
@@ -323,7 +364,9 @@ final class DemoTourTests: XCTestCase {
     @MainActor
     private func open(_ app: XCUIApplication, _ address: String) {
         // Rows carry their terminal's address as identifier (the address itself isn't shown).
+        // The agents view lists only agents; anything else is in the terminals view.
         let row = app.descendants(matching: .any).matching(identifier: address).firstMatch
+        if !row.waitForExistence(timeout: 3) { app.buttons["Terminals"].tap() }
         XCTAssertTrue(row.waitForExistence(timeout: 5), "\(address) is listed")
         row.tap()
     }
