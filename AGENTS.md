@@ -58,6 +58,10 @@ App tests: `xcodebuild … -only-testing:hirteTests test` (unit) or `-only-testi
   (`hirte/Debug/ScreenRecording.swift`, ReplayKit): lower resolution than a screen recording, and
   without the system keyboard. Debug-only launch arguments: `-hirte.demo YES` opens the demo machine,
   `-hirte.record <name>` records into `Documents/<name>.mp4`.
+- **Uploads** (`just archive true`) authenticate with an App Store Connect API key: from
+  `.appstoreconnect.sops.yaml` (sops-encrypted, not committed: `key_id`, `issuer_id`, `private_key`),
+  decrypted into a temporary file for the run; `just archive` stops right away if it can't read it.
+  The key needs the Admin role: exporting uses Apple's cloud-managed distribution certificate.
 - **`just archive`** puts `/usr/bin` first on `PATH`: Xcode's openrsync fails ("Copy failed") when a
   newer `rsync` from pixi or Homebrew comes first.
 - **Demo content** stays generic (no real product names, people or companies) and keeps lines under

@@ -11,6 +11,8 @@ signing := (if team != "" { " DEVELOPMENT_TEAM=" + team } else { "" }) + " HIRTE
 bundle_id := bundle_prefix + ".hirte"
 dev_bundle_id := bundle_id + ".dev"
 derived := ".build/xcode"
+# The App Store Connect API key for uploads, encrypted with sops (not committed; see .envrc).
+asc_key_file := ".appstoreconnect.sops.yaml"
 xcodebuild := "xcodebuild -project " + project + " -scheme " + scheme + " -derivedDataPath " + derived + " -allowProvisioningUpdates" + signing
 
 default:
@@ -60,12 +62,27 @@ archive upload="false":
     if [ "$(echo "$builds" | wc -l)" -ne 1 ]; then echo "targets disagree on CURRENT_PROJECT_VERSION:" >&2; echo "$builds" >&2; exit 1; fi
     build="$(echo "$builds" | grep -o '[0-9]*"$' | tr -d '"')"
     version="$(grep -o '"MARKETING_VERSION": "[^"]*"' "$project" | head -1 | cut -d'"' -f4)"
-    # An App Store Connect API key (see .envrc) instead of Xcode's account sign-in, which expires.
-    auth=()
-    if [ -n "${HIRTE_ASC_KEY_ID:-}" ]; then
-        auth=(-authenticationKeyPath "$HIRTE_ASC_KEY_PATH" -authenticationKeyID "$HIRTE_ASC_KEY_ID"
-              -authenticationKeyIssuerID "$HIRTE_ASC_ISSUER_ID")
+    # The App Store Connect API key from the sops-encrypted key file, checked before the long
+    # build; the .p8 is decrypted into a temporary file for this run only.
+    if [ ! -f {{asc_key_file}} ]; then
+        echo "{{asc_key_file}} is missing: an App Store Connect API key (role Admin), encrypted with sops (see .envrc)." >&2
+        exit 1
     fi
+    key="$(mktemp -t hirte-asc).p8"
+    trap 'rm -f "$key"' EXIT
+    secret() {
+        local value
+        value="$(sops decrypt --extract "[\"$1\"]" {{asc_key_file}})" && [ -n "$value" ] || {
+            echo "Could not read $1 from {{asc_key_file}} (is SOPS_AGE_KEY_FILE set?)." >&2
+            exit 1
+        }
+        printf '%s\n' "$value"
+    }
+    key_id="$(secret key_id)"
+    issuer_id="$(secret issuer_id)"
+    (umask 077; secret private_key > "$key")
+    grep -q "BEGIN PRIVATE KEY" "$key" || { echo "private_key in {{asc_key_file}} is not a .p8 key." >&2; exit 1; }
+    auth=(-authenticationKeyPath "$key" -authenticationKeyID "$key_id" -authenticationKeyIssuerID "$issuer_id")
     rm -rf .build/Hirte.xcarchive .build/export
     {{xcodebuild}} -configuration Release -destination "generic/platform=iOS" \
         -archivePath .build/Hirte.xcarchive ${auth[@]+"${auth[@]}"} archive | xcbeautify --quiet
