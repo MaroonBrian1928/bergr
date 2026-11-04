@@ -19,12 +19,9 @@ struct SidebarView: View {
                 .id(host.id)
                 // iOS only shows a title menu (name + chevron) on an inline title.
                 .navigationBarTitleDisplayMode(.inline)
+                // Settings lives in the title menu too: a gear in the toolbar left too little room
+                // for the machine's name in the narrow sidebar of the unfolded Duo.
                 .toolbarTitleMenu { switcher(current: host) }
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Settings", systemImage: "gearshape") { showingSettings = true }
-                    }
-                }
                 .sheet(isPresented: $showingMachines) {
                     NavigationStack {
                         MachinesView(sessions: sessions, selection: $selectedHost, inSheet: true)
@@ -43,7 +40,8 @@ struct SidebarView: View {
         }
     }
 
-    /// Tapping the title: every machine (with what needs you there), then adding and managing them.
+    /// Tapping the title: every machine (with what needs you there), adding and managing them,
+    /// and the settings.
     @ViewBuilder
     private func switcher(current: Host) -> some View {
         Section {
@@ -66,6 +64,9 @@ struct SidebarView: View {
                 }
             }
             Button("Manage Machines…", systemImage: "server.rack") { showingMachines = true }
+        }
+        Section {
+            Button("Settings…", systemImage: "gearshape") { showingSettings = true }
         }
     }
 

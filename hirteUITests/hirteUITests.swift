@@ -245,6 +245,19 @@ final class DemoTourTests: XCTestCase {
         app.buttons["Terminals"].tap()
         XCTAssertTrue(shell.waitForExistence(timeout: 5), "the terminals view lists the shell")
         shot(app, "view-terminals")
+        // Finished terminals are in a section of their own at the bottom, collapsed at first
+        // (the simulator may remember it open from an earlier run).
+        let backup = app.descendants(matching: .any).matching(identifier: "t7").firstMatch
+        let finished = app.staticTexts["Finished"]
+        let list = app.collectionViews.firstMatch
+        for _ in 0..<4 where !(finished.exists && finished.isHittable) { list.swipeUp() }
+        XCTAssertTrue(finished.isHittable, "the Finished section is listed")
+        if !backup.exists { finished.tap() }
+        XCTAssertTrue(backup.waitForExistence(timeout: 5), "opening it shows the finished backup")
+        shot(app, "view-terminals-finished")
+        finished.tap()
+        sleep(1)
+        XCTAssertFalse(backup.exists, "collapsing it hides the finished backup")
         app.buttons["Agents"].tap()
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "t3").firstMatch.waitForExistence(timeout: 5))
     }
@@ -294,9 +307,7 @@ final class DemoTourTests: XCTestCase {
     func testSettings() throws {
         let app = XCUIApplication()
         app.launch()
-        let settings = app.buttons["Settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 5))
-        settings.tap()
+        openSettings(app)
         XCTAssertTrue(app.staticTexts["Terminal"].waitForExistence(timeout: 5))
         shot(app, "settings")
         // A row's label is its title and value: "Dark Theme, Hirte Dark".
@@ -324,7 +335,7 @@ final class DemoTourTests: XCTestCase {
     func testAppearanceInSettings() throws {
         let app = XCUIApplication()
         app.launch()
-        app.buttons["Settings"].tap()
+        openSettings(app)
         XCTAssertTrue(app.staticTexts["Terminal"].waitForExistence(timeout: 5))
         app.buttons["Dark"].tap()
         sleep(1)
@@ -359,6 +370,16 @@ final class DemoTourTests: XCTestCase {
         let tryDemo = app.buttons["Try the Demo"]
         if tryDemo.waitForExistence(timeout: 5) { tryDemo.tap() }
         XCTAssertTrue(app.staticTexts["website"].waitForExistence(timeout: 10), "the demo's terminals show")
+    }
+
+    /// Settings is in the title menu, below the machines.
+    @MainActor
+    private func openSettings(_ app: XCUIApplication) {
+        startDemo(app)
+        app.navigationBars.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Demo machine'")).firstMatch.tap()
+        let settings = app.buttons["Settings…"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5), "the title menu offers Settings")
+        settings.tap()
     }
 
     @MainActor

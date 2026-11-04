@@ -7,7 +7,6 @@ struct TerminalListView: View {
     @Environment(KeyLibrary.self) private var keys
     let session: HostSession
     @Binding var selection: String?
-    @State private var showFinished = false
     @AppStorage("terminals.view") private var mode = Mode.agents
     /// The rows each view had on screen, so switching back scrolls to where it was.
     @State private var visibleRows: [Mode: Set<String>] = [:]
@@ -36,14 +35,6 @@ struct TerminalListView: View {
                         newTerminal = NewTerminalContext(folder: nil)
                     }
                     .disabled(session.state != .connected)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Toggle("Show Finished", isOn: $showFinished)
-                    } label: {
-                        Label("View Options", systemImage: "line.3.horizontal.decrease.circle")
-                    }
-                    .disabled(session.snapshot == nil)
                 }
             }
             .onAppear { session.start(keys: keys) }
@@ -139,21 +130,26 @@ struct TerminalListView: View {
         }
     }
 
-    /// Whether a section is open; collapsing is remembered per machine.
-    private func expanded(_ section: String) -> Binding<Bool> {
-        let key = "\(session.host.id.uuidString)|\(section)"
+    /// Whether a section is open; collapsing is remembered per machine. A section that starts
+    /// collapsed is remembered when opened instead (its key gets an "open:" prefix).
+    private func expanded(_ section: String, initially open: Bool = true) -> Binding<Bool> {
+        let key = "\(session.host.id.uuidString)|\(open ? "" : "open:")\(section)"
         return Binding(
-            get: { !collapsed.split(separator: "\n").contains(Substring(key)) },
-            set: { open in
+            get: { collapsed.split(separator: "\n").contains(Substring(key)) != open },
+            set: { isOpen in
                 var keys = collapsed.split(separator: "\n").map(String.init).filter { $0 != key }
-                if !open { keys.append(key) }
+                if isOpen != open { keys.append(key) }
                 collapsed = keys.joined(separator: "\n")
             })
     }
 
     private var spaceSections: [TerminalSection] {
-        let shown = session.terminals.filter { showFinished || $0.isLive }
-        return TerminalGrouping.bySpace(shown, layout: session.layout)
+        TerminalGrouping.bySpace(session.terminals.filter(\.isLive), layout: session.layout)
+    }
+
+    /// Finished terminals, newest first, in one section of their own below the spaces.
+    private var finished: [Terminal] {
+        session.terminals.filter { !$0.isLive }.sorted { $0.createdMs > $1.createdMs }
     }
 
     /// The agents (terminals that report a status), by space, without nesting.
@@ -208,7 +204,9 @@ struct TerminalListView: View {
 
     /// The rows of a view, top to bottom.
     private func rowOrder(_ shown: Mode) -> [String] {
-        (shown == .agents ? agentSections : spaceSections).flatMap { $0.rows.map(\.terminal.address) }
+        if shown == .agents { return agentSections.flatMap { $0.rows.map(\.terminal.address) } }
+        let open = expanded("finished", initially: false).wrappedValue
+        return spaceSections.flatMap { $0.rows.map(\.terminal.address) } + (open ? finished.map(\.address) : [])
     }
 
     private func tracking(_ address: String, in shown: Mode) -> RowVisibility {
@@ -243,7 +241,7 @@ struct TerminalListView: View {
                     }
                 }
             case .terminals:
-                if session.terminals.filter({ showFinished || $0.isLive }).isEmpty {
+                if spaceSections.isEmpty {
                     ContentUnavailableView(
                         "No live terminals", systemImage: "terminal",
                         description: Text("Start one with `hc run --bg` on the machine."))
@@ -266,6 +264,21 @@ struct TerminalListView: View {
                                     }
                                 }
                             }
+                    }
+                }
+                // Out of the way, but at hand to see how something ended or to remove it.
+                if !finished.isEmpty {
+                    Section(isExpanded: expanded("finished", initially: false)) {
+                        ForEach(finished) { terminal in
+                            rowView(TerminalRow(terminal: terminal, style: .terminal))
+                                .modifier(tracking(terminal.address, in: shown))
+                        }
+                    } header: {
+                        HStack {
+                            Text("Finished")
+                            Spacer()
+                            Text("\(finished.count)").foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
