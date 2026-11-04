@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <video src="https://github.com/glattziehen/hirte/raw/main/assets/demo.mp4" width="640" autoplay loop muted playsinline></video>
+  <a href="assets/demo.mp4"><img src="assets/demo.gif" width="640" alt="Hirte on the unfolded iPhone Duo: the terminal list next to an agent, answering it with Yes, then a shell"></a>
 </p>
 
 Hirte ("shepherd" in German) connects to your machines over SSH and shows every terminal that
