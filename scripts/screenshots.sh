@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 
 appearance="${1:-dark}"
 device_type="${2:-iPhone 17 Pro}"
-sim_name="Hirte Screenshots ($device_type)"
+sim_name="Bergr Screenshots ($device_type)"
 out=".build/screenshots/$(echo "$device_type" | tr 'A-Z ' 'a-z-')"
 raw="$out/raw"
 final="$out/appstore"
@@ -31,11 +31,11 @@ case "$device_type" in
     "iPhone 17 Pro" | "iPhone 17") font=15 ;;
     *) font=17 ;;
 esac
-TEST_RUNNER_HIRTE_SHOTS="$PWD/$raw" TEST_RUNNER_HIRTE_SHOT_FONT="$font" xcodebuild -project hirte.xcodeproj -scheme hirte -derivedDataPath .build/xcode \
-    ${HIRTE_TEAM:+DEVELOPMENT_TEAM=$HIRTE_TEAM} HIRTE_BUNDLE_ID_PREFIX="${HIRTE_BUNDLE_ID_PREFIX:-com.pavelzw}" \
-    -destination "id=$device" -only-testing:hirteUITests/DemoTourTests test | xcbeautify --quiet
+TEST_RUNNER_BERGR_SHOTS="$PWD/$raw" TEST_RUNNER_BERGR_SHOT_FONT="$font" xcodebuild -project bergr.xcodeproj -scheme bergr -derivedDataPath .build/xcode \
+    ${BERGR_TEAM:+DEVELOPMENT_TEAM=$BERGR_TEAM} BERGR_BUNDLE_ID_PREFIX="${BERGR_BUNDLE_ID_PREFIX:-com.pavelzw}" \
+    -destination "id=$device" -only-testing:bergrUITests/DemoTourTests test | xcbeautify --quiet
 
-# Frame: caption on Hirte's charcoal, the screenshot below with rounded corners. The output has
+# Frame: caption on Bergr's charcoal, the screenshot below with rounded corners. The output has
 # the capture's size (what App Store Connect expects for that device); the layout was designed
 # at 1320×2868 and scales with the width (f, in thousandths).
 read W H < <(sips -g pixelWidth -g pixelHeight "$raw/${shots[0]}.png" | awk '/pixel/ {printf "%s ", $2} END {print ""}')

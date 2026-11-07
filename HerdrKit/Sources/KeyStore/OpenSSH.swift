@@ -14,6 +14,29 @@ public enum OpenSSH {
         return blob
     }
 
+    public static let ed25519KeyType = "ssh-ed25519"
+
+    /// string("ssh-ed25519") || string(32-byte key).
+    public static func publicKeyBlob(_ key: Curve25519.Signing.PublicKey) -> Data {
+        var blob = Data()
+        appendString(Data(ed25519KeyType.utf8), to: &blob)
+        appendString(key.rawRepresentation, to: &blob)
+        return blob
+    }
+
+    /// A line for `authorized_keys`: `ssh-ed25519 AAAA… comment`.
+    public static func authorizedKeysLine(_ key: Curve25519.Signing.PublicKey, comment: String?) -> String {
+        line(type: ed25519KeyType, blob: publicKeyBlob(key), comment: comment)
+    }
+
+    static func line(type: String, blob: Data, comment: String?) -> String {
+        var line = "\(type) \(blob.base64EncodedString())"
+        if let comment, !comment.isEmpty {
+            line += " " + comment.replacingOccurrences(of: "\n", with: " ")
+        }
+        return line
+    }
+
     /// A line for `authorized_keys`: `ecdsa-sha2-nistp256 AAAA… comment`.
     public static func authorizedKeysLine(_ key: P256.Signing.PublicKey, comment: String?) -> String {
         var line = "\(ecdsaP256KeyType) \(publicKeyBlob(key).base64EncodedString())"

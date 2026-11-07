@@ -12,10 +12,14 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/orlandos-nl/Citadel", from: "0.12.1"),
+        .package(url: "https://github.com/apple/swift-nio-transport-services", from: "1.20.0"),
     ],
     targets: [
         .target(name: "KeyStore"),
-        .target(name: "SSHTransport", dependencies: ["KeyStore", .product(name: "Citadel", package: "Citadel")]),
+        .target(name: "SSHTransport", dependencies: [
+            "KeyStore", .product(name: "Citadel", package: "Citadel"),
+            .product(name: "NIOTransportServices", package: "swift-nio-transport-services"),
+        ]),
         // Built by `just ghostty` from vendor/ghostty (not checked in).
         .binaryTarget(name: "GhosttyVt", path: "Frameworks/ghostty-vt.xcframework"),
         .target(name: "TerminalCore", dependencies: ["GhosttyVt"]),

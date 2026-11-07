@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect the licenses of everything shipped inside Hirte into hirte/Licenses/licenses.json.
+"""Collect the licenses of everything shipped inside Bergr into bergr/Licenses/licenses.json.
 
 Run with `just licenses` after changing Swift packages or the Ghostty pin. Needs resolved
 packages (`just build`) and the Ghostty dependencies (`just ghostty`).
@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CHECKOUTS = [ROOT / ".build/xcode/SourcePackages/checkouts", ROOT / "HerdrKit/.build/checkouts"]
 GHOSTTY = ROOT / "vendor/ghostty"
 EXTRA = ROOT / "scripts/licenses"
-OUT = ROOT / "hirte/Licenses/licenses.json"
+OUT = ROOT / "bergr/Licenses/licenses.json"
 
 
 def checkout(name: str) -> Path:
@@ -74,6 +74,7 @@ licenses = [
     swift("BigInt", "https://github.com/attaswift/BigInt", "MIT", "LICENSE.md"),
     swift("swift-nio", "https://github.com/apple/swift-nio", "Apache-2.0", "NOTICE.txt", "LICENSE.txt"),
     swift("swift-nio-ssh", "https://github.com/apple/swift-nio-ssh", "Apache-2.0", "LICENSE.txt"),
+    swift("swift-nio-transport-services", "https://github.com/apple/swift-nio-transport-services", "Apache-2.0", "LICENSE.txt"),
     swift("swift-crypto", "https://github.com/apple/swift-crypto", "Apache-2.0", "NOTICE.txt", "LICENSE.txt"),
     swift("swift-asn1", "https://github.com/apple/swift-asn1", "Apache-2.0", "NOTICE.txt", "LICENSE.txt"),
     swift("swift-atomics", "https://github.com/apple/swift-atomics", "Apache-2.0", "LICENSE.txt"),

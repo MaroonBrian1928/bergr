@@ -1,5 +1,5 @@
 {
-  "originHash" : "c7e3bd6ffd25a6a3a04bf57adadb2aa2adafc4b923791b92bb2e838c12850f82",
+  "originHash" : "996bb2f9d5848835f92cd719de9d3d283d457d17d829796ce254ace75bc69e2e",
   "pins" : [
     {
       "identity" : "bigint",
@@ -80,6 +80,15 @@
       "state" : {
         "revision" : "d88989f3d3bb1dfb2a38ce4af598afbf7fc3095c",
         "version" : "0.3.7"
+      }
+    },
+    {
+      "identity" : "swift-nio-transport-services",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-nio-transport-services",
+      "state" : {
+        "revision" : "67787bb645a5e67d2edcdfbe48a216cc549222d5",
+        "version" : "1.28.0"
       }
     },
     {

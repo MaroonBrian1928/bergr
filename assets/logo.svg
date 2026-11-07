@@ -1,8 +1,0 @@
-<svg role="img" aria-label="Hirte logo" xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <!-- A prompt chevron and a shepherd's crook as the cursor. -->
-  <rect width="1024" height="1024" fill="#d9dad8"/>
-  <g fill="none" stroke="#303438" stroke-width="88" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M222 372 L392 494 L222 616"/>
-    <path d="M582 812 V352 A125 125 0 0 1 832 352 V392"/>
-  </g>
-</svg>

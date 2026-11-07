@@ -1,5 +1,5 @@
 # Sourced by screenshots.sh and video.sh. Needs $device_type, $sim_name and $appearance; sets $device:
-# a booted simulator in US English with Apple's marketing status bar and no Hirte Dev installed.
+# a booted simulator in US English with Apple's marketing status bar and no Bergr Dev installed.
 
 # A dedicated simulator on the newest iOS that supports the device (the iPhone Duo has its own
 # runtime), so personal data never shows up.
@@ -38,5 +38,5 @@ xcrun simctl ui "$device" appearance "$appearance"
 xcrun simctl status_bar "$device" override --time 9:41 --dataNetwork wifi --wifiMode active --wifiBars 3 \
     --cellularMode active --cellularBars 4 --operatorName "" --batteryState discharging --batteryLevel 100
 # Start from a fresh install, so the first screen offers the demo.
-xcrun simctl uninstall "$device" "${HIRTE_BUNDLE_ID_PREFIX:-com.pavelzw}.hirte.dev" 2>/dev/null || true
+xcrun simctl uninstall "$device" "${BERGR_BUNDLE_ID_PREFIX:-com.pavelzw}.bergr.dev" 2>/dev/null || true
 

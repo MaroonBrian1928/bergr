@@ -1,9 +1,9 @@
 ---
 name: app-store-screenshots
-description: Make, check and update Hirte's App Store screenshots (iPhone 6.3" and iPhone Duo, captioned). Use when asked for App Store / marketing screenshots, when screens or the demo changed and the screenshots need redoing, or when changing screenshot captions, look or devices.
+description: Make, check and update Bergr's App Store screenshots (iPhone 6.3" and iPhone Duo, captioned). Use when asked for App Store / marketing screenshots, when screens or the demo changed and the screenshots need redoing, or when changing screenshot captions, look or devices.
 ---
 
-# App Store screenshots for Hirte
+# App Store screenshots for Bergr
 
 The screenshots show the built-in **demo machine** (HerdrKit `DemoCore`, content in
 `HerdrKit/Sources/HerdrKit/DemoScript.swift`), so no real server, hostnames or keys ever appear.
@@ -19,17 +19,17 @@ just screenshots light                # light mode
 
 This runs `scripts/screenshots.sh`, which:
 
-1. Uses a dedicated simulator per device, **"Hirte Screenshots (<device>)"**, and creates it if
+1. Uses a dedicated simulator per device, **"Bergr Screenshots (<device>)"**, and creates it if
    missing (so no personal data shows up) on the newest iOS runtime **that supports the device**:
    the iPhone Duo has its own runtime (`iOS-27-2-iPhone19-4`); the plain iOS 27.2 runtime fails with
    "Incompatible device".
 2. Sets it to **en_US** (the status bar then reads `9:41`, not `09:41`; this needs one reboot the first
    time), the requested appearance, and Apple's marketing status bar: 9:41, full Wi-Fi and cell,
    **battery 100 % discharging** (`charged` shows a lightning bolt).
-3. Uninstalls Hirte Dev, so the app starts empty and offers **Try the Demo**.
-4. Runs the UI test `hirteUITests/DemoTourTests/testDemoTour` with `TEST_RUNNER_HIRTE_SHOTS`
+3. Uninstalls Bergr Dev, so the app starts empty and offers **Try the Demo**.
+4. Runs the UI test `bergrUITests/DemoTourTests/testDemoTour` with `TEST_RUNNER_BERGR_SHOTS`
    set. With that variable the test launches the app in English with a larger terminal font
-   (`-terminal.fontSize`, from `TEST_RUNNER_HIRTE_SHOT_FONT`: **15 pt** on the 17 Pro, **17 pt** on the
+   (`-terminal.fontSize`, from `TEST_RUNNER_BERGR_SHOT_FONT`: **15 pt** on the 17 Pro, **17 pt** on the
    Pro Max, **14 pt** on the Duo, whose outer display is narrower; the default 13 pt leaves half of a big phone's screen empty)
    and writes `1-terminals`, `2-agent`, `3-needs-you`, `4-shell` and `5-tests` to
    `.build/screenshots/<device>/raw/`.
@@ -59,7 +59,7 @@ Check for:
   dark, but people use light mode too (a dark title on the charcoal terminal once went unnoticed).
 - Wrapped or clipped terminal lines (keep demo lines under ~44 columns; if a device wraps, lower its
   font in the `case` in `scripts/screenshots.sh`) and wrapped key bar labels.
-- The terminal font is JetBrains Mono (bundled in `hirte/Fonts`); SF Mono there means it failed to load.
+- The terminal font is JetBrains Mono (bundled in `bergr/Fonts`); SF Mono there means it failed to load.
 - Statuses: the demo changes them over the first minute (`DemoScript.timeline`), so a screen taken
   later shows later states. The list is shot first, ~2 s in.
 
@@ -67,7 +67,7 @@ Check for:
 
 - **Captions and order**: the `shots`, `titles` and `subtitles` arrays at the top of
   `scripts/screenshots.sh`. Titles max ~24 characters, subtitles ~45, or they overflow at these sizes.
-- **Which screens**: the UI test (`hirteUITests/hirteUITests.swift`): `open(app, "t3")` taps a terminal
+- **Which screens**: the UI test (`bergrUITests/bergrUITests.swift`): `open(app, "t3")` taps a terminal
   by its address, `shot(app, "name")` saves one. Add a name to `shots` to frame it.
 - **What the screens show**: `DemoScript.swift` (terminals, screens, shell answers, timeline). Keep it
   generic: no real product names, people or companies.
@@ -75,7 +75,7 @@ Check for:
 
 ## Upload
 
-App Store Connect → Hirte → **Vertrieb (Distribution)** → the version → **App-Vorschauen und
+App Store Connect → Bergr → **Vertrieb (Distribution)** → the version → **App-Vorschauen und
 Bildschirmfotos** → **iPhone mit Dynamic Island (mittleres Display)** → drag in
 `.build/screenshots/iphone-17-pro/appstore/*.png` in order (up to 10). Upload from `appstore/`, never
 `raw/` (unframed, and it has an extra `5-tests.png`).

@@ -60,6 +60,6 @@ jobs:
 
       - name: Build the app
         run: |
-          xcodebuild -project hirte.xcodeproj -scheme hirte -configuration Debug \
+          xcodebuild -project bergr.xcodeproj -scheme bergr -configuration Debug \
             -destination "generic/platform=iOS" -derivedDataPath .build/xcode \
             CODE_SIGNING_ALLOWED=NO build | xcbeautify

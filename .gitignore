@@ -6,3 +6,4 @@ DerivedData/
 .envrc.local
 HerdrKit/Frameworks/
 .appstoreconnect.sops.yaml
+__pycache__/

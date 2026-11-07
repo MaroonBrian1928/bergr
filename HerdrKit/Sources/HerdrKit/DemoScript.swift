@@ -263,7 +263,7 @@ enum DemoScript {
             return ""
         case "help":
             return lines(
-                "This is Hirte's demo machine. Try",
+                "This is Bergr's demo machine. Try",
                 "ls, pwd, git status, git log, echo,",
                 "date, clear or exit.",
                 "Add a machine that runs herdr-core",

@@ -41,7 +41,7 @@ public protocol KnownHostsStore: Sendable {
 
 public final class UserDefaultsKnownHosts: KnownHostsStore, @unchecked Sendable {
     private let defaults: UserDefaults
-    private let key = "hirte.known-hosts"
+    private let key = "bergr.known-hosts"
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults

@@ -9,6 +9,13 @@ public enum SSHKeyKind: String, Codable, Sendable {
     case secureEnclave
     /// A plain P-256 key stored in the Keychain. Fallback for the simulator.
     case software
+    /// A key the user imported (ed25519 or P-256), stored in the Keychain.
+    case imported
+}
+
+public enum SSHKeyAlgorithm: String, Codable, Sendable {
+    case p256
+    case ed25519
 }
 
 /// Public facts about a stored key. Safe to show and pass around.
@@ -18,21 +25,60 @@ public struct SSHKeyInfo: Identifiable, Codable, Hashable, Sendable {
     public let kind: SSHKeyKind
     public let requiresBiometry: Bool
     public let createdAt: Date
-    /// Uncompressed public point (0x04 || X || Y).
+    /// Public key bytes: uncompressed P-256 point (0x04 || X || Y), or the 32 raw ed25519 bytes.
     public let publicKeyX963: Data
+    /// Missing in records written before key import existed: those are P-256.
+    public let algorithm: SSHKeyAlgorithm
 
-    public var publicKey: P256.Signing.PublicKey {
-        // Only ever written from a valid key, so this cannot fail.
-        try! P256.Signing.PublicKey(x963Representation: publicKeyX963)
+    public init(
+        id: UUID, label: String, kind: SSHKeyKind, requiresBiometry: Bool, createdAt: Date,
+        publicKeyX963: Data, algorithm: SSHKeyAlgorithm = .p256
+    ) {
+        self.id = id
+        self.label = label
+        self.kind = kind
+        self.requiresBiometry = requiresBiometry
+        self.createdAt = createdAt
+        self.publicKeyX963 = publicKeyX963
+        self.algorithm = algorithm
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        label = try c.decode(String.self, forKey: .label)
+        kind = try c.decode(SSHKeyKind.self, forKey: .kind)
+        requiresBiometry = try c.decode(Bool.self, forKey: .requiresBiometry)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        publicKeyX963 = try c.decode(Data.self, forKey: .publicKeyX963)
+        algorithm = try c.decodeIfPresent(SSHKeyAlgorithm.self, forKey: .algorithm) ?? .p256
+    }
+
+    /// The P-256 public key, or nil for other algorithms.
+    public var publicKey: P256.Signing.PublicKey? {
+        algorithm == .p256 ? try? P256.Signing.PublicKey(x963Representation: publicKeyX963) : nil
+    }
+
+    /// The SSH wire-format public key blob.
+    public var publicKeyBlob: Data {
+        switch algorithm {
+        case .p256: publicKey.map(OpenSSH.publicKeyBlob) ?? Data()
+        case .ed25519:
+            (try? Curve25519.Signing.PublicKey(rawRepresentation: publicKeyX963)).map(OpenSSH.publicKeyBlob) ?? Data()
+        }
+    }
+
+    public var algorithmName: String {
+        algorithm == .ed25519 ? OpenSSH.ed25519KeyType : OpenSSH.ecdsaP256KeyType
     }
 
     /// Paste this into `~/.ssh/authorized_keys` on the server.
     public var authorizedKeysLine: String {
-        OpenSSH.authorizedKeysLine(publicKey, comment: label)
+        OpenSSH.line(type: algorithmName, blob: publicKeyBlob, comment: label)
     }
 
     public var fingerprint: String {
-        OpenSSH.sha256Fingerprint(blob: OpenSSH.publicKeyBlob(publicKey))
+        OpenSSH.sha256Fingerprint(blob: publicKeyBlob)
     }
 }
 
@@ -40,11 +86,14 @@ public struct SSHKeyInfo: Identifiable, Codable, Hashable, Sendable {
 public enum SigningKey: @unchecked Sendable {
     case secureEnclave(SecureEnclave.P256.Signing.PrivateKey)
     case software(P256.Signing.PrivateKey)
+    case ed25519(Curve25519.Signing.PrivateKey)
 
-    public var publicKey: P256.Signing.PublicKey {
+    /// The P-256 public key, or nil for ed25519.
+    public var publicKey: P256.Signing.PublicKey? {
         switch self {
         case .secureEnclave(let key): key.publicKey
         case .software(let key): key.publicKey
+        case .ed25519: nil
         }
     }
 }
@@ -122,6 +171,33 @@ public final class KeyStore: Sendable {
         return record.info
     }
 
+    /// Stores a parsed private key in the Keychain.
+    @discardableResult
+    public func importKey(_ imported: ImportedPrivateKey, label: String? = nil) throws -> SSHKeyInfo {
+        let name = label?.trimmingCharacters(in: .whitespaces).nilIfEmpty
+            ?? imported.comment ?? "Imported key"
+        let publicBytes: Data
+        let raw: Data
+        let algorithm: SSHKeyAlgorithm
+        switch imported.material {
+        case .ed25519(let key):
+            publicBytes = key.publicKey.rawRepresentation
+            raw = key.rawRepresentation
+            algorithm = .ed25519
+        case .p256(let key):
+            publicBytes = key.publicKey.x963Representation
+            raw = key.rawRepresentation
+            algorithm = .p256
+        }
+        let record = StoredKey(
+            info: SSHKeyInfo(
+                id: UUID(), label: name, kind: .imported, requiresBiometry: false,
+                createdAt: Date(), publicKeyX963: publicBytes, algorithm: algorithm),
+            keyData: raw)
+        try storage.save(try JSONEncoder().encode(record), account: record.info.id.uuidString)
+        return record.info
+    }
+
     /// Loads the private key for signing.
     ///
     /// For a key that requires biometry, pass an `LAContext` that already passed
@@ -136,6 +212,11 @@ public final class KeyStore: Sendable {
                 dataRepresentation: record.keyData, authenticationContext: authenticationContext))
         case .software:
             return .software(try P256.Signing.PrivateKey(rawRepresentation: record.keyData))
+        case .imported:
+            switch record.info.algorithm {
+            case .ed25519: return .ed25519(try Curve25519.Signing.PrivateKey(rawRepresentation: record.keyData))
+            case .p256: return .software(try P256.Signing.PrivateKey(rawRepresentation: record.keyData))
+            }
         }
     }
 
@@ -176,7 +257,7 @@ public protocol KeyStorage: Sendable {
 public struct KeychainKeyStorage: KeyStorage {
     public let service: String
 
-    public init(service: String = "hirte.ssh-keys") {
+    public init(service: String = "bergr.ssh-keys") {
         self.service = service
     }
 
@@ -234,4 +315,8 @@ public final class InMemoryKeyStorage: KeyStorage, @unchecked Sendable {
     public func loadAll() throws -> [Data] { lock.withLock { Array(items.values) } }
     public func save(_ data: Data, account: String) throws { lock.withLock { items[account] = data } }
     public func delete(account: String) throws { lock.withLock { _ = items.removeValue(forKey: account) } }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

@@ -1,0 +1,8 @@
+# betterleaks / gitleaks: the keys in KeyStoreTests are throwaway fixtures generated for the
+# import tests (ssh-keygen, comment "test-*"); they protect nothing.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Throwaway SSH test keys"
+paths = ['''HerdrKit/Tests/KeyStoreTests/KeyStoreTests\.swift''']

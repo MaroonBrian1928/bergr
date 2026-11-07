@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build hirte/Settings/themes.json: the terminal themes offered in Settings.
+"""Build bergr/Settings/themes.json: the terminal themes offered in Settings.
 
 Colors come from Ghostty's theme collection (iTerm2-Color-Schemes, MIT), which `just ghostty`
 fetches into vendor/ghostty/zig-pkg. Run with `just themes` after changing the list below.
@@ -12,11 +12,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 GHOSTTY = ROOT / "vendor/ghostty"
-OUT = ROOT / "hirte/Settings/themes.json"
+OUT = ROOT / "bergr/Settings/themes.json"
 
 # (id, name, Ghostty theme file). Popular pairs, dark first; the first of each is the default.
 DARK = [
-    ("hirte-dark", "Hirte Dark", None),
+    ("bergr-dark", "Bergr Dark", None),
     ("catppuccin-mocha", "Catppuccin Mocha", "Catppuccin Mocha"),
     ("dracula", "Dracula", "Dracula"),
     ("tokyo-night", "Tokyo Night", "TokyoNight"),
@@ -30,7 +30,7 @@ DARK = [
     ("everforest-dark", "Everforest Dark", "Everforest Dark Med"),
 ]
 LIGHT = [
-    ("hirte-light", "Hirte Light", None),
+    ("bergr-light", "Bergr Light", None),
     ("catppuccin-latte", "Catppuccin Latte", "Catppuccin Latte"),
     ("tokyo-night-day", "Tokyo Night Day", "TokyoNight Day"),
     ("gruvbox-light", "Gruvbox Light", "Gruvbox Light"),
@@ -43,12 +43,12 @@ LIGHT = [
     ("everforest-light", "Everforest Light", "Everforest Light Med"),
 ]
 
-# Hirte's own: the icon's charcoal and grey, an amber cursor. Their ANSI colors are borrowed
+# Bergr's own: the icon's charcoal and grey, an amber cursor. Their ANSI colors are borrowed
 # from One Dark / One Light, which read well on these backgrounds.
-HIRTE = {
-    "hirte-dark": {"base": "Atom One Dark", "background": "#1f2124", "foreground": "#d9dad8",
+BERGR = {
+    "bergr-dark": {"base": "Atom One Dark", "background": "#1f2124", "foreground": "#d9dad8",
                    "cursor": "#f2b33d", "selection": "#3a3d42"},
-    "hirte-light": {"base": "Atom One Light", "background": "#ecedeb", "foreground": "#303438",
+    "bergr-light": {"base": "Atom One Light", "background": "#ecedeb", "foreground": "#303438",
                     "cursor": "#c27c0e", "selection": "#cfd1ce"},
 }
 
@@ -88,7 +88,7 @@ def build(themes: Path) -> list:
             if source:
                 theme = parse(themes / source)
             else:
-                spec = HIRTE[id]
+                spec = BERGR[id]
                 theme = parse(themes / spec["base"])
                 theme.update({k: v for k, v in spec.items() if k != "base"})
             theme.setdefault("cursor", theme["foreground"])

@@ -1,0 +1,349 @@
+#!/usr/bin/env python3 -I
+"""Tests for bergr/Chat/agent-feed.py. Run: python3 -I scripts/test_agent_feed.py"""
+import base64, json, os, subprocess, sys, tempfile, time, unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SCRIPT = os.path.join(HERE, "..", "bergr", "Chat", "agent-feed.py")
+SOURCE = open(SCRIPT, encoding="utf-8").read()
+
+
+def load(agent, home, pid="0", cwd="/work", hint="-"):
+    """Executes the script as the app does (exec of its source), minus main()."""
+    os.environ["HOME"] = home
+    old = sys.argv
+    sys.argv = ["agent-feed", agent, pid, cwd, hint]
+    ns = {"__name__": "agent_feed_test"}
+    try:
+        exec(compile(SOURCE, SCRIPT, "exec"), ns)
+    finally:
+        sys.argv = old
+    return ns
+
+
+def write_jsonl(path, rows):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+
+
+def b64(n):
+    return base64.b64encode(b"x" * n).decode()
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+
+class ClaudeParse(Base):
+    def parse(self, content, kind="assistant"):
+        ns = load("claude", self.home)
+        return list(ns["Claude"]().parse({"type": kind, "uuid": "u1", "message": {"content": content}}))
+
+    def test_todowrite_is_plan(self):
+        todos = [{"content": "A", "status": "completed", "activeForm": "Doing A"},
+                 {"content": "B", "status": "in_progress", "activeForm": "Doing B"},
+                 {"content": "C", "status": "pending", "activeForm": "Doing C"}]
+        evs = self.parse([{"type": "tool_use", "id": "t1", "name": "TodoWrite", "input": {"todos": todos}}])
+        self.assertEqual(evs, [{"t": "plan", "id": "plan", "steps": [
+            {"text": "A", "status": "completed"}, {"text": "B", "status": "in_progress"},
+            {"text": "C", "status": "pending"}]}])
+
+    def test_image_block(self):
+        block = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(100)}}
+        evs = self.parse([block], kind="user")
+        self.assertEqual(evs, [{"t": "image", "id": "u1.0", "role": "user", "mime": "image/png", "data": b64(100)}])
+
+    def test_oversized_image_skipped(self):
+        big = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(1_500_001)}}
+        ok = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(1_500_000)}}
+        self.assertEqual(self.parse([big]), [])
+        self.assertEqual(len(self.parse([ok])), 1)
+
+
+class CodexParse(Base):
+    def parse(self, payload):
+        ns = load("codex", self.home)
+        return list(ns["Codex"]().parse({"type": "response_item", "payload": payload}))
+
+    def test_update_plan_is_plan(self):
+        args = json.dumps({"plan": [{"step": "One", "status": "completed"}, {"step": "Two", "status": "in_progress"}]})
+        evs = self.parse({"type": "function_call", "name": "update_plan", "call_id": "c1", "arguments": args})
+        self.assertEqual(evs, [{"t": "plan", "id": "plan", "steps": [
+            {"text": "One", "status": "completed"}, {"text": "Two", "status": "in_progress"}]}])
+
+    def test_input_image(self):
+        url = "data:image/jpeg;base64," + b64(50)
+        evs = self.parse({"type": "message", "role": "user", "id": "m1",
+                          "content": [{"type": "input_image", "image_url": url}]})
+        self.assertEqual(evs, [{"t": "image", "id": "m1.img0", "role": "user", "mime": "image/jpeg", "data": b64(50)}])
+
+    def test_oversized_input_image_skipped(self):
+        url = "data:image/png;base64," + b64(2_000_000)
+        self.assertEqual(self.parse({"type": "message", "role": "user", "id": "m1",
+                                     "content": [{"type": "input_image", "image_url": url}]}), [])
+
+
+class CodexQuestion(Base):
+    def test_request_user_input_becomes_question(self):
+        m = load("codex", self.home)
+        src = m["Codex"]() if "Codex" in m else None
+        line = {"type": "response_item", "payload": {"type": "function_call", "id": "fc1", "call_id": "c1",
+                "name": "request_user_input_async",
+                "arguments": json.dumps({"questions": [{"title": "Which?", "options": ["Keep", "Commit"]}]})}}
+        evs = list(src.parse(line)) if src else []
+        self.assertEqual(evs, [{"t": "question", "id": "fc1-q0", "title": "Which?", "options": ["Keep", "Commit"]}])
+
+
+class MemoryCitations(Base):
+    def test_folds_into_one_line(self):
+        m = load("codex", self.home)
+        raw = ("Done.\n\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:54-58|note=[project test conventions\n"
+               "and localhost mock]\n</citation_entries>\n<rollout_ids>\nabc\n</rollout_ids>\n</oai-mem-citation>")
+        self.assertEqual(m["memory_citations"](raw), ("Done.", "From memory: project test conventions and localhost mock"))
+        self.assertEqual(m["memory_citations"]("plain"), ("plain", None))
+
+
+class ToolOutput(Base):
+    def test_claude_tool_result(self):
+        ns = load("claude", self.home)
+        rows = "\n".join(f"line {i}" for i in range(30))
+        evs = list(ns["Claude"]().parse({"type": "user", "uuid": "u2", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": rows}]}}))
+        self.assertEqual(len(evs), 1)
+        self.assertEqual(evs[0]["t"], "toolout")
+        self.assertEqual(evs[0]["id"], "toolu_1")
+        self.assertEqual(evs[0]["text"].split("\n"), [f"line {i}" for i in range(18, 30)])
+
+    def test_claude_block_list_result(self):
+        ns = load("claude", self.home)
+        evs = list(ns["Claude"]().parse({"type": "user", "uuid": "u2", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t", "content": [{"type": "text", "text": "ok"}]}]}}))
+        self.assertEqual(evs, [{"t": "toolout", "id": "t", "text": "ok"}])
+
+    def test_empty_result_skipped(self):
+        ns = load("claude", self.home)
+        self.assertEqual(list(ns["Claude"]().parse({"type": "user", "uuid": "u", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t", "content": "  \n"}]}})), [])
+
+    def test_char_limit(self):
+        ns = load("claude", self.home)
+        tail = ns["tool_tail"]("x" * 5000)
+        self.assertEqual(len(tail), 1200)
+
+    def test_codex_output_matches_call(self):
+        ns = load("codex", self.home)
+        c = ns["Codex"]()
+        call = list(c.parse({"type": "response_item", "payload": {
+            "type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "shell", "arguments": "{}"}}))
+        self.assertEqual(call[0]["id"], "fc_1")
+        out = list(c.parse({"type": "response_item", "payload": {
+            "type": "function_call_output", "call_id": "call_1", "output": json.dumps({"output": "a\nb"})}}))
+        self.assertEqual(out, [{"t": "toolout", "id": "fc_1", "text": "a\nb"}])
+
+    def test_codex_custom_output_plain(self):
+        ns = load("codex", self.home)
+        out = list(ns["Codex"]().parse({"type": "response_item", "payload": {
+            "type": "custom_tool_call_output", "call_id": "c9", "output": "done"}}))
+        self.assertEqual(out, [{"t": "toolout", "id": "c9", "text": "done"}])
+
+
+class HintLookup(Base):
+    def old(self, path, rows=({"type": "user"},)):
+        write_jsonl(path, rows)
+        past = time.time() - 3600
+        os.utime(path, (past, past))
+
+    def test_claude_hint_older_than_process(self):
+        path = os.path.join(self.home, ".claude", "projects", "-work", "abc-123.jsonl")
+        self.old(path)
+        ns = load("claude", self.home, hint="abc-123")
+        ns["STARTED"] = time.time() - 60  # the process started after the file was last written
+        self.assertEqual(ns["Claude"]().locate(), path)
+
+    def test_claude_pid_file_wins_over_hint(self):
+        other = os.path.join(self.home, ".claude", "projects", "-work", "other.jsonl")
+        hinted = os.path.join(self.home, ".claude", "projects", "-work", "hinted.jsonl")
+        write_jsonl(other, [{}])
+        write_jsonl(hinted, [{}])
+        write_jsonl(os.path.join(self.home, ".claude", "sessions", "4242.json"), [])
+        with open(os.path.join(self.home, ".claude", "sessions", "4242.json"), "w") as f:
+            json.dump({"sessionId": "other", "cwd": "/work"}, f)
+        ns = load("claude", self.home, pid="4242", hint="hinted")
+        ns["descendants"] = lambda pid: [pid]
+        self.assertEqual(ns["Claude"]().locate(), other)
+
+    def test_claude_no_hint_stale_file_not_found(self):
+        self.old(os.path.join(self.home, ".claude", "projects", "-work", "abc-123.jsonl"))
+        ns = load("claude", self.home)
+        ns["STARTED"] = time.time() - 60
+        self.assertIsNone(ns["Claude"]().locate())
+
+    def test_codex_hint_older_than_process(self):
+        path = os.path.join(self.home, ".codex", "sessions", "2026", "01", "02", "rollout-2026-01-02T03-04-05-abc-123.jsonl")
+        self.old(path)
+        ns = load("codex", self.home, hint="abc-123")
+        ns["STARTED"] = time.time() - 60
+        ns["open_files"] = lambda pids: []
+        self.assertEqual(ns["Codex"]().locate(), path)
+
+    def test_hint_with_glob_chars_ignored(self):
+        ns = load("claude", self.home, hint="*")
+        self.assertIsNone(ns["HINT"])
+
+
+def codex_meta_row(**kw):
+    payload = {"id": "x", "timestamp": "2026-01-02T03:00:00Z", "cwd": "/work"}
+    payload.update(kw)
+    return {"type": "session_meta", "payload": payload}
+
+
+class CodexSubagents(Base):
+    def setUp(self):
+        super().setUp()
+        self.day = os.path.join(self.home, ".codex", "sessions", "2026", "01", "02")
+        self.main = os.path.join(self.day, "rollout-2026-01-02T03-00-00-main.jsonl")
+        write_jsonl(self.main, [codex_meta_row(id="main", thread_source="user"),
+                                {"type": "response_item", "timestamp": "2026-01-02T03:00:05Z", "payload": {
+                                    "type": "function_call", "id": "fc_spawn", "call_id": "c1",
+                                    "name": "spawn_agent", "arguments": "{}"}}])
+        past = time.time() - 600
+        os.utime(self.main, (past, past))
+        # Newer than the main thread: a forked sub-agent and a guardian review.
+        self.child = os.path.join(self.day, "rollout-2026-01-02T03-00-10-child.jsonl")
+        write_jsonl(self.child, [
+            codex_meta_row(id="child", timestamp="2026-01-02T03:00:10Z", thread_source="subagent",
+                           forked_from_id="main", agent_nickname="Hubble",
+                           source={"subagent": {"thread_spawn": {"parent_thread_id": "main"}}}),
+            {"type": "response_item", "payload": {"type": "function_call", "name": "shell", "call_id": "k1"}},
+            {"type": "response_item", "payload": {"type": "message", "role": "assistant",
+                                                  "content": [{"type": "output_text", "text": "a\nChecked it"}]}}])
+        self.guardian = os.path.join(self.day, "rollout-2026-01-02T03-00-20-guard.jsonl")
+        write_jsonl(self.guardian, [codex_meta_row(id="guard", thread_source="guardian_review",
+                                                   source={"subagent": "guardian_review"})])
+
+    def test_main_never_switches_to_a_child(self):
+        ns = load("codex", self.home)
+        ns["STARTED"] = 0
+        ns["open_files"] = lambda pids: []
+        self.assertEqual(ns["Codex"]().locate(), self.main)
+        ns["open_files"] = lambda pids: [self.child, self.guardian]
+        self.assertEqual(ns["Codex"]().locate(), self.main)
+
+    def test_is_main_rules(self):
+        ns = load("codex", self.home)
+        is_main = ns["codex_is_main"]
+        self.assertTrue(is_main({}))
+        self.assertTrue(is_main({"thread_source": "user"}))
+        self.assertFalse(is_main({"thread_source": "user", "parent_thread_id": "p"}))
+        self.assertFalse(is_main({"forked_from_id": "p"}))
+        self.assertFalse(is_main({"thread_source": "subagent"}))
+        self.assertFalse(is_main({"source": {"subagent": {}}}))
+
+    def test_subagent_event_with_nickname_and_anchor(self):
+        ns = load("codex", self.home)
+        c = ns["Codex"]()
+        for d in [json.loads(l) for l in open(self.main)]:
+            list(c.parse(d))
+        tracks = c.subagents(self.main)
+        self.assertEqual([t.id for t in tracks], ["child"])  # the guardian never surfaces
+        ev = tracks[0].event()
+        self.assertEqual(ev, {"t": "subagent", "id": "child", "parent": "fc_spawn", "name": "Hubble",
+                              "kind": "codex", "state": "running", "steps": 1, "summary": "Checked it"})
+        self.assertIsNone(tracks[0].event())  # unchanged: nothing to send
+
+    def test_done_after_wait_agent_result(self):
+        ns = load("codex", self.home)
+        c = ns["Codex"]()
+        list(c.parse({"type": "response_item", "payload": {"type": "function_call", "name": "wait_agent",
+                                                           "call_id": "w1", "arguments": "{}"}}))
+        list(c.parse({"type": "response_item", "payload": {"type": "function_call_output", "call_id": "w1",
+                                                           "output": "{\"status\": {\"child\": \"done\"}}"}}))
+        tr = c.subagents(self.main)[0]
+        self.assertEqual(tr.event()["state"], "done")
+
+
+class ClaudeSubagents(Base):
+    def setUp(self):
+        super().setUp()
+        self.proj = os.path.join(self.home, ".claude", "projects", "-work")
+        self.main = os.path.join(self.proj, "sess.jsonl")
+        write_jsonl(self.main, [{"type": "user"}])
+        self.dir = os.path.join(self.proj, "sess", "subagents")
+
+    def child(self, aid, tool_use, rows, quiet=0):
+        path = os.path.join(self.dir, f"agent-{aid}.jsonl")
+        write_jsonl(path, rows)
+        with open(path[:-6] + ".meta.json", "w") as f:
+            json.dump({"agentType": "Explore", "description": "Find things", "toolUseId": tool_use}, f)
+        if quiet:
+            os.utime(path, (time.time() - quiet, time.time() - quiet))
+        return path
+
+    ROWS = [{"type": "user", "isSidechain": True, "message": {"content": "go"}},
+            {"type": "assistant", "isSidechain": True, "message": {"content": [
+                {"type": "tool_use", "id": "x", "name": "Read", "input": {}},
+                {"type": "text", "text": "first\nSecond line"}]}}]
+
+    def parent_result(self, c, tool_use, is_async):
+        list(c.parse({"type": "user", "uuid": "r", "toolUseResult": {"isAsync": is_async, "status": "completed"},
+                      "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use, "content": "ok"}]}}))
+
+    def test_running(self):
+        self.child("a1", "toolu_1", self.ROWS)
+        c = load("claude", self.home)["Claude"]()
+        ev = c.subagents(self.main)[0].event()
+        self.assertEqual(ev, {"t": "subagent", "id": "a1", "parent": "toolu_1", "name": "Find things",
+                              "kind": "Explore", "state": "running", "steps": 1, "summary": "Second line"})
+
+    def test_sync_done_with_parent_result(self):
+        self.child("a1", "toolu_1", self.ROWS)
+        c = load("claude", self.home)["Claude"]()
+        self.parent_result(c, "toolu_1", False)
+        self.assertEqual(c.subagents(self.main)[0].event()["state"], "done")
+
+    def test_async_running_until_quiet(self):
+        self.child("a1", "toolu_1", self.ROWS)
+        c = load("claude", self.home)["Claude"]()
+        self.parent_result(c, "toolu_1", True)
+        self.assertEqual(c.subagents(self.main)[0].event()["state"], "running")
+        self.child("a2", "toolu_2", self.ROWS, quiet=120)
+        self.parent_result(c, "toolu_2", True)
+        states = {t.id: (t.event() or t.last)["state"] for t in c.subagents(self.main)}
+        self.assertEqual(states, {"a1": "running", "a2": "done"})
+
+    def test_sidechain_never_in_main_feed(self):
+        c = load("claude", self.home)["Claude"]()
+        self.assertEqual(list(c.parse(self.ROWS[1])), [])
+
+    def test_old_subagents_ignored(self):
+        self.child("a1", "toolu_1", self.ROWS, quiet=7 * 3600)
+        c = load("claude", self.home)["Claude"]()
+        self.assertEqual(c.subagents(self.main), [])
+
+
+class AsTheAppRunsIt(Base):
+    def test_exec_with_argv(self):
+        os.makedirs(os.path.join(self.home, ".claude", "projects", "-work"))
+        path = os.path.join(self.home, ".claude", "projects", "-work", "sess-1.jsonl")
+        write_jsonl(path, [{"type": "user", "uuid": "u", "message": {"content": "hello"}}])
+        enc = base64.b64encode(SOURCE.encode()).decode()
+        cmd = [sys.executable, "-I", "-c", "import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))",
+               enc, "claude", "0", "/work", "sess-1"]
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                             env={"HOME": self.home, "PATH": os.environ.get("PATH", "")})
+        time.sleep(2)
+        p.kill()
+        out, err = p.communicate()
+        lines = [json.loads(l) for l in out.splitlines() if l.strip()]
+        self.assertTrue(any(l.get("t") == "reset" and l.get("session") == "sess-1.jsonl" for l in lines), (out, err))
+        self.assertTrue(any(l.get("t") == "msg" and l.get("text") == "hello" for l in lines), (out, err))
+
+
+if __name__ == "__main__":
+    unittest.main()

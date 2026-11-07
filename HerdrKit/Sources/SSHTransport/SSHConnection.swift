@@ -1,4 +1,7 @@
 @preconcurrency import Citadel
+#if canImport(Network)
+import NIOTransportServices
+#endif
 import Foundation
 import KeyStore
 import NIOCore
@@ -45,15 +48,47 @@ public final class SSHConnection: @unchecked Sendable {
             switch key {
             case .secureEnclave(let key): NIOSSHPrivateKey(secureEnclaveP256Key: key)
             case .software(let key): NIOSSHPrivateKey(p256Key: key)
+            case .ed25519(let key): NIOSSHPrivateKey(ed25519Key: key)
             }
+        let authentication = SSHAuthenticationMethod.custom(PublicKeyAuthentication(username: target.username, key: privateKey))
+        let validator = SSHHostKeyValidator.custom(TOFUHostKeyValidator(
+            host: target.knownHostsName, store: knownHosts, onUnknownHost: onUnknownHost))
+        #if canImport(Network)
+        // Apple's Network framework for the TCP connection, not BSD sockets: it follows iOS's
+        // routing as VPN apps (Pangolin, WireGuard) set it up. Over BSD sockets, a LAN address
+        // reached through such a VPN timed out while other SSH apps connected.
+        let channel = try await NIOTSConnectionBootstrap(group: NIOTSEventLoopGroup.singleton)
+            .connectTimeout(timeout)
+            // The server greets as soon as TCP is up, before Citadel adds its handlers: hold
+            // what arrives until then, or the greeting is dropped and the handshake waits forever.
+            .channelInitializer { channel in
+                channel.eventLoop.makeCompletedFuture { try channel.pipeline.syncOperations.addHandler(HoldUntilSSH()) }
+            }
+            .connect(host: target.host, port: target.port)
+            .get()
+        var settings = SSHClientSettings(
+            host: target.host, port: target.port, authenticationMethod: { authentication }, hostKeyValidator: validator)
+        settings.connectTimeout = timeout
+        let client: SSHClient
+        do {
+            // Citadel sets up the pipeline synchronously, which NIO allows only on the channel's
+            // loop: run it there (its own bootstrap does that inside the channel initializer).
+            client = try await withTaskExecutorPreference(EventLoopTaskExecutor(channel.eventLoop)) {
+                try await SSHClient.connect(on: channel, settings: settings)
+            }
+        } catch {
+            try? await channel.close()
+            throw error
+        }
+        #else
         let client = try await SSHClient.connect(
             host: target.host,
             port: target.port,
-            authenticationMethod: .custom(PublicKeyAuthentication(username: target.username, key: privateKey)),
-            hostKeyValidator: .custom(TOFUHostKeyValidator(
-                host: target.knownHostsName, store: knownHosts, onUnknownHost: onUnknownHost)),
+            authenticationMethod: authentication,
+            hostKeyValidator: validator,
             reconnect: .never,
             connectTimeout: timeout)
+        #endif
         return SSHConnection(client: client, target: target)
     }
 
@@ -99,3 +134,39 @@ final class PublicKeyAuthentication: NIOSSHClientUserAuthenticationDelegate, @un
             username: username, serviceName: "", offer: .privateKey(.init(privateKey: key))))
     }
 }
+
+#if canImport(Network)
+/// Buffers inbound bytes until the SSH handler is in the pipeline after it, then passes them on
+/// in order. Citadel's `connect(on:)` adds that handler only after the connection is up.
+private final class HoldUntilSSH: ChannelInboundHandler, RemovableChannelHandler {
+    typealias InboundIn = ByteBuffer
+    typealias InboundOut = ByteBuffer
+    private var held: [NIOAny] = []
+    private var ready = false
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        if !ready, (try? context.pipeline.syncOperations.handler(type: NIOSSHHandler.self)) != nil {
+            ready = true
+            for buffered in held { context.fireChannelRead(buffered) }
+            held.removeAll()
+        }
+        if ready { context.fireChannelRead(data) } else { held.append(data) }
+    }
+
+    func channelReadComplete(context: ChannelHandlerContext) {
+        if ready { context.fireChannelReadComplete() }
+    }
+}
+
+/// A task executor that runs jobs on a NIO event loop, so nonisolated async code (Citadel's
+/// `connect(on:)`) runs on the channel's loop.
+private final class EventLoopTaskExecutor: TaskExecutor, @unchecked Sendable {
+    let loop: any EventLoop
+    init(_ loop: any EventLoop) { self.loop = loop }
+
+    func enqueue(_ job: consuming ExecutorJob) {
+        let job = UnownedJob(job)
+        loop.execute { job.runSynchronously(on: self.asUnownedTaskExecutor()) }
+    }
+}
+#endif
