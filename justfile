@@ -18,21 +18,24 @@ xcodebuild := "xcodebuild -project " + project + " -scheme " + scheme + " -deriv
 default:
     @just --list
 
-# Build, install and launch on your iPhone (HIRTE_DEVICE, else the first connected iPhone)
-phone configuration="Debug": (_phone-build configuration)
+# Build, install and launch on a device: `just phone` (HIRTE_DEVICE, else the first connected
+# iPhone), `just phone ipad` (HIRTE_DEVICE_IPAD), `just phone ipad Release`
+phone device="" configuration="Debug": (_phone-build device configuration)
     #!/usr/bin/env bash
     set -euo pipefail
-    device="$(just _device)"
+    device="$(just _device "{{device}}")"
     app="{{derived}}/Build/Products/{{configuration}}-iphoneos/{{scheme}}.app"
     xcrun devicectl device install app --device "$device" "$app"
     id="{{ if configuration == "Debug" { dev_bundle_id } else { bundle_id } }}"
     xcrun devicectl device process launch --device "$device" --terminate-existing "$id"
 
-_phone-build configuration:
+_phone-build device configuration:
     #!/usr/bin/env bash
     set -euo pipefail
-    device="$(just _device)"
-    {{xcodebuild}} -configuration {{configuration}} -destination "id=$device" build | xcbeautify --quiet
+    device="$(just _device "{{device}}")"
+    # -allowProvisioningDeviceRegistration: a device seen for the first time joins the team's
+    # development profile, instead of failing with "profile doesn't include the device".
+    {{xcodebuild}} -allowProvisioningDeviceRegistration -configuration {{configuration}} -destination "id=$device" build | xcbeautify --quiet
 
 # Build and run in the simulator (HIRTE_SIMULATOR, default "iPhone 17 Pro")
 sim:
@@ -176,10 +179,23 @@ devices:
 clean:
     rm -rf {{derived}} HerdrKit/.build .build/ghostty-vt
 
-# The target device: HIRTE_DEVICE, else the first connected physical iPhone
-_device:
+# The target device: by name, HIRTE_DEVICE_<NAME> (`ipad` → HIRTE_DEVICE_IPAD); without one,
+# HIRTE_DEVICE, else the first connected physical iPhone
+_device name="":
     #!/usr/bin/env bash
     set -euo pipefail
+    name="{{name}}"
+    if [ -n "$name" ]; then
+        var="HIRTE_DEVICE_$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9\n' '_')"
+        if [ -z "${!var:-}" ]; then
+            echo "$var isn't set. Add it to .envrc.local (the identifier from: just devices)." >&2
+            known="$(compgen -v | grep '^HIRTE_DEVICE_' | sed 's/^HIRTE_DEVICE_//' | tr '[:upper:]' '[:lower:]' | xargs)"
+            if [ -n "$known" ]; then echo "Known devices: $known" >&2; fi
+            exit 1
+        fi
+        echo "${!var}"
+        exit
+    fi
     if [ -n "${HIRTE_DEVICE:-}" ]; then echo "$HIRTE_DEVICE"; exit; fi
     id="$(xcrun devicectl list devices 2>/dev/null | awk '/iPhone/ && /physical/ && (/connected/ || /available/) { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9A-F]{8}-[0-9A-F]{16}$/) { print $i; exit } }')"
     if [ -z "$id" ]; then echo "No connected iPhone (unlock it, or plug it in). Plug it in, or set HIRTE_DEVICE in .envrc.local (see: just devices)." >&2; exit 1; fi

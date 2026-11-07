@@ -19,7 +19,7 @@ and how to build it.
 
 ## Commands
 
-`just build` (compiles for a device), `just test` (HerdrKit tests), `just sim`, `just phone`,
+`just build` (compiles for a device), `just test` (HerdrKit tests), `just sim`, `just phone [name]`,
 `just screenshots`, `just video` (simulator), `just video-device` (the unfolded Duo, over Wi-Fi),
 `just archive [true]`. Simulator and device work needs to run outside the sandbox.
 App tests: `xcodebuild … -only-testing:hirteTests test` (unit) or `-only-testing:hirteUITests test`
