@@ -4,7 +4,7 @@ import SwiftUI
 import UIKit
 
 /// Draws a `ScreenFrame` cell by cell and turns touches and keys into terminal input.
-final class TerminalCanvasView: UIView, UIKeyInput {
+final class TerminalCanvasView: UIView, UITextInput {
     var model: TerminalScreenModel? {
         didSet {
             guard model !== oldValue else { return }
@@ -47,7 +47,24 @@ final class TerminalCanvasView: UIView, UIKeyInput {
     private var fonts = Fonts(size: 13)
     /// Smaller fonts for when another viewer's larger size must fit; rebuilt only when the scale changes.
     private var scaledFonts: Fonts?
-    private var selectionAnchor: (x: Int, y: Int)?
+    /// Where the current hold began, while holding (see `ArrowStick`).
+    private var stickOrigin: CGPoint?
+    /// The arrow key the held finger points to; nil inside the dead zone.
+    private var stickKey: TerminalKey?
+    private var stickSpeed: ArrowStick.Speed = .slow
+    /// Whether the key repeats yet (it waits `ArrowStick.repeatDelay` after the first).
+    private var stickRepeating = false
+    private var stickTimer: Timer?
+    /// Keys sent during this hold; none means it was a plain hold, which offers Paste.
+    private var stickSent = 0
+    private lazy var arrowPad = ArrowPadView()
+    /// Text an input method is still composing (see `setMarkedText`); typed once it's done.
+    fileprivate var markedText: String?
+    fileprivate weak var textInputDelegate: UITextInputDelegate?
+    fileprivate lazy var stringTokenizer = UITextInputStringTokenizer(textInput: self)
+    /// A tiny tap per arrow key, and a firmer one when the direction or speed changes.
+    private let keyTap = UIImpactFeedbackGenerator(style: .light)
+    private let stageTap = UIImpactFeedbackGenerator(style: .medium)
     /// The link a tap landed on, for the edit menu.
     private var menuLink: URL?
     private lazy var editMenu = UIEditMenuInteraction(delegate: self)
@@ -520,30 +537,108 @@ final class TerminalCanvasView: UIView, UIKeyInput {
         }
     }
 
-    /// Long-press selects a word; keep dragging to extend; let go for Copy.
+    /// Hold, then drag for arrow keys (see `ArrowStick`); hold and let go without dragging for Paste.
     @objc private func longPressed(_ press: UILongPressGestureRecognizer) {
-        guard let model else { return }
+        guard model != nil else { return }
         let point = press.location(in: self)
         switch press.state {
         case .began:
-            let at = cell(at: point)
-            selectionAnchor = at
-            model.selectWord(at: at)
+            beginStick(at: point)
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         case .changed:
-            if let anchor = selectionAnchor {
-                let at = cell(at: point)
-                if at != anchor { model.select(from: anchor, to: at) }
-            }
+            moveStick(to: point)
         case .ended:
-            selectionAnchor = nil
-            menuLink = nil
-            if model.hasSelection {
+            let sent = stickSent
+            endStick()
+            if sent == 0, UIPasteboard.general.hasStrings {
+                menuLink = nil
                 editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
             }
         default:
-            selectionAnchor = nil
+            endStick()
         }
+    }
+
+    /// Starts a hold at a point: from a finger on the screen, or the space bar's trackpad.
+    private func beginStick(at point: CGPoint) {
+        editMenu.dismissMenu()
+        stickTimer?.invalidate()
+        stickOrigin = point
+        stickKey = nil
+        stickSent = 0
+        stickRepeating = false
+        arrowPad.mode = .idle
+        arrowPad.dark = darkKeyboard
+        let usable = usableRect
+        arrowPad.frame.origin = CGPoint(x: usable.maxX - ArrowPadView.size, y: usable.minY)
+        addSubview(arrowPad)
+        keyTap.prepare()
+        stageTap.prepare()
+    }
+
+    private func moveStick(to point: CGPoint) {
+        guard let origin = stickOrigin else { return }
+        guard let reading = ArrowStick.reading(dx: point.x - origin.x, dy: point.y - origin.y, current: stickKey)
+        else {
+            // Back in the dead zone: stop.
+            stickTimer?.invalidate()
+            stickKey = nil
+            stickRepeating = false
+            arrowPad.mode = .idle
+            return
+        }
+        if reading.key != stickKey {
+            stickKey = reading.key
+            stickSpeed = reading.speed
+            stickRepeating = false
+            stageTap.impactOccurred(intensity: 0.8)
+            sendStickKey(tap: false)
+            stickTimer?.invalidate()
+            stickTimer = Timer.scheduledTimer(withTimeInterval: ArrowStick.repeatDelay, repeats: false) {
+                [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.stickRepeating = true
+                    self?.repeatStick()
+                }
+            }
+        } else if reading.speed != stickSpeed {
+            stickSpeed = reading.speed
+            stageTap.impactOccurred(intensity: 0.8)
+            if stickRepeating { repeatStick() } else { updateArrowPad() }
+        }
+    }
+
+    /// Sends the key now and then again at the current speed's pace.
+    private func repeatStick() {
+        sendStickKey()
+        stickTimer?.invalidate()
+        stickTimer = Timer.scheduledTimer(withTimeInterval: ArrowStick.interval(stickSpeed), repeats: true) {
+            [weak self] _ in
+            MainActor.assumeIsolated { self?.sendStickKey() }
+        }
+    }
+
+    private func sendStickKey(tap: Bool = true) {
+        guard let key = stickKey, let model else { return }
+        model.press(key)
+        if tap { keyTap.impactOccurred(intensity: 0.6) }
+        stickSent += 1
+        updateArrowPad()
+    }
+
+    private func updateArrowPad() {
+        guard let key = stickKey else { return arrowPad.mode = .idle }
+        arrowPad.mode =
+            stickRepeating ? .repeating(key, stickSpeed, step: stickSent) : .press(key)
+    }
+
+    private func endStick() {
+        stickTimer?.invalidate()
+        stickTimer = nil
+        stickOrigin = nil
+        stickKey = nil
+        stickRepeating = false
+        arrowPad.removeFromSuperview()
     }
 
     /// Zooms in two steps, so pinching stays smooth: while the fingers move, only a snapshot of
@@ -686,6 +781,8 @@ final class TerminalCanvasView: UIView, UIKeyInput {
     var hasText: Bool { true }
 
     func insertText(_ text: String) {
+        // Picking a candidate in an input method ends the marked text with the text it chose.
+        markedText = nil
         model?.type(text)
     }
 
@@ -778,14 +875,8 @@ final class TerminalCanvasView: UIView, UIKeyInput {
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         switch action {
         case #selector(paste(_:)): UIPasteboard.general.hasStrings
-        case #selector(copy(_:)): model?.hasSelection ?? false
         default: super.canPerformAction(action, withSender: sender)
         }
-    }
-
-    override func copy(_ sender: Any?) {
-        model?.copySelection()
-        model?.clearSelection()
     }
 
     override func paste(_ sender: Any?) {
@@ -825,19 +916,12 @@ extension TerminalCanvasView: UIEditMenuInteractionDelegate {
             })
             return UIMenu(title: url.absoluteString, children: actions)
         }
-        var actions: [UIMenuElement] = [
-            UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
-                self?.model?.copySelection()
-                self?.model?.clearSelection()
-            },
-        ]
-        if UIPasteboard.general.hasStrings {
-            actions.append(UIAction(title: "Paste", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
-                self?.model?.clearSelection()
+        guard UIPasteboard.general.hasStrings else { return nil }
+        return UIMenu(children: [
+            UIAction(title: "Paste", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
                 if let text = UIPasteboard.general.string { self?.model?.paste(text) }
-            })
-        }
-        return UIMenu(children: actions)
+            },
+        ])
     }
 }
 
@@ -1106,4 +1190,101 @@ extension TerminalCanvasView: UIGestureRecognizerDelegate {
         let velocity = swipe.velocity(in: self)
         return (edgeTouchStart?.x ?? .infinity) <= edgeWidth && abs(velocity.x) > 1.5 * abs(velocity.y)
     }
+}
+
+// MARK: Text input
+
+/// Just enough of `UITextInput` for the system keyboard's trackpad: holding the space bar moves a
+/// "floating cursor", which becomes arrow keys like a held finger (see `ArrowStick`). There is no
+/// text to edit here, so the document is empty and every position is its start.
+extension TerminalCanvasView {
+    private final class Position: UITextPosition {}
+
+    private final class Range: UITextRange {
+        let position = Position()
+        override var start: UITextPosition { position }
+        override var end: UITextPosition { position }
+        override var isEmpty: Bool { true }
+    }
+
+    private static let position = Position()
+    private static let range = Range()
+
+    func beginFloatingCursor(at point: CGPoint) {
+        guard model != nil else { return }
+        beginStick(at: point)
+    }
+
+    func updateFloatingCursor(at point: CGPoint) {
+        moveStick(to: point)
+    }
+
+    func endFloatingCursor() {
+        endStick()
+    }
+
+    var selectedTextRange: UITextRange? {
+        get { Self.range }
+        set {}
+    }
+
+    var markedTextRange: UITextRange? { markedText == nil ? nil : Self.range }
+    var markedTextStyle: [NSAttributedString.Key: Any]? {
+        get { nil }
+        set {}
+    }
+
+    /// Input methods (Japanese, Chinese, …) compose text before committing it; we can't show it
+    /// in the terminal, so it goes out when they're done.
+    func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
+        self.markedText = markedText
+    }
+
+    func unmarkText() {
+        guard let text = markedText else { return }
+        markedText = nil
+        if !text.isEmpty { model?.type(text) }
+    }
+
+    var inputDelegate: UITextInputDelegate? {
+        get { textInputDelegate }
+        set { textInputDelegate = newValue }
+    }
+
+    var tokenizer: UITextInputTokenizer { stringTokenizer }
+    var beginningOfDocument: UITextPosition { Self.position }
+    var endOfDocument: UITextPosition { Self.position }
+
+    func text(in range: UITextRange) -> String? { markedText ?? "" }
+    func replace(_ range: UITextRange, withText text: String) { insertText(text) }
+    func textRange(from fromPosition: UITextPosition, to toPosition: UITextPosition) -> UITextRange? { Self.range }
+    func position(from position: UITextPosition, offset: Int) -> UITextPosition? { offset == 0 ? Self.position : nil }
+    func position(
+        from position: UITextPosition, in direction: UITextLayoutDirection, offset: Int
+    ) -> UITextPosition? { offset == 0 ? Self.position : nil }
+    func compare(_ position: UITextPosition, to other: UITextPosition) -> ComparisonResult { .orderedSame }
+    func offset(from: UITextPosition, to toPosition: UITextPosition) -> Int { 0 }
+    func position(within range: UITextRange, farthestIn direction: UITextLayoutDirection) -> UITextPosition? {
+        Self.position
+    }
+    func characterRange(byExtending position: UITextPosition, in direction: UITextLayoutDirection) -> UITextRange? {
+        Self.range
+    }
+    func baseWritingDirection(
+        for position: UITextPosition, in direction: UITextStorageDirection
+    ) -> NSWritingDirection { .leftToRight }
+    func setBaseWritingDirection(_ writingDirection: NSWritingDirection, for range: UITextRange) {}
+
+    /// The middle of the screen: the trackpad's floating cursor starts here, with room to move
+    /// every way.
+    func caretRect(for position: UITextPosition) -> CGRect {
+        let usable = usableRect
+        return CGRect(x: usable.midX, y: usable.midY - 8, width: 2, height: 16)
+    }
+
+    func firstRect(for range: UITextRange) -> CGRect { caretRect(for: Self.position) }
+    func selectionRects(for range: UITextRange) -> [UITextSelectionRect] { [] }
+    func closestPosition(to point: CGPoint) -> UITextPosition? { Self.position }
+    func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? { Self.position }
+    func characterRange(at point: CGPoint) -> UITextRange? { Self.range }
 }

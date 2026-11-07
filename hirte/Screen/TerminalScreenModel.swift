@@ -308,47 +308,15 @@ final class TerminalScreenModel {
         case link(URL)
     }
 
-    /// A tap clears a selection, offers a link, or clicks in a mouse-using program.
+    /// A tap offers a link, or clicks in a mouse-using program.
     func tap(at cell: (x: Int, y: Int)) -> TapResult {
         guard let vt else { return .unhandled }
-        if hasSelection {
-            clearSelection()
-            return .handled
-        }
         if let url = vt.link(at: cell, in: frame) { return .link(url) }
         if let click = vt.click(column: cell.x, row: cell.y) {
             send(click)
             return .handled
         }
         return .unhandled
-    }
-
-    // MARK: Selection
-
-    var hasSelection: Bool { frame.selection.contains { $0 != nil } }
-
-    func selectWord(at cell: (x: Int, y: Int)) {
-        vt?.selectWord(at: cell)
-        renderNow()
-    }
-
-    func select(from start: (x: Int, y: Int), to end: (x: Int, y: Int)) {
-        vt?.select(from: start, to: end)
-        renderNow()
-    }
-
-    func clearSelection() {
-        guard hasSelection else { return }
-        vt?.clearSelection()
-        renderNow()
-    }
-
-    /// Copies the selection to the clipboard; returns whether there was anything to copy.
-    @discardableResult
-    func copySelection() -> Bool {
-        guard let text = vt?.selectedText(), !text.isEmpty else { return false }
-        UIPasteboard.general.string = text
-        return true
     }
 
     // MARK: Rendering
