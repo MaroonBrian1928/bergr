@@ -65,56 +65,54 @@ final class DemoTourTests: XCTestCase {
         guard let marks = environment["BERGR_VIDEO"] else { throw XCTSkip("BERGR_VIDEO is not set") }
         let app = XCUIApplication()
         let fontSize = environment["BERGR_SHOT_FONT"] ?? "15"
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-terminal.fontSize", fontSize]
+        // The demo machine with its fake agent conversation (Debug builds), nothing else.
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-terminal.fontSize", fontSize,
+                                "-bergr.demo", "YES", "-bergr.demoChat", "YES"]
         app.launch()
-        let tryDemo = app.buttons["Try the Demo"]
-        XCTAssertTrue(tryDemo.waitForExistence(timeout: 10), "a fresh install offers the demo")
+
+        // Every agent at a glance; the one that needs you sits on top.
+        XCTAssertTrue(blockedRow(app).waitForExistence(timeout: 15), "the demo's agents show")
+        pause(1)
         mark(marks, "start")
-        pause(1.5)
-        tryDemo.tap()
-
-        // Everything at a glance; the blocked agent sits on top.
-        XCTAssertTrue(blockedRow(app).waitForExistence(timeout: 10))
-        pause(3)
-
-        // An agent at work.
-        open(app, "t1")
-        pause(3)
-        back(app)
-        pause(1)
-
-        // The blocked one: answer in a tap and watch it go.
-        open(app, "t3")
         pause(2.5)
-        let yes = app.buttons["Yes"]
-        XCTAssertTrue(yes.waitForExistence(timeout: 5), "the needs-you bar shows")
-        yes.tap()
-        pause(5)
-        back(app)
-        pause(2)
+        shot(app, "readme-1-agents")
 
-        // A real terminal: type, then pinch to zoom.
-        open(app, "t5")
-        pause(1)
-        app.buttons["Show Keyboard"].tap()
-        pause(1)
+        // An agent's conversation: ask, and watch it work and answer.
+        let running = app.staticTexts["Running tests"].firstMatch
+        XCTAssertTrue(running.waitForExistence(timeout: 5))
+        running.tap()
+        // The reply box: a text view or field, whichever SwiftUI made of it.
+        let view = app.textViews.matching(NSPredicate(format: "identifier != 'terminal-screen'")).firstMatch
+        let field = view.waitForExistence(timeout: 10) ? view : app.textFields.firstMatch
+        XCTAssertTrue(field.exists, "the chat's reply box shows")
+        pause(2)
+        field.tap()
         let hint = app.buttons["Continue"]
         if hint.waitForExistence(timeout: 2) { hint.tap() }
-        for character in "git log" {
-            app.typeText(String(character))
-            pause(0.08)
+        for character in "check the deploy" {
+            field.typeText(String(character))
+            pause(0.06)
         }
-        app.typeText("\n")
-        pause(1.5)
-        app.buttons["Hide Keyboard"].tap()
         pause(0.5)
-        let screen = app.descendants(matching: .any).matching(identifier: "terminal-screen").firstMatch
-        screen.pinch(withScale: 2.2, velocity: 1.5)
-        pause(2)
-        screen.pinch(withScale: 0.45, velocity: -1.5)
+        app.buttons["Send"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'roll'")).firstMatch
+            .waitForExistence(timeout: 20), "the agent answers")
+        pause(3)
+        shot(app, "readme-2-chat")
+        backIfStacked(app)
         pause(1.5)
-        back(app)
-        // Back on the list: the migration went through.
+
+        // The blocked one: answer it from its card.
+        let blocked = app.staticTexts["Run the database migration?"].firstMatch
+        XCTAssertTrue(blocked.waitForExistence(timeout: 5))
+        blocked.tap()
+        pause(2.5)
+        shot(app, "readme-3-needs-you")
+        let yes = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Yes'")).firstMatch
+        XCTAssertTrue(yes.waitForExistence(timeout: 5), "the answer card shows")
+        yes.tap()
+        pause(4)
+        backIfStacked(app)
         pause(2.5)
         mark(marks, "end")
     }

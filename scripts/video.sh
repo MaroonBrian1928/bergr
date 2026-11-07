@@ -33,7 +33,8 @@ xcrun simctl io "$device" recordVideo --codec h264 --force "$out/raw.mov" 2>"$ou
 recorder=$!
 until grep -q "Recording started" "$out/record.log" 2>/dev/null; do sleep 0.1; done
 python3 -I -c 'import time; print(time.time())' >"$out/marks/t0"
-TEST_RUNNER_BERGR_VIDEO="$PWD/$out/marks" TEST_RUNNER_BERGR_SHOT_FONT="$font" \
+mkdir -p "$out/shots"
+TEST_RUNNER_BERGR_VIDEO="$PWD/$out/marks" TEST_RUNNER_BERGR_SHOTS="$PWD/$out/shots" TEST_RUNNER_BERGR_SHOT_FONT="$font" \
     "${xcodebuild[@]}" test-without-building | xcbeautify --quiet || { kill -INT $recorder; exit 1; }
 kill -INT $recorder
 wait $recorder || true
@@ -50,7 +51,14 @@ w=720
 h=$(( (H * w / W) / 2 * 2 ))
 pad=56
 radius=48
-magick -size "${w}x${h}" xc:black -fill white -draw "roundrectangle 0,0,$((w - 1)),$((h - 1)),$radius,$radius" "$out/mask.png"
+if command -v magick >/dev/null; then
+    magick -size "${w}x${h}" xc:black -fill white -draw "roundrectangle 0,0,$((w - 1)),$((h - 1)),$radius,$radius" "$out/mask.png"
+else
+    # Without ImageMagick: the same rounded rectangle, drawn by ffmpeg.
+    ffmpeg -v error -y -f lavfi -i "color=black:s=${w}x${h}" -frames:v 1 -vf \
+        "format=gray,geq=lum='if(lte(hypot(max(0\,max($radius-X\,X-(W-1-$radius)))\,max(0\,max($radius-Y\,Y-(H-1-$radius))))\,$radius)\,255\,0)'" \
+        "$out/mask.png"
+fi
 ffmpeg -v error -y -ss "$from" -t "$length" -i "$out/raw.mov" -loop 1 -i "$out/mask.png" -filter_complex "
     [0:v]fps=30,scale=${w}:${h},format=rgba[video];
     [1:v]format=gray[mask];
