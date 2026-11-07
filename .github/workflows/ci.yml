@@ -25,7 +25,7 @@ jobs:
         with:
           submodules: true
 
-      # The app targets iOS 27.1, so it needs Xcode 27; use the newest one on the runner.
+      # The app builds with the iOS 27 SDK (Xcode 27), though it runs on iOS 26; use the newest one on the runner.
       - name: Select Xcode 27
         run: |
           xcode="$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)"

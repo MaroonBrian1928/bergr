@@ -62,6 +62,7 @@
         "INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents": "YES",
         "INFOPLIST_KEY_UILaunchScreen_Generation": "YES",
         "INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone": "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight",
+        "INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad": "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight",
         "LD_RUNPATH_SEARCH_PATHS": [
           "$(inherited)",
           "@executable_path/Frameworks",
@@ -75,7 +76,7 @@
         "SWIFT_EMIT_LOC_STRINGS": "YES",
         "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
         "SWIFT_VERSION": "5.0",
-        "TARGETED_DEVICE_FAMILY": "1",
+        "TARGETED_DEVICE_FAMILY": "1,2",
       },
     }, {
       "name": "hirteTests",
@@ -104,7 +105,7 @@
         "SWIFT_EMIT_LOC_STRINGS": "NO",
         "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
         "SWIFT_VERSION": "5.0",
-        "TARGETED_DEVICE_FAMILY": "1",
+        "TARGETED_DEVICE_FAMILY": "1,2",
         "TEST_HOST": "$(BUILT_PRODUCTS_DIR)/hirte.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/hirte",
       },
     }, {
@@ -133,7 +134,7 @@
         "SWIFT_EMIT_LOC_STRINGS": "NO",
         "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
         "SWIFT_VERSION": "5.0",
-        "TARGETED_DEVICE_FAMILY": "1",
+        "TARGETED_DEVICE_FAMILY": "1,2",
         "TEST_TARGET_NAME": "hirte",
       },
     },
@@ -195,7 +196,7 @@
     "HIRTE_BUNDLE_ID_SUFFIX[config=Debug]": ".dev",
     "HIRTE_ICON_SUFFIX[config=Debug]": "-Dev",
     "HIRTE_NAME_SUFFIX[config=Debug]": " Dev",
-    "IPHONEOS_DEPLOYMENT_TARGET": "27.1",
+    "IPHONEOS_DEPLOYMENT_TARGET": "26.0",
     "LOCALIZATION_PREFERS_STRING_CATALOGS": "YES",
     "MTL_ENABLE_DEBUG_INFO[config=Debug]": "INCLUDE_SOURCE",
     "MTL_ENABLE_DEBUG_INFO[config=Release]": "NO",

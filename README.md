@@ -29,8 +29,8 @@ to jump in when they are.
 - **Keys in the Secure Enclave**, optionally behind Face ID; host keys checked on every connect
 - **Themes**: separate light and dark terminal themes, and a choice of fonts
 
-Unfolded on the iPhone Duo, the terminal list and a terminal sit side by side. It works on every
-iPhone with iOS 27.1 or later.
+On the iPad and the unfolded iPhone Duo, the terminal list and a terminal sit side by side. It
+works on every iPhone and iPad with iOS 26 or later.
 
 <p align="center">
   <picture>

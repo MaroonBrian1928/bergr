@@ -26,6 +26,7 @@ struct RootView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
             SidebarView(sessions: sessions, selectedHost: selectedHost, selectedTerminal: $selectedTerminal)
+                .modifier(PadSidebarWidth())
         } detail: {
             if let host = hosts.hosts.first(where: { $0.id == selectedHost.wrappedValue }),
                let address = selectedTerminal {
@@ -66,6 +67,18 @@ struct RootView: View {
             case .active: sessions.resumePaused(keys: keys)
             default: break
             }
+        }
+    }
+}
+
+/// An iPad has room for the rows' titles in the list column; elsewhere (the unfolded Duo) the
+/// column keeps the system's width.
+private struct PadSidebarWidth: ViewModifier {
+    func body(content: Content) -> some View {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            content.navigationSplitViewColumnWidth(min: 320, ideal: 400, max: 480)
+        } else {
+            content
         }
     }
 }

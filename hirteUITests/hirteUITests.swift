@@ -28,12 +28,12 @@ final class DemoTourTests: XCTestCase {
         open(app, "t1")
         sleep(2)
         shot(app, "2-agent")
-        back(app)
+        backIfStacked(app)
 
         open(app, "t3")
         sleep(2)
         shot(app, "3-needs-you")
-        back(app)
+        backIfStacked(app)
 
         // A shell with the keyboard and key bar up.
         open(app, "t5")
@@ -49,7 +49,7 @@ final class DemoTourTests: XCTestCase {
         sleep(1)
         shot(app, "4-shell")
         app.buttons["Hide Keyboard"].tap()
-        back(app)
+        backIfStacked(app)
 
         open(app, "t2")
         sleep(4)
