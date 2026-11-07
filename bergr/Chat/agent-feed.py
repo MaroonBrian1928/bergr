@@ -384,6 +384,23 @@ class Claude:
 
     def parse(self, d):
         kind = d.get("type")
+        # Compaction: the divider becomes a tool row, and the summary that follows is its output.
+        if kind == "system" and d.get("subtype") == "compact_boundary":
+            m = d.get("compactMetadata") or {}
+            k = lambda n: f"{round(int(n) / 1000)}k" if n else "?"
+            bits = [f"{k(m.get('preTokens'))} → {k(m.get('postTokens'))} tokens"] if m.get("preTokens") else []
+            if m.get("durationMs"):
+                bits.append(f"{round(m['durationMs'] / 1000)}s")
+            yield {"t": "tool", "id": d.get("uuid") or str(id(d)),
+                   "name": "Auto Compaction ran" if m.get("trigger") == "auto" else "Compacted",
+                   "summary": " · ".join(bits), "compact": True}
+            return
+        if d.get("isCompactSummary"):
+            c = (d.get("message") or {}).get("content")
+            c = c if isinstance(c, str) else result_text(c)
+            if c and d.get("parentUuid"):
+                yield {"t": "toolout", "id": d["parentUuid"], "text": c}
+            return
         if kind not in ("user", "assistant") or d.get("isMeta") or d.get("isSidechain"):
             return
         if kind == "user" and isinstance((d.get("message") or {}).get("content"), list):
