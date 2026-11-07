@@ -537,10 +537,7 @@ struct ChatView: View {
     private var placeholder: some View {
         switch feed.phase {
         case .loading:
-            ProgressView("Reading the conversation…")
-                .foregroundStyle(palette.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 48)
+            ReadingSpinner(color: palette.secondary)
         case .noConversation:
             ContentUnavailableView(
                 "No conversation yet", systemImage: "bubble.left.and.text.bubble.right",
@@ -550,10 +547,7 @@ struct ChatView: View {
                                    description: Text(message))
         case .live where feed.items.isEmpty && !feed.caughtUp:
             // A conversation was found and is being read: keep the same spinner until it's all in.
-            ProgressView("Reading the conversation…")
-                .foregroundStyle(palette.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 48)
+            ReadingSpinner(color: palette.secondary)
         case .live:
             EmptyView()
         }
@@ -1301,5 +1295,25 @@ private struct QuestionCard: View {
         if r.caseInsensitiveCompare(option) == .orderedSame { return true }
         let head = r.prefix(2).trimmingCharacters(in: CharacterSet(charactersIn: " .):-—"))
         return head.caseInsensitiveCompare(letter) == .orderedSame
+    }
+}
+
+
+/// "Reading the conversation…", shown only if reading takes long enough to notice.
+/// A conversation that loads quickly shows nothing, instead of flashing the spinner for a moment.
+private struct ReadingSpinner: View {
+    var color: Color
+    @State private var visible = false
+
+    var body: some View {
+        ProgressView("Reading the conversation…")
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 48)
+            .opacity(visible ? 1 : 0)
+            .task {
+                try? await Task.sleep(for: .milliseconds(600))
+                withAnimation(.easeIn(duration: 0.2)) { visible = true }
+            }
     }
 }
