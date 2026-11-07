@@ -45,6 +45,39 @@ struct RootView: View {
         #endif
     }
 
+    @ViewBuilder
+    private func detailPanes(host: Host, address: String) -> some View {
+                let expanded = Binding(
+                    get: { columns == .detailOnly },
+                    set: { columns = $0 ? .detailOnly : .all })
+                if horizontalSizeClass == .regular, let pane = beside,
+                   let besideHost = hosts.hosts.first(where: { $0.id == pane.host }) {
+                    // Two conversations side by side. The column has a single system bar and every
+                    // toolbar in it lands there, so that bar is hidden and each pane draws its own header.
+                    HStack(spacing: 0) {
+                        TerminalScreenView(
+                            session: sessions.session(for: host), address: address, expanded: expanded,
+                            pane: PaneChrome(buttonLabel: "Show Lists", buttonImage: "sidebar.leading",
+                                             action: { withAnimation { columns = columns == .all ? .detailOnly : .all } },
+                                             identifier: "primary"))
+                            .id("\(host.id)/\(address)")
+                        Divider().ignoresSafeArea()
+                        TerminalScreenView(
+                            session: sessions.session(for: besideHost), address: pane.address,
+                            expanded: .constant(false),
+                            pane: PaneChrome(buttonLabel: "Close", buttonImage: "xmark",
+                                             action: { withAnimation(.smooth(duration: 0.3)) { beside = nil } },
+                                             identifier: "beside"))
+                            .id("beside/\(pane.host)/\(pane.address)")
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
+                    .toolbar(.hidden, for: .navigationBar)
+                } else {
+                    TerminalScreenView(session: sessions.session(for: host), address: address, expanded: expanded)
+                        .id("\(host.id)/\(address)")
+                }
+    }
+
     private var main: some View {
         NavigationSplitView(columnVisibility: $columns, preferredCompactColumn: $compactColumn) {
             // Every agent on every machine first; one machine's terminals, machines and settings
@@ -71,36 +104,7 @@ struct RootView: View {
         } detail: {
             if let host = hosts.hosts.first(where: { $0.id == selectedHost.wrappedValue }),
                let address = selectedTerminal {
-                let primary = TerminalScreenView(
-                    session: sessions.session(for: host), address: address,
-                    expanded: Binding(
-                        get: { columns == .detailOnly },
-                        set: { columns = $0 ? .detailOnly : .all }))
-                    .id("\(host.id)/\(address)")
-                if horizontalSizeClass == .regular, let pane = beside,
-                   let besideHost = hosts.hosts.first(where: { $0.id == pane.host }) {
-                    // Two conversations side by side, each with its own title bar and buttons.
-                    HStack(spacing: 0) {
-                        // Each pane in a stack of its own, so each gets its own title bar.
-                        PaneNavigation { primary }
-                        Divider().ignoresSafeArea()
-                        PaneNavigation {
-                            TerminalScreenView(session: sessions.session(for: besideHost), address: pane.address,
-                                               expanded: .constant(false))
-                                .id("beside/\(pane.host)/\(pane.address)")
-                                .toolbar {
-                                    ToolbarItem(placement: .topBarLeading) {
-                                        Button("Close", systemImage: "xmark") {
-                                            withAnimation(.smooth(duration: 0.3)) { beside = nil }
-                                        }
-                                    }
-                                }
-                        }
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                    }
-                } else {
-                    primary
-                }
+                detailPanes(host: host, address: address)
             } else if horizontalSizeClass == .regular {
                 ContentUnavailableView(
                     "No terminal selected", systemImage: "terminal",
@@ -257,20 +261,5 @@ private struct TrustPrompt: ViewModifier {
             Text("This is the first time Bergr connects to \(key.host). Its fingerprint is\n\n\(key.fingerprint)\n\n"
                 + "To check it, run `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on that machine.")
         }
-    }
-}
-
-/// A pane with a title bar of its own. A SwiftUI NavigationStack nested in the split view's detail
-/// column hands its toolbar to the column's bar (two panes ended up sharing one), so each pane
-/// is a separate SwiftUI root (its own hosting controller) with a NavigationStack of its own.
-private struct PaneNavigation<Content: View>: UIViewControllerRepresentable {
-    @ViewBuilder var content: Content
-
-    func makeUIViewController(context: Context) -> UIHostingController<NavigationStack<NavigationPath, Content>> {
-        UIHostingController(rootView: NavigationStack { content })
-    }
-
-    func updateUIViewController(_ host: UIHostingController<NavigationStack<NavigationPath, Content>>, context: Context) {
-        host.rootView = NavigationStack { content }
     }
 }

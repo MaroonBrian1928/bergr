@@ -11,6 +11,8 @@ struct ChatView: View {
     var onInfo: (() -> Void)?
     /// The machine's connection, for uploading attached images (none in the design preview).
     var session: HostSession?
+    /// Set when two panes share the screen: the chat draws this header instead of using the system bar.
+    var pane: PaneChrome?
     #if DEBUG
     /// The design preview shows the working state without an agent behind it.
     var previewWorking = false
@@ -193,8 +195,11 @@ struct ChatView: View {
         .sensoryFeedback(.success, trigger: feed.items.last?.id) { _, _ in
             if case .decision? = feed.items.last?.kind { return true } else { return false }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if searching { searchBar.transition(.opacity) }
+        .safeAreaBar(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                if let pane { PaneHeader(chrome: pane) { chatButtons } }
+                if searching { searchBar.transition(.opacity) }
+            }
         }
         // The reply bar floats over the conversation, which scrolls on under it.
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -203,7 +208,7 @@ struct ChatView: View {
         .background(palette.background)
         .onChange(of: feed.items) { confirmPending() }
         .onChange(of: state, initial: true) { _, now in workingSeen = now == "working" ? (workingSeen ?? .now) : nil }
-        .toolbar { chatToolbar }
+        .toolbar { if pane == nil { chatToolbar } }
         .sheet(isPresented: $showingModels) {
             ModelSheet(models: feed.models, current: currentModel,
                        effort: feed.usage?.effort ?? agyStatus?.effort ?? feed.chosenEffort) { option, effort in
@@ -232,34 +237,45 @@ struct ChatView: View {
         } else {
             contextItem
         }
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button("Search", systemImage: "magnifyingglass") {
-                        withAnimation(motion) { searching = true }
-                        searchFocused = true
-                    }
-                    if feed.usage != nil || agent == .claude {
-                        Button("Usage", systemImage: "gauge.with.dots.needle.50percent") { showingUsage = true }
-                    }
-                    permissionsMenu
-                    if let onInfo {
-                        Button("Info", systemImage: "info.circle", action: onInfo)
-                    }
-                } label: {
-                    Label("More", systemImage: "ellipsis")
-                }
+            ToolbarItem(placement: .topBarTrailing) { moreMenu }
+    }
+
+    /// The chat's buttons, for the system bar's items and for a pane's own header.
+    @ViewBuilder
+    private var chatButtons: some View {
+        contextButton
+        moreMenu
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            Button("Search", systemImage: "magnifyingglass") {
+                withAnimation(motion) { searching = true }
+                searchFocused = true
             }
+            if feed.usage != nil || agent == .claude {
+                Button("Usage", systemImage: "gauge.with.dots.needle.50percent") { showingUsage = true }
+            }
+            permissionsMenu
+            if let onInfo {
+                Button("Info", systemImage: "info.circle", action: onInfo)
+            }
+        } label: {
+            Label("More", systemImage: "ellipsis")
+        }
     }
 
     private var contextItem: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) {
-            Button { showingUsage = true } label: {
-                UsageRing(fraction: feed.usage?.fraction ?? 0, palette: palette)
-            }
-            // Claude without numbers opens the sheet too: it offers to set them up.
-            .disabled(feed.usage == nil && agent != .claude)
-            .accessibilityLabel("Context")
+        ToolbarItem(placement: .topBarTrailing) { contextButton }
+    }
+
+    private var contextButton: some View {
+        Button { showingUsage = true } label: {
+            UsageRing(fraction: feed.usage?.fraction ?? 0, palette: palette)
         }
+        // Claude without numbers opens the sheet too: it offers to set them up.
+        .disabled(feed.usage == nil && agent != .claude)
+        .accessibilityLabel("Context")
     }
 
     private var searchBar: some View {

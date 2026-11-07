@@ -6,6 +6,8 @@ struct TerminalScreenView: View {
     let session: HostSession
     let address: String
     @Binding var expanded: Bool
+    /// Two panes side by side: this one draws its own header (see `PaneChrome`) instead of the system bar.
+    var pane: PaneChrome?
     @State private var model: TerminalScreenModel
     @State private var showingInfo = false
     @AppStorage(TerminalFont.sizeKey) private var fontSize = TerminalFont.defaultSize
@@ -33,7 +35,8 @@ struct TerminalScreenView: View {
 
     private var theme: TerminalTheme { TerminalTheme.current(colorScheme, light: lightTheme, dark: darkTheme) }
 
-    init(session: HostSession, address: String, expanded: Binding<Bool>) {
+    init(session: HostSession, address: String, expanded: Binding<Bool>, pane: PaneChrome? = nil) {
+        self.pane = pane
         self.session = session
         self.address = address
         _expanded = expanded
@@ -78,7 +81,8 @@ struct TerminalScreenView: View {
             if chat, let agent {
                 // The terminal stays attached underneath: replies are typed into it.
                 ChatView(feed: feed, agent: agent, terminal: terminal, model: model,
-                         onInfo: { showingInfo = true }, session: session)
+                         onInfo: { showingInfo = true }, session: session,
+                         pane: paneChrome(terminal, extra: AnyView(chatSwitch(agent: agent, chat: chat))))
             } else {
                 overlay(terminal)
             }
@@ -90,42 +94,25 @@ struct TerminalScreenView: View {
                     .frame(maxHeight: .infinity, alignment: .bottom)
             }
         }
-        .navigationTitle(terminal?.nameInSpace ?? address)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if !chat, let chrome = paneChrome(terminal, extra: AnyView(EmptyView())) {
+                PaneHeader(chrome: chrome) { terminalButtons(agent: agent, chat: chat) }
+            }
+        }
+        .navigationTitle(pane == nil ? terminal?.nameInSpace ?? address : "")
         // Watching, the size being watched instead (the screen shows it as an outline).
-        .navigationSubtitle(model.watching && terminal != nil
-            ? "Watching · \(terminal!.cols)×\(terminal!.rows)" : terminal.flatMap(spaceName) ?? "")
+        .navigationSubtitle(pane == nil ? subtitle(terminal) : "")
         .navigationBarTitleDisplayMode(.inline)
         // The title bar sits on the terminal's background: match its brightness, not the app's.
         .toolbarColorScheme(chat ? colorScheme : theme.dark ? .dark : .light, for: .navigationBar)
         .onChange(of: theme, initial: true) { _, theme in model.theme = theme }
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                if agent != nil {
-                    Button(chat ? "Show Terminal" : "Show Chat",
-                           systemImage: chat ? "apple.terminal" : "bubble.left.and.text.bubble.right")
-                    {
-                        chatPreferred.toggle()
-                    }
-                }
-                if model.phase == .live && !chat {
-                    // Watching is remembered for the next terminal; typing ends it only here.
-                    Button(model.watching ? "Take Over" : "Watch Only",
-                           systemImage: model.watching ? "eye.fill" : "eye")
-                    {
-                        watchByDefault = !model.watching
-                        model.setWatching(!model.watching)
-                    }
-                    Button(model.wantsKeyboard ? "Hide Keyboard" : "Show Keyboard",
-                           systemImage: model.wantsKeyboard ? "keyboard.chevron.compact.down" : "keyboard")
-                    {
-                        model.wantsKeyboard.toggle()
-                    }
-                }
-                // Hiding and showing the lists is the split view's own sidebar button.
-                // In the chat, Info is in its ⋯ menu.
-                if !chat { Button("Info", systemImage: "info.circle") { showingInfo = true } }
+            if pane == nil {
+                ToolbarItemGroup(placement: .topBarTrailing) { terminalButtons(agent: agent, chat: chat) }
             }
         }
+        // With two panes the column's bar is hidden (each pane has its own header).
+        .toolbar(pane == nil ? .automatic : .hidden, for: .navigationBar)
         // The session follows the conversation and keeps following it if this screen goes away
         // for a moment. Keyed by the agent only: the foreground process changes whenever the
         // agent runs a command, and the feed finds a new conversation in the same terminal itself.
@@ -172,6 +159,54 @@ struct TerminalScreenView: View {
             model.stop()
             session.stopLooking(at: address)
         }
+    }
+
+    private func subtitle(_ terminal: Terminal?) -> String {
+        // Watching, the size being watched instead (the screen shows it as an outline).
+        model.watching && terminal != nil
+            ? "Watching · \(terminal!.cols)×\(terminal!.rows)" : terminal.flatMap(spaceName) ?? ""
+    }
+
+    private func paneChrome(_ terminal: Terminal?, extra: AnyView) -> PaneChrome? {
+        guard var chrome = pane else { return nil }
+        chrome.title = terminal?.nameInSpace ?? address
+        chrome.subtitle = subtitle(terminal)
+        chrome.extra = extra
+        return chrome
+    }
+
+    @ViewBuilder
+    private func chatSwitch(agent: ChatAgent?, chat: Bool) -> some View {
+        if agent != nil {
+            Button(chat ? "Show Terminal" : "Show Chat",
+                   systemImage: chat ? "apple.terminal" : "bubble.left.and.text.bubble.right")
+            {
+                chatPreferred.toggle()
+            }
+        }
+    }
+
+    /// The title bar's buttons (or a pane header's).
+    @ViewBuilder
+    private func terminalButtons(agent: ChatAgent?, chat: Bool) -> some View {
+        chatSwitch(agent: agent, chat: chat)
+        if model.phase == .live && !chat {
+            // Watching is remembered for the next terminal; typing ends it only here.
+            Button(model.watching ? "Take Over" : "Watch Only",
+                   systemImage: model.watching ? "eye.fill" : "eye")
+            {
+                watchByDefault = !model.watching
+                model.setWatching(!model.watching)
+            }
+            Button(model.wantsKeyboard ? "Hide Keyboard" : "Show Keyboard",
+                   systemImage: model.wantsKeyboard ? "keyboard.chevron.compact.down" : "keyboard")
+            {
+                model.wantsKeyboard.toggle()
+            }
+        }
+        // Hiding and showing the lists is the split view's own sidebar button.
+        // In the chat, Info is in its ⋯ menu.
+        if !chat { Button("Info", systemImage: "info.circle") { showingInfo = true } }
     }
 
     /// The space (or machine) the terminal belongs to, as the list shows it.

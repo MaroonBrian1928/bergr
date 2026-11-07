@@ -30,6 +30,17 @@ final class TwoPaneShotTests: XCTestCase {
             try XCUIScreen.main.screenshot().pngRepresentation
                 .write(to: URL(fileURLWithPath: dir).appendingPathComponent("two-pane.png"))
         }
-        XCTAssertTrue(app.buttons["Close"].firstMatch.exists, "the second pane has a Close button")
+        let close = app.buttons["beside.leading"].firstMatch
+        XCTAssertTrue(close.exists, "the second pane has a Close button")
+        let besideTitle = app.staticTexts["beside.title"].firstMatch
+        let primaryTitle = app.staticTexts["primary.title"].firstMatch
+        XCTAssertTrue(besideTitle.exists && primaryTitle.exists, "each pane has its own title")
+        let screen = app.windows.firstMatch.frame
+        // The beside pane's header lies right of the primary's title, and the primary's title left of the beside pane's.
+        XCTAssertGreaterThan(close.frame.minX, primaryTitle.frame.maxX, "Close is in the beside pane, not the primary's bar")
+        XCTAssertLessThanOrEqual(primaryTitle.frame.maxX, besideTitle.frame.minX, "titles are in separate panes")
+        XCTAssertLessThanOrEqual(close.frame.minX, besideTitle.frame.minX, "Close leads the beside pane's title")
+        XCTAssertGreaterThan(besideTitle.frame.minX, screen.midX - 300)
+        XCTAssertLessThanOrEqual(besideTitle.frame.maxX, screen.maxX)
     }
 }
