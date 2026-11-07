@@ -1194,21 +1194,37 @@ extension TerminalCanvasView: UIGestureRecognizerDelegate {
 
 // MARK: Text input
 
-/// Just enough of `UITextInput` for the system keyboard's trackpad: holding the space bar moves a
-/// "floating cursor", which becomes arrow keys like a held finger (see `ArrowStick`). There is no
-/// text to edit here, so the document is empty and every position is its start.
+/// Just enough of `UITextInput` for the system keyboard. There is no text to edit here (it goes
+/// straight to the program), so the document is made up: one character before the cursor, then
+/// whatever an input method is composing.
+///
+/// The character is for the delete key: before repeating a held delete, the keyboard reads the
+/// text before the cursor, and stops when there's none. It's also what the trackpad needs: holding
+/// the space bar moves a "floating cursor", which becomes arrow keys like a held finger (see
+/// `ArrowStick`).
 extension TerminalCanvasView {
-    private final class Position: UITextPosition {}
-
-    private final class Range: UITextRange {
-        let position = Position()
-        override var start: UITextPosition { position }
-        override var end: UITextPosition { position }
-        override var isEmpty: Bool { true }
+    private final class Position: UITextPosition {
+        let offset: Int
+        init(_ offset: Int) { self.offset = offset }
     }
 
-    private static let position = Position()
-    private static let range = Range()
+    private final class Range: UITextRange {
+        let from: Position, to: Position
+        init(_ from: Int, _ to: Int) {
+            self.from = Position(min(from, to))
+            self.to = Position(max(from, to))
+        }
+        override var start: UITextPosition { from }
+        override var end: UITextPosition { to }
+        override var isEmpty: Bool { from.offset == to.offset }
+    }
+
+    /// Always there before the cursor, so a held delete key keeps repeating.
+    private static let beforeCursor = " "
+
+    private var document: NSString { (Self.beforeCursor + (markedText ?? "")) as NSString }
+    private var cursor: Int { document.length }
+    private func offset(_ position: UITextPosition) -> Int { (position as? Position)?.offset ?? cursor }
 
     func beginFloatingCursor(at point: CGPoint) {
         guard model != nil else { return }
@@ -1224,11 +1240,13 @@ extension TerminalCanvasView {
     }
 
     var selectedTextRange: UITextRange? {
-        get { Self.range }
+        get { Range(cursor, cursor) }
         set {}
     }
 
-    var markedTextRange: UITextRange? { markedText == nil ? nil : Self.range }
+    var markedTextRange: UITextRange? {
+        markedText == nil ? nil : Range((Self.beforeCursor as NSString).length, cursor)
+    }
     var markedTextStyle: [NSAttributedString.Key: Any]? {
         get { nil }
         set {}
@@ -1252,24 +1270,52 @@ extension TerminalCanvasView {
     }
 
     var tokenizer: UITextInputTokenizer { stringTokenizer }
-    var beginningOfDocument: UITextPosition { Self.position }
-    var endOfDocument: UITextPosition { Self.position }
 
-    func text(in range: UITextRange) -> String? { markedText ?? "" }
+    var beginningOfDocument: UITextPosition { Position(0) }
+    var endOfDocument: UITextPosition { Position(cursor) }
+
+    func text(in range: UITextRange) -> String? {
+        guard let range = range as? Range else { return nil }
+        return document.substring(with: NSRange(location: range.from.offset, length: range.to.offset - range.from.offset))
+    }
+
     func replace(_ range: UITextRange, withText text: String) { insertText(text) }
-    func textRange(from fromPosition: UITextPosition, to toPosition: UITextPosition) -> UITextRange? { Self.range }
-    func position(from position: UITextPosition, offset: Int) -> UITextPosition? { offset == 0 ? Self.position : nil }
+
+    func textRange(from fromPosition: UITextPosition, to toPosition: UITextPosition) -> UITextRange? {
+        Range(offset(fromPosition), offset(toPosition))
+    }
+
+    func position(from position: UITextPosition, offset: Int) -> UITextPosition? {
+        let moved = self.offset(position) + offset
+        return (0...cursor).contains(moved) ? Position(moved) : nil
+    }
+
     func position(
         from position: UITextPosition, in direction: UITextLayoutDirection, offset: Int
-    ) -> UITextPosition? { offset == 0 ? Self.position : nil }
-    func compare(_ position: UITextPosition, to other: UITextPosition) -> ComparisonResult { .orderedSame }
-    func offset(from: UITextPosition, to toPosition: UITextPosition) -> Int { 0 }
+    ) -> UITextPosition? {
+        switch direction {
+        case .left: self.position(from: position, offset: -offset)
+        case .right: self.position(from: position, offset: offset)
+        default: offset == 0 ? position : nil
+        }
+    }
+
+    func compare(_ position: UITextPosition, to other: UITextPosition) -> ComparisonResult {
+        let (a, b) = (offset(position), offset(other))
+        return a < b ? .orderedAscending : a > b ? .orderedDescending : .orderedSame
+    }
+
+    func offset(from: UITextPosition, to toPosition: UITextPosition) -> Int { offset(toPosition) - offset(from) }
+
     func position(within range: UITextRange, farthestIn direction: UITextLayoutDirection) -> UITextPosition? {
-        Self.position
+        direction == .left || direction == .up ? range.start : range.end
     }
+
     func characterRange(byExtending position: UITextPosition, in direction: UITextLayoutDirection) -> UITextRange? {
-        Self.range
+        let at = offset(position)
+        return direction == .left || direction == .up ? Range(max(at - 1, 0), at) : Range(at, min(at + 1, cursor))
     }
+
     func baseWritingDirection(
         for position: UITextPosition, in direction: UITextStorageDirection
     ) -> NSWritingDirection { .leftToRight }
@@ -1282,9 +1328,9 @@ extension TerminalCanvasView {
         return CGRect(x: usable.midX, y: usable.midY - 8, width: 2, height: 16)
     }
 
-    func firstRect(for range: UITextRange) -> CGRect { caretRect(for: Self.position) }
+    func firstRect(for range: UITextRange) -> CGRect { caretRect(for: range.start) }
     func selectionRects(for range: UITextRange) -> [UITextSelectionRect] { [] }
-    func closestPosition(to point: CGPoint) -> UITextPosition? { Self.position }
-    func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? { Self.position }
-    func characterRange(at point: CGPoint) -> UITextRange? { Self.range }
+    func closestPosition(to point: CGPoint) -> UITextPosition? { Position(cursor) }
+    func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? { range.end }
+    func characterRange(at point: CGPoint) -> UITextRange? { Range(cursor, cursor) }
 }

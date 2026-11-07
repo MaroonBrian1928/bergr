@@ -141,3 +141,15 @@ struct ArrowStickTests {
         }
     }
 }
+
+@MainActor
+struct TerminalTextInputTests {
+    /// The keyboard stops repeating a held delete when it finds nothing before the cursor.
+    @Test func thereIsAlwaysACharacterBeforeTheCursor() throws {
+        let view = TerminalCanvasView()
+        let cursor = try #require(view.selectedTextRange).start
+        let before = try #require(view.position(from: cursor, offset: -1))
+        let range = try #require(view.textRange(from: before, to: cursor))
+        #expect(view.text(in: range)?.isEmpty == false)
+    }
+}
