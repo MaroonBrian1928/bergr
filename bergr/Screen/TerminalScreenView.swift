@@ -26,8 +26,11 @@ struct TerminalScreenView: View {
     /// added (`machine/t7`): their files are on another computer.
     private func chatAgent(_ terminal: Terminal?) -> ChatAgent? {
         #if DEBUG
-        // `-bergr.demoChat YES`: the demo machine's terminals open as a fake Claude chat.
-        if session.host.isDemo, UserDefaults.standard.bool(forKey: "bergr.demoChat"), terminal != nil { return .claude }
+        // `-bergr.demoChat YES`: the demo machine's terminals open as fake chats: the infra agent
+        // (the Postgres upgrade) as Codex, the rest as Claude.
+        if session.host.isDemo, UserDefaults.standard.bool(forKey: "bergr.demoChat"), terminal != nil {
+            return terminal?.cwd.hasSuffix("infra") == true ? .codex : .claude
+        }
         #endif
         guard let terminal, session.canRunCommands, !address.contains("/") else { return nil }
         return ChatAgent.detect(terminal)

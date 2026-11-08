@@ -5,7 +5,7 @@ import XCTest
 final class TwoPaneShotTests: XCTestCase {
     @MainActor
     func testOpenBeside() throws {
-        XCUIDevice.shared.orientation = .landscapeLeft
+        if ProcessInfo.processInfo.environment["BERGR_PORTRAIT"] == nil { XCUIDevice.shared.orientation = .landscapeLeft }
         let app = XCUIApplication()
         app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                 "-bergr.demo", "YES", "-bergr.demoChat", "YES"]

@@ -157,7 +157,7 @@ final class HostSession {
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             #if DEBUG
-            if self.host.isDemo { await feed.runDemo(); return }
+            if self.host.isDemo { await feed.runDemo(agent: agent); return }
             #endif
             await feed.run(session: self, agent: agent, pid: pid, cwd: cwd, sessionHint: sessionHint)
         }

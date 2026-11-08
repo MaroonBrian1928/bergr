@@ -57,38 +57,75 @@ struct ChatPreviewScreen: View {
 }
 
 extension ChatFeed {
-    func loadSample() {
+    /// A sample conversation: Claude's is a website change, Codex's a database upgrade, so two
+    /// panes side by side show two different agents.
+    func loadSample(_ agent: ChatAgent = .claude) {
+        if agent == .codex { loadCodexSample() } else { loadClaudeSample() }
+    }
+
+    private func loadClaudeSample() {
         let events: [[String: Any]] = [
-            ["t": "msg", "id": "u1", "role": "user", "text": "Which services are running on each server? Put it in a table."],
-            ["t": "tool", "id": "t1", "name": "Bash", "summary": "List services on alpha"],
-            ["t": "tool", "id": "t2", "name": "Bash", "summary": "List services on beta"],
-            ["t": "tool", "id": "t3", "name": "Read", "summary": "deploy/servers.toml"],
+            ["t": "msg", "id": "u1", "role": "user", "text": "The settings page ignores dark mode. Can you add a toggle?"],
+            ["t": "tool", "id": "t1", "name": "Grep", "summary": "colorScheme in src/"],
+            ["t": "toolout", "id": "t1", "text": "src/theme.ts:12\nsrc/pages/Settings.tsx:48"],
+            ["t": "tool", "id": "t2", "name": "Read", "summary": "src/pages/Settings.tsx"],
             ["t": "msg", "id": "a1", "role": "assistant", "text": """
-            Here is what runs on each server:
+            Found it. `Settings.tsx` hard-codes light colors instead of reading the theme:
 
-            | Server | Service | Port |
-            |---|---|---|
-            | alpha | `api` | `8080` |
-            | beta | `worker` | `9090` |
-            | gamma | `cache` | `6379` |
+            | File | Problem |
+            |---|---|
+            | `Settings.tsx` | `#fff` background, `#222` text |
+            | `Toggle.tsx` | no dark variant |
+            | `theme.ts` | fine, already has both palettes |
 
-            - **What's listed:** only the app's own services. I left out system ones like `sshd`.
-            - **delta:** it timed out, so it is probably asleep. Wake it and run `app server start` there.
+            I'll switch both components to theme tokens and add a **System / Light / Dark** toggle at the top of the page.
             """],
-            ["t": "msg", "id": "u2", "role": "user", "text": "ok wake it and check again"],
-            ["t": "tool", "id": "t4", "name": "Bash", "summary": "ssh delta 'systemctl list-units --type=service'"],
-            ["t": "msg", "id": "a2", "role": "assistant", "text": "## delta\n\nIt's awake now. One service:\n\n```sh\napi.service  loaded active running  API server\n```\n\n> Its app server still needs starting before I can move the jobs."],
+            ["t": "msg", "id": "u2", "role": "user", "text": "sounds good, send me a screenshot when it's done"],
+            ["t": "tool", "id": "t3", "name": "Edit", "summary": "src/pages/Settings.tsx"],
+            ["t": "tool", "id": "t4", "name": "Edit", "summary": "src/components/Toggle.tsx"],
+            ["t": "tool", "id": "t5", "name": "Bash", "summary": "Take a screenshot\nnpm run shot -- /settings --dark"],
+            ["t": "msg", "id": "a2", "role": "assistant", "text": "Here it is in dark mode. Contrast passes for body text, but the muted labels are at **4.2:1**, just under the 4.5 target."],
         ]
         loadEvents(events + [["t": "usage", "model": "claude-opus-5-5", "used": 70_512, "limit": 200_000]])
         loadItems(items + [
-            Item(id: "p1", kind: .plan([
-                PlanStep(text: "Check the services on each server", status: "completed"),
-                PlanStep(text: "Start the app server on delta", status: "in_progress"),
-                PlanStep(text: "Move the jobs over", status: "pending"),
-            ])),
             Item(id: "i1", kind: .image(data: Self.sampleImage(), fromUser: false)),
-            Item(id: "q1", kind: .question(title: "What should I do with the jobs on delta?",
-                                           options: ["Move them now", "Wait for the app server", "Leave them"])),
+            Item(id: "q1", kind: .question(title: "How should I fix the muted labels?",
+                                           options: ["Lighten them to pass 4.5:1", "Make them regular text", "Leave them"])),
+        ])
+    }
+
+    private func loadCodexSample() {
+        let events: [[String: Any]] = [
+            ["t": "msg", "id": "u1", "role": "user", "text": "Upgrade the staging database to Postgres 18 and make sure nothing breaks."],
+            ["t": "tool", "id": "t1", "name": "shell", "summary": "Check the current version\npsql -c 'select version()'"],
+            ["t": "toolout", "id": "t1", "text": "PostgreSQL 17.4 on x86_64-pc-linux-gnu"],
+            ["t": "tool", "id": "t2", "name": "shell", "summary": "Dump before upgrading\npg_dumpall > /backups/pre-18.sql"],
+            ["t": "tool", "id": "t3", "name": "shell", "summary": "pg_upgrade --check"],
+            ["t": "toolout", "id": "t3", "text": "Checking cluster versions        ok\nChecking database connection     ok\nChecking for incompatible types  ok\n*Clusters are compatible*"],
+            ["t": "tool", "id": "t4", "name": "shell", "summary": "Run the upgrade\npg_upgrade --link -b /usr/lib/postgresql/17/bin -B /usr/lib/postgresql/18/bin"],
+            ["t": "tool", "id": "t5", "name": "shell", "summary": "Run the test suite\nmake test DB=staging"],
+            ["t": "toolout", "id": "t5", "text": "212 passed, 0 failed in 48.1s"],
+            ["t": "msg", "id": "a1", "role": "assistant", "text": """
+            Staging is on **Postgres 18.1** and every check is green.
+
+            ```sh
+            $ psql -c 'show server_version'
+             18.1
+            ```
+
+            - The upgrade used `--link`, so it took 40 seconds and no extra disk.
+            - The dump from before is in `/backups/pre-18.sql` if we need to roll back.
+            - All 212 tests pass against the new server.
+            """],
+            ["t": "msg", "id": "n1", "role": "note", "text": "Used memory: staging backups live in /backups, not the app volume"],
+        ]
+        loadEvents(events + [["t": "usage", "model": "gpt-5.5-codex", "used": 41_208, "limit": 272_000]])
+        loadItems(items + [
+            Item(id: "p1", kind: .plan([
+                PlanStep(text: "Back up the staging cluster", status: "completed"),
+                PlanStep(text: "Check compatibility and upgrade", status: "completed"),
+                PlanStep(text: "Run the tests against Postgres 18", status: "completed"),
+            ])),
         ])
     }
 
@@ -117,9 +154,11 @@ extension ChatFeed {
 /// A fake agent for the demo machine (`-bergr.demo YES -bergr.demoChat YES`): the real chat,
 /// over a real (demo) terminal, with a conversation that answers what is sent to it.
 extension ChatFeed {
-    func runDemo() async {
-        loadSample()
-        applyDemo(["t": "usage", "model": "claude-opus-5-5", "used": 70_512, "limit": 200_000])
+    func runDemo(agent: ChatAgent = .claude) async {
+        loadSample(agent)
+        if agent == .claude {
+            applyDemo(["t": "usage", "model": "claude-opus-5-5", "used": 70_512, "limit": 200_000])
+        }
         // Stays "running" like a real feed, until the chat goes away.
         while !Task.isCancelled { try? await Task.sleep(for: .seconds(60)) }
     }
