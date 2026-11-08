@@ -38,6 +38,13 @@ conversation can open beside the first. It works on every iPhone and iPad with i
 
 <p align="center">
   <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/ipad-dark.png">
+    <img src="assets/ipad-light.png" width="760" alt="Bergr on an iPad in landscape: the Agents list beside two conversations, Claude asking how to fix low-contrast labels and Codex reporting a finished Postgres upgrade">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-dark.png">
     <img src="assets/screenshot-light.png" width="760" alt="Three Bergr screens: the Agents list with a migration waiting for an answer, an agent's conversation with its reply, and the blocked agent with Yes, No, Return and Esc buttons">
   </picture>

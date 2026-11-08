@@ -45,7 +45,10 @@ final class TwoPaneShotTests: XCTestCase {
 
         // Most people work with the sidebar hidden: collapse it and check the panes still stand apart.
         app.buttons["primary.leading"].firstMatch.tap()
-        sleep(2)
+        let sidebarRow = app.staticTexts["Upgraded Postgres to 18"].firstMatch
+        let gone = expectation(for: NSPredicate(format: "isHittable == false"), evaluatedWith: sidebarRow)
+        wait(for: [gone], timeout: 5)
+        sleep(1)
         if let dir = ProcessInfo.processInfo.environment["BERGR_SHOTS"] {
             try XCUIScreen.main.screenshot().pngRepresentation
                 .write(to: URL(fileURLWithPath: dir).appendingPathComponent("two-pane-collapsed.png"))
