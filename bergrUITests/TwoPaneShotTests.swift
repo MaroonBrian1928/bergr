@@ -42,5 +42,16 @@ final class TwoPaneShotTests: XCTestCase {
         XCTAssertLessThanOrEqual(close.frame.minX, besideTitle.frame.minX, "Close leads the beside pane's title")
         XCTAssertGreaterThan(besideTitle.frame.minX, screen.midX - 300)
         XCTAssertLessThanOrEqual(besideTitle.frame.maxX, screen.maxX)
+
+        // Most people work with the sidebar hidden: collapse it and check the panes still stand apart.
+        app.buttons["primary.leading"].firstMatch.tap()
+        sleep(2)
+        if let dir = ProcessInfo.processInfo.environment["BERGR_SHOTS"] {
+            try XCUIScreen.main.screenshot().pngRepresentation
+                .write(to: URL(fileURLWithPath: dir).appendingPathComponent("two-pane-collapsed.png"))
+        }
+        XCTAssertLessThan(primaryTitle.frame.minX, screen.midX, "the primary pane fills the left half")
+        XCTAssertGreaterThan(close.frame.minX, primaryTitle.frame.maxX)
+        XCTAssertLessThanOrEqual(besideTitle.frame.maxX, screen.maxX)
     }
 }
