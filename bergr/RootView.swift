@@ -54,14 +54,14 @@ struct RootView: View {
                    let besideHost = hosts.hosts.first(where: { $0.id == pane.host }) {
                     // Two conversations side by side. The column has a single system bar and every
                     // toolbar in it lands there, so that bar is hidden and each pane draws its own header.
-                    HStack(spacing: 0) {
+                    HStack(spacing: 10) {
                         TerminalScreenView(
                             session: sessions.session(for: host), address: address, expanded: expanded,
                             pane: PaneChrome(buttonLabel: "Show Lists", buttonImage: "sidebar.leading",
                                              action: { withAnimation { columns = columns == .all ? .detailOnly : .all } },
                                              identifier: "primary"))
                             .id("\(host.id)/\(address)")
-                        Divider().ignoresSafeArea()
+                            .clipShape(.rect(cornerRadius: 26, style: .continuous))
                         TerminalScreenView(
                             session: sessions.session(for: besideHost), address: pane.address,
                             expanded: .constant(false),
@@ -69,8 +69,13 @@ struct RootView: View {
                                              action: { withAnimation(.smooth(duration: 0.3)) { beside = nil } },
                                              identifier: "beside"))
                             .id("beside/\(pane.host)/\(pane.address)")
+                            .clipShape(.rect(cornerRadius: 26, style: .continuous))
                             .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
+                    // Two cards with a gutter between them, like two windows, not one screen cut in half.
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
+                    .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
                     .toolbar(.hidden, for: .navigationBar)
                 } else {
                     TerminalScreenView(session: sessions.session(for: host), address: address, expanded: expanded)
