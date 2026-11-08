@@ -73,6 +73,9 @@ in `.envrc.local` (see `.envrc`), then `just phone`. `just` lists the other comm
 
 ## License
 
+Bergr is a fork of [Hirte](https://github.com/glattziehen/hirte) by Pavel Zwerschke, used under
+Apache-2.0. Bergr's changes are listed in [NOTICE](NOTICE) and in the git history.
+
 Apache-2.0, see [LICENSE](LICENSE). Bergr ships Ghostty (libghostty-vt), Citadel, SwiftNIO (with
 NIO Transport Services) and
 other open-source code, the JetBrains Mono and Comic Mono fonts, and themes from

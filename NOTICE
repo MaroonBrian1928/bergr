@@ -1,0 +1,8 @@
+Bergr
+
+This product is a modified version of Hirte (https://github.com/glattziehen/hirte),
+Copyright 2026 Pavel Zwerschke, licensed under the Apache License, Version 2.0.
+
+Changes from Hirte include the rename to Bergr, the agent chat view for Claude Code,
+Codex and Antigravity (bergr/Chat), two-pane layout on iPad, SSH over Network framework,
+and the demo content. See the git history for the full list of changes.
