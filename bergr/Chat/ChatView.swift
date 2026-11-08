@@ -195,9 +195,9 @@ struct ChatView: View {
         .sensoryFeedback(.success, trigger: feed.items.last?.id) { _, _ in
             if case .decision? = feed.items.last?.kind { return true } else { return false }
         }
-        .safeAreaBar(edge: .top, spacing: 0) {
+        .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
-                if let pane { PaneHeader(chrome: pane) { chatButtons } }
+                if let pane { PaneHeader(chrome: pane, backdrop: palette.background) { chatButtons } }
                 if searching { searchBar.transition(.opacity) }
             }
         }

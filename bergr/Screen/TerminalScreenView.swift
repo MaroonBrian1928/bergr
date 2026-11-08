@@ -99,7 +99,7 @@ struct TerminalScreenView: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             if !chat, let chrome = paneChrome(terminal, extra: AnyView(EmptyView())) {
-                PaneHeader(chrome: chrome) { terminalButtons(agent: agent, chat: chat) }
+                PaneHeader(chrome: chrome, backdrop: Color(uiColor: UIColor(theme.backgroundRGB))) { terminalButtons(agent: agent, chat: chat) }
             }
         }
         .navigationTitle(pane == nil ? terminal?.nameInSpace ?? address : "")

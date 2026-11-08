@@ -119,7 +119,7 @@ extension ChatFeed {
             """],
             ["t": "msg", "id": "n1", "role": "note", "text": "Used memory: staging backups live in /backups, not the app volume"],
         ]
-        loadEvents(events + [["t": "usage", "model": "gpt-5.5-codex", "used": 41_208, "limit": 272_000]])
+        loadEvents(events + [["t": "usage", "model": "gpt-6.1-sol", "used": 41_208, "limit": 272_000]])
         loadItems(items + [
             Item(id: "p1", kind: .plan([
                 PlanStep(text: "Back up the staging cluster", status: "completed"),

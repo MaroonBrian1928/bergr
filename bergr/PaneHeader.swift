@@ -18,6 +18,8 @@ struct PaneChrome {
 /// A compact Liquid Glass header above one pane.
 struct PaneHeader<Trailing: View>: View {
     let chrome: PaneChrome
+    /// The pane's own background: the header sits on it, so text scrolling up doesn't show through the title.
+    var backdrop: Color = Color(uiColor: .systemBackground)
     @ViewBuilder var trailing: Trailing
 
     var body: some View {
@@ -45,6 +47,18 @@ struct PaneHeader<Trailing: View>: View {
             .glassEffect(.regular, in: Capsule())
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
+        .background {
+            // Solid behind the header, so text scrolling up disappears cleanly under it,
+            // with a short fade at its lower edge instead of a hard line.
+            VStack(spacing: 0) {
+                backdrop
+                LinearGradient(colors: [backdrop, backdrop.opacity(0)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 10)
+            }
+            .padding(.bottom, -10)
+            .ignoresSafeArea(edges: .top)
+            .allowsHitTesting(false)
+        }
     }
 }

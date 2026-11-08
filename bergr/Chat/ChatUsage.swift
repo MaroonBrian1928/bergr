@@ -4,6 +4,12 @@ extension ChatFeed.Usage {
     /// `claude-opus-5-5` → "Opus 5.5"; other names as they are.
     var modelName: String? {
         guard let model else { return nil }
+        if model.hasPrefix("gpt-") {
+            // gpt-6.1-sol → GPT-6.1 Sol
+            let parts = model.dropFirst("gpt-".count).split(separator: "-").map(String.init)
+            guard let version = parts.first else { return model }
+            return (["GPT-" + version] + parts.dropFirst().map(\.capitalized)).joined(separator: " ")
+        }
         guard model.hasPrefix("claude-") else { return model }
         var parts = model.dropFirst("claude-".count).split(separator: "-").map(String.init)
         if let last = parts.last, last.count == 8, last.allSatisfy(\.isNumber) { parts.removeLast() } // a date
