@@ -92,16 +92,18 @@ struct AgentsView: View {
                             .selectionDisabled()
                     }
                     ForEach(terminals) { terminal in row(terminal, host: host, session: session) }
-                } header: {
-                    MachineHeader(host: host, session: session, count: terminals.count)
-                }
-                ForEach(linkedGroups(all, host: host, session: session), id: \.name) { group in
-                    Section {
-                        ForEach(group.terminals) { terminal in row(terminal, host: host, session: session) }
-                    } header: {
+                    // Linked machines go in the same section, under a heading row each: as section
+                    // headers they pinned to the top and piled up over the list when scrolling.
+                    ForEach(linkedGroups(all, host: host, session: session), id: \.name) { group in
                         LinkedMachineHeader(name: group.name, via: host.name, state: group.state,
                                             count: group.terminals.count)
+                            .padding(.top, 10)
+                            .listRowSeparator(.hidden)
+                            .selectionDisabled()
+                        ForEach(group.terminals) { terminal in row(terminal, host: host, session: session) }
                     }
+                } header: {
+                    MachineHeader(host: host, session: session, count: terminals.count)
                 }
             }
         }
