@@ -48,6 +48,13 @@ struct ChatView: View {
         var images = false
         /// No sign of it in the conversation, and the agent didn't start working: offer Retry.
         var failed = false
+
+        /// Whether the conversation has this reply. With images it comes back with the image
+        /// paths (or "[Image #1]") in front of the words, so the words only have to end it.
+        func isIn(_ said: Set<String>) -> Bool {
+            if said.contains(text) { return true }
+            return images && !text.isEmpty && said.contains { $0.hasSuffix(text) }
+        }
     }
 
     private var palette: ChatPalette { .of(colorScheme) }
@@ -407,7 +414,8 @@ struct ChatView: View {
         guard case .item(let item) = row else { return arrival }
         switch item.kind {
         case .user(let text):
-            return pending.contains { $0.text == text.trimmingCharacters(in: .whitespacesAndNewlines) } ? .identity : arrival
+            let said: Set<String> = [text.trimmingCharacters(in: .whitespacesAndNewlines)]
+            return pending.contains { $0.isIn(said) } ? .identity : arrival
         case .assistant:
             return .opacity
         default:
@@ -464,7 +472,7 @@ struct ChatView: View {
         let said = Set(feed.items.suffix(20).compactMap { item -> String? in
             if case .user(let text) = item.kind { text.trimmingCharacters(in: .whitespacesAndNewlines) } else { nil }
         })
-        let waiting = pending.filter { !said.contains($0.text) }
+        let waiting = pending.filter { !$0.isIn(said) }
         guard let search else { return waiting }
         return waiting.filter { $0.text.localizedStandardContains(search) }
     }
@@ -673,6 +681,13 @@ struct ChatView: View {
                             images: !images.isEmpty)
         pending.append(reply)
         watchDelivery(of: reply.id)
+        if reply.images {
+            // The 20 s fallback must not wait for the conversation to change again.
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(21))
+                confirmPending()
+            }
+        }
         // What you just sent is where you want to be: straight there, then the list's own
         // bottom anchoring follows it as it grows (an animated scroll would chase a moving end).
         position.scrollTo(edge: .bottom)
@@ -706,7 +721,7 @@ struct ChatView: View {
             if case .user(let text) = item.kind { text.trimmingCharacters(in: .whitespacesAndNewlines) } else { nil }
         })
         // A reply with images comes back worded differently ("[Image #1] …"): it goes after a while.
-        pending.removeAll { said.contains($0.text) || ($0.images && $0.at.timeIntervalSinceNow < -20) }
+        pending.removeAll { $0.isIn(said) || ($0.images && $0.at.timeIntervalSinceNow < -20) }
     }
 
     /// Ten seconds without the reply in the conversation and without the agent working: it most
