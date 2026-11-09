@@ -51,19 +51,25 @@ struct CommandSuggestions: View {
     @State private var picks = 0
 
     var body: some View {
-        let found = CommandMatcher.matches(commands, draft: draft.wrappedValue)
+        // Every match, not just the first few: the card shows about five rows and scrolls.
+        let found = CommandMatcher.matches(commands, draft: draft.wrappedValue, limit: 400)
         if found.isEmpty {
             EmptyView()
         } else {
-            VStack(spacing: 0) {
-                ForEach(Array(found.enumerated()), id: \.element.id) { index, command in
-                    if index > 0 {
-                        Divider().padding(.leading, 16)
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(found.enumerated()), id: \.element.id) { index, command in
+                        if index > 0 {
+                            Divider().padding(.leading, 16)
+                        }
+                        row(command)
                     }
-                    row(command)
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
+            .frame(maxHeight: min(CGFloat(found.count) * 44 + 8, 5.5 * 44 + 8))
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollIndicators(.visible)
             .foregroundStyle(palette.text)
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .padding(.horizontal, 12)
