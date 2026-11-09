@@ -35,7 +35,13 @@ _phone-build device configuration:
     device="$(just _device "{{device}}")"
     # -allowProvisioningDeviceRegistration: a device seen for the first time joins the team's
     # development profile, instead of failing with "profile doesn't include the device".
-    {{xcodebuild}} -allowProvisioningDeviceRegistration -configuration {{configuration}} -destination "id=$device" build | xcbeautify --quiet
+    # An App Store Connect API key (BERGR_ASC_KEY_PATH/_ID/_ISSUER, e.g. in .envrc.local) signs
+    # without Xcode's login, which command-line builds don't always see.
+    auth=()
+    if [ -n "${BERGR_ASC_KEY_PATH:-}" ]; then
+        auth=(-authenticationKeyPath "${BERGR_ASC_KEY_PATH/#\~/$HOME}" -authenticationKeyID "$BERGR_ASC_KEY_ID" -authenticationKeyIssuerID "$BERGR_ASC_KEY_ISSUER")
+    fi
+    {{xcodebuild}} -allowProvisioningDeviceRegistration ${auth[@]+"${auth[@]}"} -configuration {{configuration}} -destination "id=$device" build | xcbeautify --quiet
 
 # Build and run in the simulator (BERGR_SIMULATOR, default "iPhone 17 Pro")
 sim:
