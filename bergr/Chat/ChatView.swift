@@ -38,7 +38,6 @@ struct ChatView: View {
     @FocusState private var searchFocused: Bool
     /// The search field's text; while it has any, only the matching rows show.
     @State private var query = ""
-    @FocusState private var focused: Bool
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -586,10 +585,15 @@ struct ChatView: View {
             AttachmentStrip(attachments: $attachments, palette: palette)
                 .padding(.horizontal, 12)
                 .padding(.top, attachments.isEmpty ? 0 : 10)
-            TextField(prompt, text: $draft, axis: .vertical)
-                .lineLimit(1...6)
-                .focused($focused)
-                .disabled(!canType)
+            ComposerField(
+                text: $draft, placeholder: prompt,
+                textColor: UIColor(palette.text), placeholderColor: UIColor(palette.secondary),
+                enabled: canType
+            ) { images in
+                for image in images where attachments.count < ChatAttachment.limit {
+                    if let item = ChatAttachment.make(from: image) { attachments.append(item) }
+                }
+            }
                 .padding(.top, 12)
                 .padding(.bottom, 4)
                 .padding(.horizontal, 16)
