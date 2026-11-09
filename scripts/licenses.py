@@ -50,6 +50,10 @@ highway = zig_pkg(GHOSTTY / "pkg/highway/build.zig.zon", "")
 wuffs = zig_pkg(GHOSTTY / "pkg/wuffs/build.zig.zon", "")
 
 licenses = [
+    # Bergr is a modified Hirte: its notice and the Apache license it's under come first.
+    {"name": "Hirte", "url": "https://github.com/glattziehen/hirte", "license": "Apache-2.0",
+     "text": "Copyright 2026 Pavel Zwerschke\n\nBergr is a modified version of Hirte, licensed under the "
+             "Apache License, Version 2.0.\n\n" + read(ROOT / "NOTICE", ROOT / "LICENSE")},
     {"name": "Ghostty", "url": "https://github.com/ghostty-org/ghostty", "license": "MIT",
      "text": read(GHOSTTY / "LICENSE")},
     {"name": "Zig standard library", "url": "https://github.com/ziglang/zig", "license": "MIT",

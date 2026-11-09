@@ -32,6 +32,10 @@ struct ChatView: View {
     @State private var workingSeen: Date?
     /// Where the conversation is scrolled; starts at the latest message.
     @State private var position = ScrollPosition(edge: .bottom)
+    /// How many rows to draw. The list isn't lazy, so a long conversation drawn whole is slow to
+    /// open and to scroll; the latest rows show, earlier ones a tap away. Search looks at all.
+    @State private var rowLimit = Self.rowPage
+    private static let rowPage = 150
     /// Scrolled well up from the latest message: a button brings it back.
     @State private var awayFromLatest = false
     /// The search field at the top shows while searching; closing it clears the search.
@@ -84,7 +88,9 @@ struct ChatView: View {
     }
 
     var body: some View {
-        let shown = shownRows
+        let all = shownRows
+        let hidden = search == nil ? max(0, all.count - rowLimit) : 0
+        let shown = hidden > 0 ? Array(all.suffix(rowLimit)) : all
         let shownReplies = shownPending
         ScrollView {
             // Not lazy: every row is measured, so the list never grows by an estimate and shrinks
@@ -92,6 +98,20 @@ struct ChatView: View {
             // between estimated and real heights (the list drifting by itself).
             VStack(alignment: .leading, spacing: 18) {
                 if search == nil { placeholder }
+                if hidden > 0 {
+                    Button {
+                        let first = shown.first?.id
+                        rowLimit += Self.rowPage
+                        // Stay where you were: the earlier rows land above it.
+                        if let first { position.scrollTo(id: first, anchor: .top) }
+                    } label: {
+                        Label("Earlier messages", systemImage: "arrow.up")
+                            .font(.footnote.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .foregroundStyle(palette.secondary)
+                    .accessibilityHint("\(hidden) more")
+                }
                 Group {
                     ForEach(shown) { row in
                         rowView(row).transition(transition(for: row))
@@ -146,6 +166,8 @@ struct ChatView: View {
                         .transition(.opacity)
                 }
             }
+            // Rows are scroll targets, so showing earlier ones can keep your place.
+            .scrollTargetLayout()
             .animation(motion, value: shown.count)
             .animation(motion, value: feed.items.count)
             .animation(motion, value: feed.subagents.count)
