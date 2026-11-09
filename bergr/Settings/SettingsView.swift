@@ -23,11 +23,13 @@ struct SettingsView: View {
 
     private static func helperText(_ state: PushRegistration.HelperState?) -> String {
         switch state {
+        case .checking: "checking…"
+        case .failed(let reason): "couldn't check: \(reason)"
         case .current: "helper running"
         case .installing: "installing…"
         case .missing: "not installed"
         case .outdated: "helper needs an update"
-        case nil: "checking…"
+        case nil: "waiting to check…"
         }
     }
 
@@ -102,6 +104,9 @@ struct SettingsView: View {
                             Spacer()
                             if state == .missing || state == .outdated {
                                 Button(state == .outdated ? "Update" : "Install") { push.installFromSettings(on: session) }
+                                    .buttonStyle(.borderless)
+                            } else if state == nil || { if case .failed = state { true } else { false } }() {
+                                Button("Check") { Task { await push.checkHelper(on: session) } }
                                     .buttonStyle(.borderless)
                             }
                         }

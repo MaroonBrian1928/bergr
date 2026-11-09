@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 2
+VERSION = 3
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 ALERT_STATES = ("blocked", "done")
 KINDS = ("permission", "question", "auth")
@@ -264,7 +264,7 @@ def send_ntfy(cfg, title, body, address):
         return value.encode("latin-1", "replace").decode("latin-1")  # urllib sends headers as latin-1
     req = urllib.request.Request(
         cfg["ntfy"]["url"], data=body.encode("utf-8"), method="POST",
-        headers={"Title": header(title),
+        headers={"Title": header(title), "User-Agent": f"bergr-notify/{VERSION}",
                  "Click": "bergr://terminal/" + urllib.parse.quote(address, safe="")})
     with urllib.request.urlopen(req, timeout=15) as resp:
         resp.read()
@@ -274,7 +274,9 @@ def relay_request(device, title, body, address, host):
     """(url, headers, body bytes) for a push through the relay."""
     url = device["relay"].rstrip("/") + "/v1/push"
     payload = {"title": title[:100], "body": body[:400], "address": address[:64], "host": host[:100]}
-    headers = {"authorization": "Bearer " + device["secret"], "content-type": "application/json"}
+    # Cloudflare turns away Python's default User-Agent (error 1010), so name ourselves.
+    headers = {"authorization": "Bearer " + device["secret"], "content-type": "application/json",
+               "user-agent": f"bergr-notify/{VERSION}"}
     return url, headers, json.dumps(payload).encode("utf-8")
 
 

@@ -30,7 +30,7 @@ final class PushRegistration {
         let hostName: String
         let isUpdate: Bool
     }
-    enum HelperState: Equatable { case current, missing, outdated, installing }
+    enum HelperState: Equatable { case checking, current, missing, outdated, installing, failed(String) }
     var pendingInstall: PendingInstall?
     /// What the last check found on each machine, for Settings.
     private(set) var helperState: [UUID: HelperState] = [:]
@@ -148,6 +148,7 @@ final class PushRegistration {
             Task { @MainActor [weak self] in
                 if await Self.run(command, on: session) == false {
                     if self?.written[id]?.state == state { self?.written[id] = nil }
+                    if enabled { self?.helperState[id] = .failed("couldn't save this phone on the machine (is python3 there?)") }
                     return
                 }
                 if enabled { await self?.checkHelper(on: session) } else { await self?.removeHelper(on: session) }
@@ -160,11 +161,40 @@ final class PushRegistration {
     }
 
     private static func output(_ command: String, on session: HostSession) async -> String? {
-        guard let pipe = try? await session.openExec(command) else { return nil }
-        defer { pipe.close() }
-        var out = Data()
-        do { for try await chunk in pipe.output { out.append(chunk) } } catch { return nil }
-        return String(decoding: out, as: UTF8.self)
+        try? await outputOrError(command, on: session)
+    }
+
+    /// The command's output; gives up after 20 seconds so a stuck channel can't hang a check.
+    private static func outputOrError(_ command: String, on session: HostSession) async throws -> String {
+        try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask {
+                let pipe = try await session.openExec(command)
+                defer { pipe.close() }
+                var out = Data()
+                do {
+                    for try await chunk in pipe.output { out.append(chunk) }
+                } catch {
+                    // Citadel can report the channel as already closed after the command has
+                    // answered and exited (NIO ChannelError.alreadyClosed, seen with Citadel
+                    // 0.12); the answer is complete, so keep it.
+                    if out.isEmpty { throw error }
+                }
+                return String(decoding: out, as: UTF8.self)
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(20))
+                throw HelperError("no answer after 20 seconds")
+            }
+            let first = try await group.next()!
+            group.cancelAll()
+            return first
+        }
+    }
+
+    struct HelperError: LocalizedError {
+        let message: String
+        init(_ message: String) { self.message = message }
+        var errorDescription: String? { message }
     }
 
     // MARK: Helper service
@@ -202,17 +232,35 @@ final class PushRegistration {
     }
 
     private static func helperResult(_ op: String, script: String? = nil, on session: HostSession) async -> [String: Any]? {
-        guard let installer else { return nil }
+        try? await helperResultOrError(op, script: script, on: session)
+    }
+
+    private static func helperResultOrError(_ op: String, script: String? = nil, on session: HostSession) async throws -> [String: Any] {
+        guard let installer else { throw HelperError("the installer is missing from the app") }
         let command = installerCommand(installer: installer, op: op, script: script)
-        guard let out = await output(command, on: session) else { return nil }
+        let out = try await outputOrError(command, on: session)
         let line = out.split(separator: "\n").last.map(String.init) ?? ""
-        return (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any]
+        guard let object = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else {
+            throw HelperError(line.isEmpty ? "no answer from the machine" : "unexpected answer: \(line.prefix(120))")
+        }
+        return object
     }
 
     /// Asks once (per machine) to install or update the helper when it is missing or older than the bundled one.
-    private func checkHelper(on session: HostSession) async {
-        guard let bundled = Self.bundledVersion, let status = await Self.helperResult("status", on: session) else { return }
+    func checkHelper(on session: HostSession) async {
         let id = session.host.id
+        guard let bundled = Self.bundledVersion else {
+            helperState[id] = .failed("the helper is missing from the app")
+            return
+        }
+        helperState[id] = .checking
+        let status: [String: Any]
+        do {
+            status = try await Self.helperResultOrError("status", on: session)
+        } catch {
+            helperState[id] = .failed(error.localizedDescription)
+            return
+        }
         let installed = status["installed"] as? Bool ?? false
         let version = status["version"] as? Int
         if installed, let version, version >= bundled {
