@@ -1152,7 +1152,7 @@ private struct WorkingRow: View {
     private enum Motion: CaseIterable { case rotate, bounce, wiggle, pulse, breathe, layers }
     // Symbols with parts that move on their own (orbits, sand, rays, dots), animated part by part.
     private static let marks: [(symbol: String, motion: Motion)] = [
-        ("sparkles", .layers), ("atom", .rotate), ("hourglass", .rotate), ("lightbulb.max", .layers),
+        ("sparkles", .layers), ("gearshape.2", .rotate), ("atom", .rotate), ("hourglass", .rotate), ("lightbulb.max", .layers),
         ("wand.and.stars", .layers), ("waveform", .layers), ("brain", .pulse), ("sparkle", .breathe),
         ("progress.indicator", .layers), ("ellipsis.bubble", .layers), ("sparkle.magnifyingglass", .wiggle),
         ("wand.and.rays", .bounce),
@@ -1171,8 +1171,8 @@ private struct WorkingRow: View {
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(palette.accent)
                     .frame(width: 18)
-                    .id(mark.symbol)
-                    .transition(.symbolEffect(.drawOn.byLayer))
+                    // One symbol becomes the next: shared parts morph, the rest swap layer by layer.
+                    .contentTransition(.symbolEffect(.replace.magic(fallback: .replace.byLayer.offUp)))
                     .symbolEffect(.rotate.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .rotate)
                     .symbolEffect(.bounce.up.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .bounce)
                     .symbolEffect(.wiggle.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .wiggle)
