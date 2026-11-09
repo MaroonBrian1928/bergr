@@ -5,6 +5,14 @@ import UIKit
 
 /// Draws a `ScreenFrame` cell by cell and turns touches and keys into terminal input.
 final class TerminalCanvasView: UIView, UITextInput {
+    // While hidden (the chat covers it), changes on the screen don't draw: they would still
+    // fill the layer's backing store on every change. It draws once when shown again.
+    override var isHidden: Bool {
+        didSet { if !isHidden && oldValue { super.setNeedsDisplay() } }
+    }
+    override func setNeedsDisplay() { if !isHidden { super.setNeedsDisplay() } }
+    override func setNeedsDisplay(_ rect: CGRect) { if !isHidden { super.setNeedsDisplay(rect) } }
+
     var model: TerminalScreenModel? {
         didSet {
             guard model !== oldValue else { return }

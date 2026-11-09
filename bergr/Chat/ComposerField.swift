@@ -24,6 +24,13 @@ struct ComposerField: UIViewRepresentable {
         view.isScrollEnabled = false
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         view.accessibilityIdentifier = "reply-field"
+        // On the Mac, the system's typing suggestions for this field kept running while the chat
+        // scrolled (a third of the time spent scrolling). Spelling stays checked.
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            view.inlinePredictionType = .no
+            view.autocorrectionType = .no
+            view.smartInsertDeleteType = .no
+        }
         view.placeholder.font = view.font
         view.placeholder.adjustsFontForContentSizeCategory = true
         return view

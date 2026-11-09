@@ -34,6 +34,9 @@ struct ChatView: View {
     @State private var workingSeen: Date?
     /// Where the conversation is scrolled; starts at the latest message.
     @State private var position = ScrollPosition(edge: .bottom)
+    /// While the list moves, its rows don't answer the pointer: on the Mac every pointer move over
+    /// moving content was checked against every message (a quarter of the time spent scrolling).
+    @State private var scrolling = false
     /// How many rows to draw. The list isn't lazy, so a long conversation drawn whole is slow to
     /// open and to scroll; the latest rows show, earlier ones a tap away. Search looks at all.
     @State private var rowLimit = Self.rowPage
@@ -120,7 +123,11 @@ struct ChatView: View {
                 }
                 Group {
                     ForEach(shown) { row in
-                        rowView(row).transition(transition(for: row))
+                        rowView(row)
+                            // A row is hit as its box, not its text's outline: matching the outline
+                            // on every pointer move made scrolling slow on the Mac.
+                            .contentShape(.rect)
+                            .transition(transition(for: row))
                     }
                 }
                 // The read conversation arrives in one step: fade it in where it lands (no slide).
@@ -188,8 +195,10 @@ struct ChatView: View {
                         .transition(.opacity)
                 }
             }
-            // Rows are scroll targets, so showing earlier ones can keep your place.
-            .scrollTargetLayout()
+            .allowsHitTesting(!scrolling)
+            // Not a scroll target layout: with one, the scroll position followed the top row as
+            // the list scrolled, and each change rebuilt the chat and redrew its text (slow on the
+            // Mac). Showing earlier rows still scrolls to the old first row by its id.
             .animation(motion, value: shown.count)
             .animation(motion, value: feed.items.count)
             .animation(motion, value: feed.subagents.count)
@@ -205,6 +214,9 @@ struct ChatView: View {
             .frame(maxWidth: .infinity)
         }
         .scrollPosition($position)
+        .onScrollPhaseChange { _, phase in
+            if scrolling != phase.isScrolling { scrolling = phase.isScrolling }
+        }
         .defaultScrollAnchor(.bottom)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
         #if DEBUG
