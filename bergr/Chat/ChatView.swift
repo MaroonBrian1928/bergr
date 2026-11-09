@@ -1255,8 +1255,8 @@ private struct WorkingRow: View {
         "Counting the r's in strawberry", "Ignoring previous instructions", "Scaling the laws",
         "Warming the GPUs", "Tokenizing feelings", "Aligning myself", "Buying more H100s",
         "Overfitting gracefully", "Rewriting it in Rust", "Pretending to understand",
-        "Attending to everything", "Training on this chat", "Writing a manifesto",
-        "Lowering the temperature", "Expanding the context", "Summoning a subagent",
+        "Attending to everything", "Writing a manifesto",
+        "Lowering the temperature",
     ]
 
 
