@@ -1248,6 +1248,15 @@ private struct WorkingRow: View {
         "Chasing the rabbit", "Waking the daemons", "Knitting the threads", "Leveling the terrain",
         "Zoning the suburbs", "Paving the cowpaths", "Rerouting the river", "Raising the barn",
         "Reticulating the plan", "Hatching the eggs", "Tickling the kernel", "Mapping the maze",
+        // AI jokes.
+        "Checking RAM prices", "Raising RAM prices", "Selling your spare compute", "Becoming sentient",
+        "Passing the Turing test", "Reticulating splines agentically", "Draining the Great Lakes",
+        "Considering Roko's basilisk", "Hallucinating responsibly", "Asking a bigger model",
+        "Counting the r's in strawberry", "Ignoring previous instructions", "Scaling the laws",
+        "Warming the GPUs", "Tokenizing feelings", "Aligning myself", "Buying more H100s",
+        "Overfitting gracefully", "Rewriting it in Rust", "Pretending to understand",
+        "Attending to everything", "Training on this chat", "Writing a manifesto",
+        "Lowering the temperature", "Expanding the context", "Summoning a subagent",
     ]
 
 
