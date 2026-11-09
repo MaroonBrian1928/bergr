@@ -1150,12 +1150,12 @@ private struct WorkingRow: View {
 
     /// What turns beside the words: a different symbol and motion with each new phrase.
     private enum Motion: CaseIterable { case rotate, bounce, wiggle, pulse, breathe, layers }
+    // Symbols with parts that move on their own (orbits, sand, rays, dots), animated part by part.
     private static let marks: [(symbol: String, motion: Motion)] = [
-        ("sparkle", .rotate), ("gearshape.2", .rotate), ("hammer", .wiggle), ("wand.and.stars", .bounce),
-        ("hourglass", .rotate), ("lightbulb.max", .pulse), ("cpu", .breathe), ("atom", .rotate),
-        ("wind", .layers), ("dice", .bounce), ("puzzlepiece", .wiggle), ("flame", .breathe),
-        ("cloud.sun", .bounce), ("leaf", .wiggle), ("waveform", .layers), ("hare", .bounce),
-        ("tortoise", .wiggle), ("sparkles", .pulse), ("wrench.and.screwdriver", .wiggle), ("globe.americas", .rotate),
+        ("sparkles", .layers), ("atom", .rotate), ("hourglass", .rotate), ("lightbulb.max", .layers),
+        ("wand.and.stars", .layers), ("waveform", .layers), ("brain", .pulse), ("sparkle", .breathe),
+        ("progress.indicator", .layers), ("ellipsis.bubble", .layers), ("sparkle.magnifyingglass", .wiggle),
+        ("wand.and.rays", .bounce),
     ]
 
     var body: some View {
@@ -1164,20 +1164,21 @@ private struct WorkingRow: View {
             // A new phrase every 3 s, in an order of its own for each run.
             let step = seconds / 3
             let seed = Int(since.timeIntervalSince1970)
-            let verb = Self.phrases[(step &* 7 &+ seed) % Self.phrases.count]
-            let mark = Self.marks[(step &* 3 &+ seed / 7) % Self.marks.count]
+            let verb = Self.phrases[Self.order(Self.phrases.count, seed: seed)[step % Self.phrases.count]]
+            let mark = Self.marks[Self.order(Self.marks.count, seed: seed &+ 1)[step % Self.marks.count]]
             HStack(spacing: 8) {
                 Image(systemName: mark.symbol)
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(palette.accent)
                     .frame(width: 18)
-                    .contentTransition(.symbolEffect(.replace.magic(fallback: .downUp.byLayer)))
-                    .symbolEffect(.rotate, options: .repeating, isActive: !reduceMotion && mark.motion == .rotate)
+                    .id(mark.symbol)
+                    .transition(.symbolEffect(.drawOn.byLayer))
+                    .symbolEffect(.rotate.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .rotate)
                     .symbolEffect(.bounce.up.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .bounce)
-                    .symbolEffect(.wiggle, options: .repeating, isActive: !reduceMotion && mark.motion == .wiggle)
+                    .symbolEffect(.wiggle.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .wiggle)
                     .symbolEffect(.pulse.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .pulse)
-                    .symbolEffect(.breathe, options: .repeating, isActive: !reduceMotion && mark.motion == .breathe)
-                    .symbolEffect(.variableColor.iterative.reversing, options: .repeating,
+                    .symbolEffect(.breathe.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .breathe)
+                    .symbolEffect(.variableColor.iterative.dimInactiveLayers.nonReversing, options: .repeating,
                                   isActive: !reduceMotion && mark.motion == .layers)
                     .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: mark.symbol)
                 HStack(spacing: 0) {
@@ -1202,6 +1203,12 @@ private struct WorkingRow: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(agent.displayName) is working" + (detail.map { ": \($0)" } ?? ""))
+    }
+
+    /// A shuffled order of 0..<count, the same for one run (one `since`) and different for the next.
+    static func order(_ count: Int, seed: Int) -> [Int] {
+        var rng = SeededRandom(seed: UInt64(bitPattern: Int64(seed)))
+        return Array(0..<count).shuffled(using: &rng)
     }
 
     static func elapsed(_ seconds: Int) -> String {
@@ -1463,5 +1470,18 @@ private struct PermissionsMenu: View {
             Label("Permissions" + (current.map { " · \($0)" } ?? ""), systemImage: "lock.shield")
         }
         .disabled(!enabled)
+    }
+}
+
+/// SplitMix64: a repeatable sequence from one number.
+struct SeededRandom: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
     }
 }
