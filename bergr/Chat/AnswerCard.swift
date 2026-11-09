@@ -243,7 +243,7 @@ struct AnswerCard: View {
             } label: {
                 Text("Run /login")
                     .font(.callout.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(palette.onAccent)
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .background(palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
@@ -271,7 +271,7 @@ struct AnswerCard: View {
             } label: {
                 Text("Close Rewind")
                     .font(.callout.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(palette.onAccent)
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .background(palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
@@ -328,7 +328,7 @@ struct AnswerCard: View {
                             .multilineTextAlignment(.leading)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .foregroundStyle(primary ? Color.white : palette.text)
+                    .foregroundStyle(primary ? palette.onAccent : palette.text)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .frame(minHeight: 44)
@@ -437,7 +437,7 @@ struct LoginStepCard: View {
                 } label: {
                     Text("Sign In")
                         .font(.callout.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(palette.onAccent)
                         .frame(maxWidth: .infinity, minHeight: 44)
                         .background(palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
@@ -452,7 +452,7 @@ struct LoginStepCard: View {
                 } label: {
                     Text("Continue")
                         .font(.callout.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(palette.onAccent)
                         .frame(maxWidth: .infinity, minHeight: 44)
                         .background(palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }

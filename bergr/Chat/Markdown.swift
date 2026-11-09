@@ -102,10 +102,14 @@ enum MarkdownBlock: Hashable {
     }
 }
 
-/// The chat's colors, in the spirit of Claude's apps.
+/// The chat's colors.
 struct ChatPalette {
     let background, text, secondary, codeText, codeBackground, bubble, field, border: Color
-    let accent = Color(red: 0xd9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
+    /// Bergr's gold, from the app icon: the logo's own gold in dark mode, a deeper one in light
+    /// mode so text and thin strokes stay readable on the cream background.
+    var accent: Color { Color("AccentColor") }
+    /// Text and icons on an accent fill: the icon's dark navy on the bright gold, white on the deeper one.
+    var onAccent: Color { Color("OnAccentColor") }
 
     static func of(_ scheme: ColorScheme) -> ChatPalette {
         scheme == .dark

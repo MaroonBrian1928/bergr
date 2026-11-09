@@ -614,7 +614,7 @@ struct ChatView: View {
                 } label: {
                     Image(systemName: stops ? "stop.fill" : "arrow.up")
                         .font(stops ? .footnote : .body.weight(.semibold))
-                        .foregroundStyle(stops ? palette.text : ready ? Color.white : palette.secondary)
+                        .foregroundStyle(stops ? palette.text : ready ? palette.onAccent : palette.secondary)
                         .contentTransition(.symbolEffect(.replace))
                         .frame(width: 34, height: 34)
                         .background(ready && !stops ? palette.accent : palette.bubble, in: Circle())
