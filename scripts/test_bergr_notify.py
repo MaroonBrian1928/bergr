@@ -241,5 +241,28 @@ class ApnsKeyTests(unittest.TestCase):
             notify.apns_key({"team_id": "T", "sandbox": {"key_id": "S", "key_path": "s"}}, False)
 
 
+class RelayTests(unittest.TestCase):
+    DEVICE = {"id": "abcd", "relay": "https://relay.example/", "secret": "s3cret", "name": "Phone"}
+
+    def test_relay_request(self):
+        url, headers, data = notify.relay_request(self.DEVICE, "T" * 150, "body", "t1", "pop")
+        self.assertEqual(url, "https://relay.example/v1/push")
+        self.assertEqual(headers["authorization"], "Bearer s3cret")
+        payload = json.loads(data)
+        self.assertEqual(len(payload["title"]), 100)
+        self.assertEqual(payload["address"], "t1")
+        self.assertNotIn("token", payload)
+
+    def test_relay_devices_need_no_key(self):
+        sent = []
+        orig = notify.send_relay
+        notify.send_relay = lambda d, *a: sent.append(d["id"])
+        try:
+            n = notify.send_alert({"devices": [self.DEVICE]}, "t", "b", "t1", "pop", notify.JwtCache())
+        finally:
+            notify.send_relay = orig
+        self.assertEqual((n, sent), (1, ["abcd"]))
+
+
 if __name__ == "__main__":
     unittest.main()

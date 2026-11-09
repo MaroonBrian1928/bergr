@@ -1,10 +1,11 @@
 #!/usr/bin/env python3 -I
 """Tests for bergr/Push/install-helper.py. Run: python3 -I scripts/test_install_helper.py"""
-import base64, json, os, stat, subprocess, sys, tempfile, unittest
+import base64, json, os, re, stat, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INSTALLER = os.path.join(HERE, "..", "bergr", "Push", "install-helper.py")
 NOTIFY = os.path.join(HERE, "..", "bergr", "Push", "bergr-notify.py")
+NOTIFY_VERSION = int(re.search(r"^VERSION = (\d+)", open(NOTIFY).read(), re.M).group(1))
 LOADER = "import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))"
 
 
@@ -39,7 +40,7 @@ class InstallHelperTests(unittest.TestCase):
     def test_linux_install(self):
         r = self.run_op("install", script=self.script)
         self.assertTrue(r["ok"])
-        self.assertEqual(r["version"], 1)
+        self.assertEqual(r["version"], NOTIFY_VERSION)
         script = self.path(".local", "bin", "bergr-notify")
         self.assertEqual(stat.S_IMODE(os.stat(script).st_mode), 0o755)
         unit = open(self.path(".config", "systemd", "user", "bergr-notify.service")).read()
@@ -67,7 +68,7 @@ class InstallHelperTests(unittest.TestCase):
         self.run_op("install", script=self.script)
         r = self.run_op("status")
         self.assertTrue(r["installed"])
-        self.assertEqual(r["version"], 1)
+        self.assertEqual(r["version"], NOTIFY_VERSION)
         self.assertEqual(r["os"], "linux")
 
     def test_uninstall_keeps_config(self):

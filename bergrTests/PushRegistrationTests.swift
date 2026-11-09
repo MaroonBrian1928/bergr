@@ -7,17 +7,25 @@ struct PushRegistrationTests {
         #expect(PushRegistration.hex(Data([0x00, 0xAB, 0x0F, 0xFF])) == "00ab0fff")
     }
 
-    @Test func payloadCarriesDevice() throws {
-        let data = PushRegistration.payload(token: "ab12", enabled: true, bundleID: "com.example.bergr", name: "Phone")
+    @Test func payloadCarriesRelaySecretNotToken() throws {
+        let relay = URL(string: "https://relay.example")!
+        let data = PushRegistration.payload(token: "ab12", secret: "s3cret", enabled: true, relay: relay, name: "Phone")
         let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(object["op"] as? String == "add")
         let device = try #require(object["device"] as? [String: Any])
-        #expect(device["token"] as? String == "ab12")
-        #expect(device["bundle_id"] as? String == "com.example.bergr")
+        #expect(device["token"] == nil)
+        #expect(device["secret"] as? String == "s3cret")
+        #expect(device["relay"] as? String == "https://relay.example")
+        #expect(device["id"] as? String == PushRegistration.deviceID(token: "ab12"))
         #expect(device["name"] as? String == "Phone")
-        #expect(device["sandbox"] is Bool)
-        let removed = PushRegistration.payload(token: "ab12", enabled: false, bundleID: nil, name: "Phone")
+        let removed = PushRegistration.payload(token: "ab12", secret: "s3cret", enabled: false, relay: relay, name: "Phone")
         #expect((try JSONSerialization.jsonObject(with: removed) as? [String: Any])?["op"] as? String == "remove")
+    }
+
+    @Test func deviceIDIsStableAndHidesToken() {
+        #expect(PushRegistration.deviceID(token: "ab12") == PushRegistration.deviceID(token: "ab12"))
+        #expect(PushRegistration.deviceID(token: "ab12").count == 16)
+        #expect(PushRegistration.deviceID(token: "ab12") != PushRegistration.deviceID(token: "ab13"))
     }
 
     @Test func commandEncodesScriptAndPayload() throws {

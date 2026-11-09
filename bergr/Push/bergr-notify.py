@@ -18,11 +18,12 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 1
+VERSION = 2
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 ALERT_STATES = ("blocked", "done")
 KINDS = ("permission", "question", "auth")
@@ -269,10 +270,40 @@ def send_ntfy(cfg, title, body, address):
         resp.read()
 
 
+def relay_request(device, title, body, address, host):
+    """(url, headers, body bytes) for a push through the relay."""
+    url = device["relay"].rstrip("/") + "/v1/push"
+    payload = {"title": title[:100], "body": body[:400], "address": address[:64], "host": host[:100]}
+    headers = {"authorization": "Bearer " + device["secret"], "content-type": "application/json"}
+    return url, headers, json.dumps(payload).encode("utf-8")
+
+
+def send_relay(device, title, body, address, host):
+    url, headers, data = relay_request(device, title, body, address, host)
+    req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            resp.read()
+    except urllib.error.HTTPError as e:
+        if e.code == 410:
+            raise RuntimeError("the phone is no longer registered (turn push alerts off and on again in Bergr)")
+        raise RuntimeError(f"relay HTTP {e.code}: {e.read()[:200].decode('utf-8', 'replace')}")
+
+
 def send_alert(cfg, title, body, address, host, jwt_cache):
-    """Sends one alert to every device (apns) or to the ntfy topic. Returns the successful sends."""
-    mode = cfg.get("mode")
+    """Sends one alert to every device (through its relay, or straight to APNs with a key on this
+    machine) or to the ntfy topic. Returns the successful sends."""
+    mode = cfg.get("mode", "apns")
     sent = 0
+    devices = [d for d in cfg.get("devices") or [] if isinstance(d, dict)]
+    # Devices registered through a relay carry its address and a secret; the relay holds the key.
+    for device in [d for d in devices if d.get("relay") and d.get("secret")]:
+        try:
+            send_relay(device, title, body, address, host)
+            sent += 1
+        except Exception as e:
+            log(f"push to {device.get('name', 'device')} through the relay failed: {e}")
+    cfg = dict(cfg, devices=[d for d in devices if not (d.get("relay") and d.get("secret"))])
     if mode == "apns":
         now = int(time.time())
         for device in cfg.get("devices") or []:

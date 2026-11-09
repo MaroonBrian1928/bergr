@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import HerdrKit
 import Observation
@@ -58,7 +59,59 @@ final class PushRegistration {
 
     func didRegister(token: Data) {
         lastError = nil
-        deviceToken = Self.hex(token)
+        let hex = Self.hex(token)
+        Task { await registerWithRelay(token: hex) }
+    }
+
+    // MARK: Relay
+
+    /// The push relay (relay/ in the repo). Builds signed by someone else can point at their own
+    /// with the `bergr.push.relay` default.
+    nonisolated static var relayURL: URL {
+        UserDefaults.standard.string(forKey: "bergr.push.relay").flatMap(URL.init(string:))
+            ?? URL(string: "https://bergr-relay.bergr.workers.dev")!
+    }
+
+    #if DEBUG
+    nonisolated static let sandbox = true
+    #else
+    nonisolated static let sandbox = false
+    #endif
+
+    private static let secretKey = "bergr.push.secret"
+
+    /// Registers this token with the relay once and keeps the secret it hands out; machines get
+    /// only that secret, never the token or a signing key.
+    private func registerWithRelay(token: String) async {
+        let saved = UserDefaults.standard.dictionary(forKey: Self.secretKey) as? [String: String]
+        if saved?["token"] == token, saved?["relay"] == Self.relayURL.absoluteString, saved?["secret"] != nil {
+            deviceToken = token
+            return
+        }
+        var request = URLRequest(url: Self.relayURL.appending(path: "v1/register"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "token": token, "bundle_id": Bundle.main.bundleIdentifier ?? "", "sandbox": Self.sandbox])
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            guard (response as? HTTPURLResponse)?.statusCode == 200, let secret = object?["secret"] as? String else {
+                lastError = "The push relay refused this device: \(object?["error"] as? String ?? "no answer")"
+                return
+            }
+            UserDefaults.standard.set(
+                ["token": token, "secret": secret, "relay": Self.relayURL.absoluteString], forKey: Self.secretKey)
+            deviceToken = token
+        } catch {
+            lastError = "Couldn't reach the push relay: \(error.localizedDescription)"
+        }
+    }
+
+    /// The relay secret for the current token.
+    var relaySecret: String? {
+        let saved = UserDefaults.standard.dictionary(forKey: Self.secretKey) as? [String: String]
+        return saved?["token"] == deviceToken ? saved?["secret"] : nil
     }
 
     func didFail(_ error: Error) { lastError = error.localizedDescription }
@@ -89,7 +142,8 @@ final class PushRegistration {
             let identity = ObjectIdentifier(session)
             if let last = written[id], last.session == identity, last.state == state { continue }
             written[id] = (identity, state)
-            let command = Self.command(token: token, enabled: current.0)
+            guard let secret = relaySecret else { continue }
+            let command = Self.command(token: token, secret: secret, enabled: current.0)
             let enabled = current.0
             Task { @MainActor [weak self] in
                 if await Self.run(command, on: session) == false {
@@ -208,22 +262,23 @@ final class PushRegistration {
 
     // MARK: Command
 
-    /// What goes in the payload for this device.
-    nonisolated static func payload(token: String, enabled: Bool, bundleID: String? = Bundle.main.bundleIdentifier,
+    /// A stable id for this device on machines, so the token itself never has to be stored there.
+    nonisolated static func deviceID(token: String) -> String {
+        SHA256.hash(data: Data(token.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// What goes in the payload for this device: the relay and its secret, not the APNs token.
+    nonisolated static func payload(token: String, secret: String, enabled: Bool, relay: URL = relayURL,
                                     name: String) -> Data {
-        #if DEBUG
-        let sandbox = true
-        #else
-        let sandbox = false
-        #endif
-        let device: [String: Any] = ["token": token, "bundle_id": bundleID ?? "", "sandbox": sandbox, "name": name]
+        let device: [String: Any] = ["id": deviceID(token: token), "relay": relay.absoluteString,
+                                     "secret": secret, "name": name]
         let object: [String: Any] = ["op": enabled ? "add" : "remove", "device": device]
         return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
     }
 
     /// Script and payload both travel base64-encoded, so no shell quoting can break them.
-    static func command(token: String, enabled: Bool) -> String {
-        command(payload: payload(token: token, enabled: enabled, name: UIDevice.current.name))
+    static func command(token: String, secret: String, enabled: Bool) -> String {
+        command(payload: payload(token: token, secret: secret, enabled: enabled, name: UIDevice.current.name))
     }
 
     nonisolated static func command(payload: Data) -> String {
@@ -231,7 +286,8 @@ final class PushRegistration {
             + Data(mergeScript.utf8).base64EncodedString() + " " + payload.base64EncodedString()
     }
 
-    /// Read-modify-write of push.json: sets "mode" if absent, adds or removes one device by token.
+    /// Read-modify-write of push.json: adds or removes one device by id (entries a machine-held
+    /// key sends to directly carry a token instead and are left alone).
     nonisolated static let mergeScript = """
     import base64, json, os, sys, tempfile
     p = json.loads(base64.b64decode(sys.argv[1]))
@@ -245,11 +301,10 @@ final class PushRegistration {
         c = {}
     if not isinstance(c, dict):
         raise SystemExit("push.json is not an object")
-    c.setdefault("mode", "apns")
     dev = p["device"]
     devs = c.get("devices")
     devs = [x for x in devs if isinstance(x, dict)] if isinstance(devs, list) else []
-    rest = [x for x in devs if x.get("token") != dev["token"]]
+    rest = [x for x in devs if x.get("id") != dev["id"]]
     c["devices"] = rest + [dev] if p["op"] == "add" else rest
     fd, tmp = tempfile.mkstemp(dir=d)
     with os.fdopen(fd, "w") as fh:
