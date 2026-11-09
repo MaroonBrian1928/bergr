@@ -345,5 +345,26 @@ class AsTheAppRunsIt(Base):
         self.assertTrue(any(l.get("t") == "msg" and l.get("text") == "hello" for l in lines), (out, err))
 
 
+
+class PluginCommandsTests(unittest.TestCase):
+    def test_layouts_enabled_and_newest(self):
+        with tempfile.TemporaryDirectory() as home:
+            def skill(path, desc="d"):
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w") as fh:
+                    fh.write(f"---\nname: x\ndescription: {desc}\n---\n")
+            cache = os.path.join(home, ".claude", "plugins", "cache")
+            skill(os.path.join(cache, "m1", "flat", "v1", "delegating", "SKILL.md"))
+            skill(os.path.join(cache, "m2", "nested", "1.0", "skills", "group", "wait-what", "SKILL.md"))
+            skill(os.path.join(cache, "m2", "nested", "0.9", "skills", "group", "old-only", "SKILL.md"))
+            skill(os.path.join(cache, "m3", "off", "v1", "skills", "hidden", "SKILL.md"))
+            old = os.path.join(cache, "m2", "nested", "0.9")
+            os.utime(old, (1, 1))
+            with open(os.path.join(home, ".claude", "settings.json"), "w") as fh:
+                json.dump({"enabledPlugins": {"flat@m1": True, "nested@m2": True, "off@m3": False}}, fh)
+            ns = load("claude", home)
+            names = [n for n, _ in ns["plugin_commands"]()]
+            self.assertEqual(sorted(names), ["/flat:delegating", "/nested:wait-what"])
+
 if __name__ == "__main__":
     unittest.main()

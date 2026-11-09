@@ -896,6 +896,40 @@ def skill_description(path):
     return ""
 
 
+def plugin_commands():
+    """Claude Code plugins' skills and commands, as `/<plugin>:<name>`: only enabled plugins
+    (settings.json "enabledPlugins", "<plugin>@<marketplace>": true), from the newest cached
+    version of each (cache/<marketplace>/<plugin>/<version>/). A skill is any folder holding a
+    SKILL.md, at any depth: plugins lay them out as skills/<name>, skills/<group>/<name> or <name>."""
+    cache = os.path.join(HOME, ".claude", "plugins", "cache")
+    enabled = None
+    try:
+        with open(os.path.join(HOME, ".claude", "settings.json")) as fh:
+            plugins = json.load(fh).get("enabledPlugins")
+        if isinstance(plugins, dict):
+            enabled = {k for k, v in plugins.items() if v}
+    except Exception:
+        pass
+    out = []
+    for plugin_dir in sorted(glob.glob(os.path.join(cache, "*", "*"))):
+        marketplace, plugin = plugin_dir.split(os.sep)[-2:]
+        if enabled is not None and f"{plugin}@{marketplace}" not in enabled:
+            continue
+        versions = [d for d in glob.glob(os.path.join(plugin_dir, "*")) if os.path.isdir(d)]
+        if not versions:
+            continue
+        newest = max(versions, key=os.path.getmtime)
+        for f in sorted(glob.glob(os.path.join(newest, "**", "SKILL.md"), recursive=True)):
+            if os.sep + "node_modules" + os.sep in f:
+                continue
+            out.append((f"/{plugin}:{os.path.basename(os.path.dirname(f))}", skill_description(f)))
+        commands = os.path.join(newest, "commands")
+        for f in sorted(glob.glob(os.path.join(commands, "**", "*.md"), recursive=True)):
+            rel = os.path.relpath(f, commands)[:-3].replace(os.sep, ":")
+            out.append((f"/{plugin}:{rel}", skill_description(f)))
+    return out
+
+
 def list_commands():
     """What can follow `/` (and `$` for Codex skills) in this agent: built-ins, then skills and
     commands installed on this machine and in the project."""
@@ -915,11 +949,8 @@ def list_commands():
             for f in sorted(glob.glob(os.path.join(root, "commands", "**", "*.md"), recursive=True)):
                 rel = os.path.relpath(f, os.path.join(root, "commands"))[:-3].replace(os.sep, ":")
                 add("/" + rel, skill_description(f))
-        # Plugins: cache/<marketplace>/<plugin>/<version>/skills/<skill>/SKILL.md
-        for f in sorted(glob.glob(os.path.join(HOME, ".claude", "plugins", "cache", "*", "*", "*", "skills", "*",
-                                               "SKILL.md"))):
-            parts = f.split(os.sep)
-            add(f"/{parts[-6]}:{parts[-2]}", skill_description(f))
+        for name, desc in plugin_commands():
+            add(name, desc)
     elif AGENT == "codex":
         for name, desc in CODEX_BUILTINS:
             add(name, desc)
