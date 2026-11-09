@@ -24,6 +24,8 @@ struct ChatView: View {
     /// Sent replies, shown at once and until the agent's conversation has them.
     @State private var pending: [Pending] = []
     @State private var sent = 0
+    /// Each Send Now: a firmer tap than a send, felt as stopping the agent.
+    @State private var pushes = 0
     @State private var showingUsage = false
     @State private var selecting: SelectableMessage?
     @State private var showingModels = false
@@ -53,6 +55,10 @@ struct ChatView: View {
         var images = false
         /// No sign of it in the conversation, and the agent didn't start working: offer Retry.
         var failed = false
+        /// Sent now (the agent was stopped for it), not waiting in its queue.
+        var pushed = false
+        /// Waiting in the agent's queue: sent while it worked.
+        var queued = false
 
         /// Whether the conversation has this reply. With images it comes back with the image
         /// paths (or "[Image #1]") in front of the words, so the words only have to end it.
@@ -139,6 +145,14 @@ struct ChatView: View {
                                 copyButton(reply.text)
                             }
                             .accessibilityLabel(reply.failed ? "Not delivered: \(reply.text)" : "Sending: \(reply.text)")
+                        if !reply.failed, reply.queued || reply.pushed {
+                            Label(reply.pushed ? "Sending now" : "Queued, the agent reads it after this step",
+                                  systemImage: reply.pushed ? "bolt.fill" : "clock")
+                                .font(.caption)
+                                .foregroundStyle(reply.pushed ? palette.accent : palette.secondary)
+                                .contentTransition(.symbolEffect(.replace))
+                                .transition(.opacity)
+                        }
                         if reply.failed {
                             HStack(spacing: 12) {
                                 Label("Not delivered", systemImage: "exclamationmark.circle")
@@ -661,6 +675,7 @@ struct ChatView: View {
                 .disabled(!ready && !stops)
                 .accessibilityLabel(stops ? "Interrupt \(agent.displayName)" : "Send")
                 .sensoryFeedback(.impact(weight: .light), trigger: sent)
+                .sensoryFeedback(.impact(weight: .heavy), trigger: pushes)
                 // While the agent works, a tap queues the reply (the agent reads it after its
                 // current step); long-press can stop it and send at once instead.
                 .contextMenu {
@@ -700,6 +715,10 @@ struct ChatView: View {
     /// Stops the agent so the replies waiting in its queue are read now. Claude Code puts queued
     /// messages back in its prompt when interrupted; Return sends them (on an empty prompt it does nothing).
     private func pushNow() {
+        withAnimation(motion) {
+            for i in pending.indices where pending[i].queued { pending[i].pushed = true }
+        }
+        pushes += 1
         Task {
             model.press(.escape)
             try? await Task.sleep(for: .milliseconds(600))
@@ -721,8 +740,11 @@ struct ChatView: View {
         #if DEBUG
         if session?.host.isDemo == true { feed.demoUserSaid(text) }
         #endif
-        let reply = Pending(text: text.isEmpty ? "\(images.count) image\(images.count == 1 ? "" : "s")" : text,
+        var reply = Pending(text: text.isEmpty ? "\(images.count) image\(images.count == 1 ? "" : "s")" : text,
                             images: !images.isEmpty)
+        if state == "working" {
+            if interrupting { reply.pushed = true; pushes += 1 } else { reply.queued = true }
+        }
         pending.append(reply)
         watchDelivery(of: reply.id)
         if reply.images {
