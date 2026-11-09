@@ -526,8 +526,16 @@ struct ChatView: View {
         case .item(let item):
             switch item.kind {
             case .user(let text):
-                UserBubble(text: text, palette: palette)
-                    .contextMenu { copyButton(text) }
+                let parts = SentImages.split(text)
+                VStack(alignment: .trailing, spacing: 6) {
+                    ForEach(parts.paths, id: \.self) { path in
+                        SentImageView(path: path, session: session, palette: palette)
+                    }
+                    if !parts.text.isEmpty || parts.paths.isEmpty {
+                        UserBubble(text: parts.text, palette: palette)
+                            .contextMenu { copyButton(parts.text) }
+                    }
+                }
             case .assistant(let text, let blocks):
                 Group {
                     if !reduceMotion, let since = feed.revealStart[item.id] {
@@ -695,7 +703,11 @@ struct ChatView: View {
             var paths: [String] = []
             if let session, !images.isEmpty {
                 do {
-                    for image in images { paths.append(try await session.uploadImage(image.data)) }
+                    for image in images {
+                        let path = try await session.uploadImage(image.data)
+                        SentImages.store(image.data, for: path)
+                        paths.append(path)
+                    }
                 } catch {
                     // Nothing is sent; the reply comes back so it can be sent again.
                     sendError = "Couldn't send the image: \(error.localizedDescription)"

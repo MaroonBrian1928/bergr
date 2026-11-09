@@ -113,3 +113,15 @@ struct PushRegistrationTests {
         #expect(p3 == nil)
     }
 }
+
+struct SentImagesTests {
+    @Test func splitsPathsFromWords() {
+        let path = "/tmp/bergr-images/8056fc8c-109a-483a-b686-ba1283a89934.jpg"
+        let parts = SentImages.split("\(path) Test")
+        #expect(parts.paths == [path])
+        #expect(parts.text == "Test")
+        #expect(SentImages.split("\(path) \(path)").text.isEmpty)
+        #expect(SentImages.split("no images here").paths.isEmpty)
+        #expect(SentImages.split("/tmp/bergr-images/x.jpg").paths.isEmpty)
+    }
+}
