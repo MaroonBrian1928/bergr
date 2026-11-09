@@ -159,28 +159,7 @@ struct RootView: View {
                 PushRegistration.shared.run(sessions: sessions)
             }
         }
-        .alert(
-            PushRegistration.shared.pendingInstall.map {
-                $0.isUpdate ? "Update the push helper on \($0.hostName)?" : "Install the push helper on \($0.hostName)?"
-            } ?? "",
-            isPresented: Binding(
-                get: { PushRegistration.shared.pendingInstall != nil },
-                set: { if !$0 { PushRegistration.shared.pendingInstall = nil } }),
-            presenting: PushRegistration.shared.pendingInstall
-        ) { pending in
-            Button(pending.isUpdate ? "Update" : "Install") { Task { await PushRegistration.shared.install(on: pending.session) } }
-            Button("Not now", role: .cancel) { PushRegistration.shared.decline(pending) }
-        } message: { _ in
-            Text("It watches your agents with herdr-core and sends an alert when one needs you. It installs to ~/.local/bin/bergr-notify and runs as a user service. Nothing runs as root.")
-        }
-        .alert(
-            PushRegistration.shared.finishedMessage ?? "",
-            isPresented: Binding(
-                get: { PushRegistration.shared.finishedMessage != nil && PushRegistration.shared.pendingInstall == nil },
-                set: { if !$0 { PushRegistration.shared.finishedMessage = nil } })
-        ) {
-            Button("OK", role: .cancel) {}
-        }
+        .modifier(PushPrompts(inSettings: false))
         // The chat on screen doesn't alert about itself.
         .onChange(of: selectedTerminal, initial: true) { _, address in
             notifier?.focusedAddress = selectedHost.wrappedValue.flatMap { host in address.map { (host, $0) } }

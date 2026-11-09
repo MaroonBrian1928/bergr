@@ -64,4 +64,45 @@ struct PushRegistrationTests {
         let object = try #require(try JSONSerialization.jsonObject(with: args) as? [String: String])
         #expect(object == ["op": "install", "script": "VERSION = 1"])
     }
+
+    @Test func payloadIncludesKeyOnlyWhenGiven() throws {
+        let relay = URL(string: "https://relay.example")!
+        let key = Data(repeating: 7, count: 64)
+        func device(_ key: Data?) throws -> [String: Any] {
+            let data = PushRegistration.payload(token: "ab12", secret: "s", enabled: true, relay: relay, name: "P", key: key)
+            let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+            return try #require(object["device"] as? [String: Any])
+        }
+        #expect(try device(key)["key"] as? String == key.base64EncodedString())
+        #expect(try device(nil)["key"] == nil)
+    }
+
+    @Test func unsupportedReasons() {
+        let windows = "Windows isn't supported yet"
+        #expect(PushRegistration.unsupportedReason(uname: "Linux", hasPython: true) == nil)
+        #expect(PushRegistration.unsupportedReason(uname: "Darwin", hasPython: true) == nil)
+        #expect(PushRegistration.unsupportedReason(uname: nil, hasPython: true) == windows)
+        #expect(PushRegistration.unsupportedReason(uname: "MINGW64_NT-10.0", hasPython: true) == windows)
+        #expect(PushRegistration.unsupportedReason(uname: "Linux", hasPython: false) == "python3 isn't installed")
+        let parsed = PushRegistration.parseProbe("Linux\n__python3__\n")
+        #expect(parsed.uname == "Linux" && parsed.hasPython)
+        #expect(PushRegistration.parseProbe("'uname' is not recognized as a command").uname == nil)
+    }
+
+    @Test func installQueueIsFIFOAndDedupes() {
+        struct Item: Identifiable { let id: UUID; let tag: Int }
+        let a = UUID(), b = UUID()
+        var queue = PushRegistration.InstallQueue<Item>()
+        let first = queue.enqueue(Item(id: a, tag: 1))
+        let second = queue.enqueue(Item(id: b, tag: 2))
+        let dup = queue.enqueue(Item(id: a, tag: 3))
+        #expect(first && second && !dup)
+        let p1 = queue.pop()
+        #expect(p1?.tag == 1)
+        #expect(queue.first?.tag == 2)
+        let p2 = queue.pop()
+        let p3 = queue.pop()
+        #expect(p2?.tag == 2)
+        #expect(p3 == nil)
+    }
 }

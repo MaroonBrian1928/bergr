@@ -3,6 +3,7 @@ import Foundation
 import HerdrKit
 import Observation
 import SSHTransport
+import SwiftUI
 import UIKit
 import UserNotifications
 
@@ -17,7 +18,7 @@ final class PushRegistration {
         get { access(keyPath: \.enabled); return UserDefaults.standard.bool(forKey: Self.key) }
         set {
             withMutation(keyPath: \.enabled) { UserDefaults.standard.set(newValue, forKey: Self.key) }
-            if newValue { register() }
+            if newValue { register() } else { unregisterFromRelay() }
         }
     }
     /// Lowercase hex APNs token, once iOS has issued one.
@@ -25,13 +26,33 @@ final class PushRegistration {
     var lastError: String?
 
     /// A machine that needs the helper installed or updated, waiting for the user's answer.
-    struct PendingInstall {
+    struct PendingInstall: Identifiable {
         let session: HostSession
         let hostName: String
         let isUpdate: Bool
+        var id: UUID { session.host.id }
     }
-    enum HelperState: Equatable { case checking, current, missing, outdated, installing, failed(String) }
-    var pendingInstall: PendingInstall?
+    enum HelperState: Equatable { case checking, current, missing, outdated, installing, failed(String), unsupported(String) }
+
+    /// Machines waiting for an answer, first in first out, one machine at most once.
+    struct InstallQueue<Item: Identifiable> where Item.ID == UUID {
+        private(set) var items: [Item] = []
+        var first: Item? { items.first }
+        @discardableResult
+        mutating func enqueue(_ item: Item) -> Bool {
+            guard !items.contains(where: { $0.id == item.id }) else { return false }
+            items.append(item)
+            return true
+        }
+        mutating func remove(_ id: UUID) { items.removeAll { $0.id == id } }
+        @discardableResult
+        mutating func pop() -> Item? { items.isEmpty ? nil : items.removeFirst() }
+    }
+    private(set) var installQueue = InstallQueue<PendingInstall>()
+    /// The machine the prompt is about now.
+    var pendingInstall: PendingInstall? { installQueue.first }
+    /// True while Settings is on screen; it then shows the prompt itself.
+    var settingsOpen = false
     /// Shown once an install or update finished, so the tap has a visible result.
     var finishedMessage: String?
     /// What the last check found on each machine, for Settings.
@@ -116,6 +137,30 @@ final class PushRegistration {
         return saved?["token"] == deviceToken ? saved?["secret"] : nil
     }
 
+    /// Tells the relay to forget this device (204 or 401 both mean it's gone), then drops the
+    /// stored secret so turning push on again registers fresh.
+    private func unregisterFromRelay() {
+        guard let saved = UserDefaults.standard.dictionary(forKey: Self.secretKey) as? [String: String],
+              let secret = saved["secret"] else { return }
+        let relay = saved["relay"].flatMap(URL.init(string:)) ?? Self.relayURL
+        Task {
+            var request = URLRequest(url: relay.appending(path: "v1/register"))
+            request.httpMethod = "DELETE"
+            request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                let status = (response as? HTTPURLResponse)?.statusCode
+                if status == 204 || status == 401 {
+                    UserDefaults.standard.removeObject(forKey: Self.secretKey)
+                } else {
+                    lastError = "The push relay didn't confirm removing this device (status \(status ?? 0))."
+                }
+            } catch {
+                lastError = "Couldn't reach the push relay to remove this device: \(error.localizedDescription)"
+            }
+        }
+    }
+
     func didFail(_ error: Error) { lastError = error.localizedDescription }
 
     // MARK: Saving on machines
@@ -143,11 +188,17 @@ final class PushRegistration {
             let id = session.host.id
             let identity = ObjectIdentifier(session)
             if let last = written[id], last.session == identity, last.state == state { continue }
+            // Removing needs no secret (the payload only uses the device id), so it still works
+            // after the relay secret was forgotten.
+            guard let secret = relaySecret ?? (current.0 ? nil : "") else { continue }
             written[id] = (identity, state)
-            guard let secret = relaySecret else { continue }
             let command = Self.command(token: token, secret: secret, enabled: current.0)
             let enabled = current.0
             Task { @MainActor [weak self] in
+                if enabled, let reason = await Self.probe(session) {
+                    self?.helperState[id] = .unsupported(reason)
+                    return
+                }
                 if await Self.run(command, on: session) == false {
                     if self?.written[id]?.state == state { self?.written[id] = nil }
                     if enabled { self?.helperState[id] = .failed("couldn't save this phone on the machine (is python3 there?)") }
@@ -156,6 +207,34 @@ final class PushRegistration {
                 if enabled { await self?.checkHelper(on: session) } else { await self?.removeHelper(on: session) }
             }
         }
+    }
+
+    // MARK: Support probe
+
+    /// Why a machine can't run the helper, from `uname -s` and whether python3 exists.
+    nonisolated static func unsupportedReason(uname: String?, hasPython: Bool) -> String? {
+        let windows = "Windows isn't supported yet"
+        guard let uname = uname?.trimmingCharacters(in: .whitespacesAndNewlines), !uname.isEmpty else { return windows }
+        if ["MINGW", "MSYS", "CYGWIN", "Windows"].contains(where: { uname.localizedCaseInsensitiveContains($0) }) { return windows }
+        return hasPython ? nil : "python3 isn't installed"
+    }
+
+    private nonisolated static let probeCommand = "uname -s 2>/dev/null; if command -v python3 >/dev/null 2>&1; then echo __python3__; fi"
+
+    /// Splits the probe's output into (uname, hasPython). A first line that isn't a single word
+    /// (a cmd.exe "not recognized" message, say) counts as no uname.
+    nonisolated static func parseProbe(_ output: String) -> (uname: String?, hasPython: Bool) {
+        let lines = output.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+        let hasPython = lines.contains("__python3__")
+        let first = lines.first { $0 != "__python3__" && !$0.isEmpty }
+        return (first.flatMap { $0.contains(" ") ? nil : $0 }, hasPython)
+    }
+
+    /// The reason this machine can't run the helper; nil when it can, or when the probe itself failed.
+    private static func probe(_ session: HostSession) async -> String? {
+        guard let out = try? await outputOrError(probeCommand, on: session) else { return nil }
+        let parsed = parseProbe(out)
+        return unsupportedReason(uname: parsed.uname, hasPython: parsed.hasPython)
     }
 
     private static func run(_ command: String, on session: HostSession) async -> Bool {
@@ -256,6 +335,10 @@ final class PushRegistration {
             return
         }
         helperState[id] = .checking
+        if let reason = await Self.probe(session) {
+            helperState[id] = .unsupported(reason)
+            return
+        }
         let status: [String: Any]
         do {
             status = try await Self.helperResultOrError("status", on: session)
@@ -270,8 +353,8 @@ final class PushRegistration {
             return
         }
         helperState[id] = installed ? .outdated : .missing
-        guard enabled, pendingInstall == nil, !Self.declinedHosts().contains(id.uuidString) else { return }
-        pendingInstall = PendingInstall(session: session, hostName: session.host.name, isUpdate: installed)
+        guard enabled, !Self.declinedHosts().contains(id.uuidString) else { return }
+        installQueue.enqueue(PendingInstall(session: session, hostName: session.host.name, isUpdate: installed))
     }
 
     private func removeHelper(on session: HostSession) async {
@@ -308,11 +391,19 @@ final class PushRegistration {
 
     func decline(_ pending: PendingInstall) {
         Self.setDeclined(true, host: pending.session.host.id)
+        installQueue.pop()
+    }
+
+    /// The user agreed: next in the queue, and the install runs.
+    func accept(_ pending: PendingInstall) {
+        installQueue.pop()
+        Task { await install(on: pending.session) }
     }
 
     /// Settings' Install button: clears an earlier "Not now" and installs right away.
     func installFromSettings(on session: HostSession) {
         Self.setDeclined(false, host: session.host.id)
+        installQueue.remove(session.host.id)
         Task { await install(on: session) }
     }
 
@@ -325,9 +416,10 @@ final class PushRegistration {
 
     /// What goes in the payload for this device: the relay and its secret, not the APNs token.
     nonisolated static func payload(token: String, secret: String, enabled: Bool, relay: URL = relayURL,
-                                    name: String) -> Data {
-        let device: [String: Any] = ["id": deviceID(token: token), "relay": relay.absoluteString,
+                                    name: String, key: Data? = PushAlertKey.current()) -> Data {
+        var device: [String: Any] = ["id": deviceID(token: token), "relay": relay.absoluteString,
                                      "secret": secret, "name": name]
+        if let key { device["key"] = key.base64EncodedString() }
         let object: [String: Any] = ["op": enabled ? "add" : "remove", "device": device]
         return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
     }
@@ -392,5 +484,38 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
         Task { @MainActor in PushRegistration.shared.didFail(error) }
+    }
+}
+
+/// The install prompt and the "finished" notice. Attached to both RootView and SettingsView, so
+/// a prompt isn't lost behind Settings: only the one matching where the user is shows it.
+struct PushPrompts: ViewModifier {
+    let inSettings: Bool
+    @State private var push = PushRegistration.shared
+
+    private var active: Bool { push.settingsOpen == inSettings }
+
+    func body(content: Content) -> some View {
+        content
+            .alert(
+                push.pendingInstall.map {
+                    $0.isUpdate ? "Update the push helper on \($0.hostName)?" : "Install the push helper on \($0.hostName)?"
+                } ?? "",
+                isPresented: Binding(get: { active && push.pendingInstall != nil }, set: { _ in }),
+                presenting: push.pendingInstall
+            ) { pending in
+                Button(pending.isUpdate ? "Update" : "Install") { push.accept(pending) }
+                Button("Not now", role: .cancel) { push.decline(pending) }
+            } message: { _ in
+                Text("It watches your agents with herdr-core and sends an alert when one needs you. It installs to ~/.local/bin/bergr-notify and runs as a user service. Nothing runs as root.")
+            }
+            .alert(
+                push.finishedMessage ?? "",
+                isPresented: Binding(
+                    get: { active && push.finishedMessage != nil && push.pendingInstall == nil },
+                    set: { if !$0 { push.finishedMessage = nil } })
+            ) {
+                Button("OK", role: .cancel) {}
+            }
     }
 }

@@ -25,6 +25,7 @@ struct SettingsView: View {
         switch state {
         case .checking: "checking…"
         case .failed(let reason): "couldn't check: \(reason)"
+        case .unsupported(let reason): "push alerts aren't available — \(reason)"
         case .current: "helper running"
         case .installing: "installing…"
         case .missing: "not installed"
@@ -34,6 +35,13 @@ struct SettingsView: View {
     }
 
     var body: some View {
+        form
+            .modifier(PushPrompts(inSettings: true))
+            .onAppear { push.settingsOpen = true }
+            .onDisappear { push.settingsOpen = false }
+    }
+
+    private var form: some View {
         Form {
             Section {
                 ForEach(hosts.hosts) { host in
