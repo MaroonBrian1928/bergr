@@ -43,6 +43,26 @@ _phone-build device configuration:
     fi
     {{xcodebuild}} -allowProvisioningDeviceRegistration ${auth[@]+"${auth[@]}"} -configuration {{configuration}} -destination "id=$device" build | xcbeautify --quiet
 
+# Build, install and open on this Mac (Apple silicon runs it as the iPad app, "Designed for iPad")
+mac configuration="Debug":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    auth=()
+    if [ -n "${BERGR_ASC_KEY_PATH:-}" ]; then
+        auth=(-authenticationKeyPath "${BERGR_ASC_KEY_PATH/#\~/$HOME}" -authenticationKeyID "$BERGR_ASC_KEY_ID" -authenticationKeyIssuerID "$BERGR_ASC_KEY_ISSUER")
+    fi
+    xcodebuild -project {{project}} -scheme {{scheme}} -derivedDataPath .build/xcode-mac -allowProvisioningUpdates -allowProvisioningDeviceRegistration{{signing}} ${auth[@]+"${auth[@]}"} \
+        -configuration {{configuration}} -destination 'platform=macOS,variant=Designed for iPad,arch=arm64' build | xcbeautify --quiet
+    name="{{ if configuration == "Debug" { "Bergr Dev" } else { "Bergr" } }}"
+    dest="/Applications/$name.app"
+    # iPhone and iPad apps run on the Mac from inside a wrapper, as the App Store installs them.
+    osascript -e "tell application \"$name\" to quit" 2>/dev/null || true
+    rm -rf "$dest"
+    mkdir -p "$dest/Wrapper"
+    cp -R ".build/xcode-mac/Build/Products/{{configuration}}-iphoneos/{{scheme}}.app" "$dest/Wrapper/{{scheme}}.app"
+    ln -s "Wrapper/{{scheme}}.app" "$dest/WrappedBundle"
+    open "$dest"
+
 # Build and run in the simulator (BERGR_SIMULATOR, default "iPhone 17 Pro")
 sim:
     #!/usr/bin/env bash
