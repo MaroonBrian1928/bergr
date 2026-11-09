@@ -6,6 +6,8 @@ struct AgentRow: View {
     let terminal: Terminal
     /// Sub-agents its agent is running now (known while its chat is being followed).
     var subagents = 0
+    /// The machine it runs on, shown when the list isn't grouped by machine.
+    var machine: String?
     @Environment(\.dynamicTypeSize) private var typeSize
     /// At the largest text sizes a title wraps instead of being cut to a few letters.
     private var lines: Int { typeSize.isAccessibilitySize ? 3 : 1 }
@@ -23,8 +25,20 @@ struct AgentRow: View {
                 Text(AgentsOrdering.title(terminal))
                     .fontWeight(state == .needsYou ? .semibold : .regular)
                     .lineLimit(lines)
-                if let info = AgentsOrdering.info(terminal) {
-                    Text(info).font(.footnote).foregroundStyle(.secondary).lineLimit(lines)
+                if machine != nil || AgentsOrdering.info(terminal) != nil {
+                    HStack(spacing: 6) {
+                        if let machine {
+                            Text(machine)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(.quaternary, in: Capsule())
+                        }
+                        if let info = AgentsOrdering.info(terminal) {
+                            Text(info).font(.footnote).foregroundStyle(.secondary).lineLimit(lines)
+                        }
+                    }
                 }
                 if subagents > 0 {
                     Label("\(subagents) sub-agent\(subagents == 1 ? "" : "s") running", systemImage: "person.2.badge.gearshape")

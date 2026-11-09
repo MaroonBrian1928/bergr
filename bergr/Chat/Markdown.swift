@@ -124,8 +124,27 @@ struct ChatPalette {
     }
 }
 
+/// Parsed blocks, kept: the chat redraws often (scrolling, the working row), and parsing every
+/// message's Markdown each time made a long conversation scroll slowly, on the Mac most of all.
+private final class InlineCache: @unchecked Sendable {
+    static let shared = InlineCache()
+    private let cache: NSCache<NSString, Box> = { let c = NSCache<NSString, Box>(); c.countLimit = 4000; return c }()
+    final class Box { let value: AttributedString; init(_ v: AttributedString) { value = v } }
+    func value(_ key: String, make: () -> AttributedString) -> AttributedString {
+        if let hit = cache.object(forKey: key as NSString) { return hit.value }
+        let made = make()
+        cache.setObject(Box(made), forKey: key as NSString)
+        return made
+    }
+}
+
 /// Bold, italics, links and `code` within one block.
 func inlineMarkdown(_ text: String, palette: ChatPalette) -> AttributedString {
+    // The palette only differs between light and dark: its code color tells them apart.
+    InlineCache.shared.value("\(palette.codeText.description)\u{1}\(text)") { parseInline(text, palette: palette) }
+}
+
+private func parseInline(_ text: String, palette: ChatPalette) -> AttributedString {
     let parsed = (try? AttributedString(
         markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
     var result = AttributedString()

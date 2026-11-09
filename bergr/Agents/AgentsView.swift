@@ -50,6 +50,12 @@ struct AgentsView: View {
     /// The row picked, "<host>|<address>". On a phone the split view moves to the terminal when
     /// the sidebar list's selection changes, so rows are selected, not buttons.
     @State private var picked: String?
+    /// "machine" or "attention"; empty is the device's default (attention on a phone).
+    @AppStorage("agents.grouping") private var groupingSetting = ""
+    @State private var showAllIdle = false
+    private var byAttention: Bool {
+        groupingSetting.isEmpty ? UIDevice.current.userInterfaceIdiom == .phone : groupingSetting == "attention"
+    }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(sessions: SessionStore, openBeside: ((_ host: Host.ID, _ address: String) -> Void)? = nil,
@@ -61,6 +67,31 @@ struct AgentsView: View {
 
     var body: some View {
         List(selection: $picked) {
+            if byAttention { attentionSections } else { machineSections }
+        }
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Menu {
+                    Picker("Group by", selection: Binding(
+                        get: { byAttention ? "attention" : "machine" }, set: { groupingSetting = $0 })) {
+                        Label("Attention", systemImage: "hand.raised").tag("attention")
+                        Label("Machine", systemImage: "server.rack").tag("machine")
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Text("Agents").font(.headline)
+                        Image(systemName: "chevron.down").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                    }
+                    .foregroundStyle(.primary)
+                }
+                .accessibilityLabel("Agents, grouped by \(byAttention ? "attention" : "machine")")
+            }
+        }
+        .modifier(AgentsListBehavior(view: self))
+    }
+
+    @ViewBuilder
+    private var machineSections: some View {
             ForEach(hosts.hosts) { host in
                 let session = sessions.session(for: host)
                 let all = AgentsOrdering.ordered(session.terminals.filter(\.isLive))
@@ -106,7 +137,10 @@ struct AgentsView: View {
                     MachineHeader(host: host, session: session, count: terminals.count)
                 }
             }
-        }
+    }
+
+    fileprivate func applyBehavior<V: View>(_ list: V) -> some View {
+        list
         .listStyle(.plain)
         // Rows glide to their new place when an agent's state re-sorts them; Reduce Motion fades.
         .animation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.35),
@@ -140,9 +174,97 @@ struct AgentsView: View {
         .onChange(of: hosts.hosts) { connectAll() }
     }
 
+    // MARK: Attention
+
+    struct Entry: Identifiable {
+        let host: Host
+        let session: HostSession
+        let terminal: Terminal
+        let machine: String
+        var id: String { "\(host.id.uuidString)|\(terminal.address)" }
+    }
+
+    /// Every live terminal on every machine once, with the machine it runs on.
+    private var entries: [Entry] {
+        hosts.hosts.flatMap { host -> [Entry] in
+            let session = sessions.session(for: host)
+            let all = session.terminals.filter(\.isLive)
+            let own = all.filter { !$0.address.contains("/") }
+                .map { Entry(host: host, session: session, terminal: $0, machine: host.name) }
+            let linked = linkedGroups(all, host: host, session: session).flatMap { group in
+                group.terminals.map { Entry(host: host, session: session, terminal: $0, machine: group.name) }
+            }
+            return own + linked
+        }
+    }
+
     @ViewBuilder
-    private func row(_ terminal: Terminal, host: Host, session: HostSession) -> some View {
-                        AgentRow(terminal: terminal, subagents: session.runningSubagents(address: terminal.address))
+    private var attentionSections: some View {
+        let all = entries
+        let stamp: (Entry) -> UInt64 = { $0.terminal.statusMs ?? $0.terminal.createdMs }
+        let needs = all.filter { [.needsYou, .error].contains($0.terminal.agentState) }.sorted { stamp($0) < stamp($1) }
+        let finished = all.filter { $0.terminal.agentState == .done }.sorted { stamp($0) > stamp($1) }
+        let working = all.filter { $0.terminal.agentState == .working }.sorted { stamp($0) < stamp($1) }
+        let idle = all.filter { $0.terminal.agentState == .idle || $0.terminal.agentState == nil }
+            .sorted { ($0.terminal.isAgent ? 0 : 1, stamp($1)) < ($1.terminal.isAgent ? 0 : 1, stamp($0)) }
+        let shownIdle = showAllIdle ? idle : Array(idle.prefix(10))
+        attentionSection("Needs you", needs, counted: true)
+        attentionSection("Finished", finished, counted: true)
+        attentionSection("Working", working, counted: false)
+        if !idle.isEmpty {
+            Section {
+                ForEach(shownIdle) { entryRow($0) }
+                if idle.count > shownIdle.count {
+                    Button("Show \(idle.count - shownIdle.count) more") { withAnimation { showAllIdle = true } }
+                        .font(.footnote.weight(.semibold))
+                        .selectionDisabled()
+                }
+            } header: { AttentionHeader(title: "Idle", count: nil) }
+        }
+        let down = unreachable
+        if !down.isEmpty {
+            Section {
+                Text("Can't reach " + down.joined(separator: ", ") + ".")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .selectionDisabled()
+            }
+        }
+        if all.isEmpty, down.isEmpty, !hosts.hosts.isEmpty {
+            Text("No agents running.").font(.footnote).foregroundStyle(.tertiary).selectionDisabled()
+        }
+    }
+
+    /// Machines that can't be reached: Bergr's own and the linked ones.
+    private var unreachable: [String] {
+        hosts.hosts.flatMap { host -> [String] in
+            let session = sessions.session(for: host)
+            var names: [String] = []
+            if case .failed = session.state { names.append(host.name) }
+            let direct = Set(hosts.hosts.flatMap { [$0.name.lowercased(), $0.target.host.lowercased()] })
+            names += session.machines.filter { $0.state == "unreachable" && !direct.contains($0.name.lowercased()) }
+                .map(\.name)
+            return names
+        }
+    }
+
+    @ViewBuilder
+    private func attentionSection(_ title: String, _ items: [Entry], counted: Bool) -> some View {
+        if !items.isEmpty {
+            Section {
+                ForEach(items) { entryRow($0) }
+            } header: { AttentionHeader(title: title, count: counted ? items.count : nil) }
+        }
+    }
+
+    private func entryRow(_ e: Entry) -> some View {
+        row(e.terminal, host: e.host, session: e.session, machine: e.machine)
+    }
+
+    @ViewBuilder
+    private func row(_ terminal: Terminal, host: Host, session: HostSession, machine: String? = nil) -> some View {
+                        AgentRow(terminal: terminal, subagents: session.runningSubagents(address: terminal.address),
+                                 machine: machine)
                             .tag("\(host.id.uuidString)|\(terminal.address)")
                             .contextMenu {
                                 Button("Open", systemImage: "arrow.forward.circle") { open(host.id, terminal.address) }
@@ -247,4 +369,24 @@ private struct LinkedMachineHeader: View {
         default: .gray
         }
     }
+}
+
+private struct AttentionHeader: View {
+    let title: String
+    let count: Int?
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+            Spacer()
+            if let count { Text("\(count)").font(.footnote).monospacedDigit().foregroundStyle(.secondary) }
+        }
+        .textCase(nil)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The list's behavior, the same whichever way it's grouped.
+private struct AgentsListBehavior: ViewModifier {
+    let view: AgentsView
+    func body(content: Content) -> some View { view.applyBehavior(content) }
 }
