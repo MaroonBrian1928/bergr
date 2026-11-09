@@ -401,6 +401,17 @@ class Claude:
             if c and d.get("parentUuid"):
                 yield {"t": "toolout", "id": d["parentUuid"], "text": c}
             return
+        # A message typed while Claude was working: Claude Code records it as a queued-command
+        # attachment, not a user message, once it takes it in mid-turn.
+        att = d.get("attachment") if kind == "attachment" else None
+        if isinstance(att, dict) and att.get("type") == "queued_command" and not d.get("isSidechain") \
+                and att.get("commandMode", "prompt") == "prompt" \
+                and (att.get("origin") or {}).get("kind", "human") == "human":
+            text = att.get("prompt")
+            text = user_text(text) if isinstance(text, str) else None
+            if text and text.strip():
+                yield {"t": "msg", "id": (d.get("uuid") or str(id(d))) + ".0", "role": "user", "text": text}
+            return
         if kind not in ("user", "assistant") or d.get("isMeta") or d.get("isSidechain"):
             return
         if kind == "user" and isinstance((d.get("message") or {}).get("content"), list):

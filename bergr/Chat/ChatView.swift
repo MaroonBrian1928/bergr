@@ -1251,7 +1251,7 @@ private struct WorkingRow: View {
         // AI jokes.
         "Checking RAM prices", "Raising RAM prices", "Selling your spare compute", "Becoming sentient",
         "Passing the Turing test", "Reticulating splines agentically", "Draining the Great Lakes",
-        "Considering Roko's basilisk", "Hallucinating responsibly", "Asking a bigger model",
+        "Considering Roko's basilisk", "Hallucinating responsibly",
         "Counting the r's in strawberry", "Ignoring previous instructions", "Scaling the laws",
         "Warming the GPUs", "Tokenizing feelings", "Aligning myself", "Buying more H100s",
         "Overfitting gracefully", "Rewriting it in Rust", "Pretending to understand",

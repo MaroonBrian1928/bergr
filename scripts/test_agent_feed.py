@@ -109,6 +109,23 @@ class MemoryCitations(Base):
         self.assertEqual(m["memory_citations"]("plain"), ("plain", None))
 
 
+class QueuedMessages(Base):
+    def test_mid_turn_message_is_a_user_message(self):
+        ns = load("claude", self.home)
+        evs = list(ns["Claude"]().parse({"type": "attachment", "uuid": "a1", "attachment": {
+            "type": "queued_command", "prompt": "Can you give me the list", "commandMode": "prompt",
+            "origin": {"kind": "human"}}}))
+        self.assertEqual(evs, [{"t": "msg", "id": "a1.0", "role": "user", "text": "Can you give me the list"}])
+
+    def test_other_attachments_are_skipped(self):
+        ns = load("claude", self.home)
+        evs = list(ns["Claude"]().parse({"type": "attachment", "uuid": "a2", "attachment": {
+            "type": "queued_command", "prompt": "/compact", "commandMode": "bash", "origin": {"kind": "human"}}}))
+        self.assertEqual(evs, [])
+        evs = list(ns["Claude"]().parse({"type": "attachment", "uuid": "a3", "attachment": {"type": "hook_output"}}))
+        self.assertEqual(evs, [])
+
+
 class ToolOutput(Base):
     def test_claude_tool_result(self):
         ns = load("claude", self.home)
