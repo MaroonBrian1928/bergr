@@ -63,7 +63,10 @@ struct AgentsView: View {
         List(selection: $picked) {
             ForEach(hosts.hosts) { host in
                 let session = sessions.session(for: host)
-                let terminals = AgentsOrdering.ordered(session.terminals.filter(\.isLive))
+                let all = AgentsOrdering.ordered(session.terminals.filter(\.isLive))
+                // This core's own terminals; ones it reaches on its linked machines (`pwnpc/t3`)
+                // get a section of their own below.
+                let terminals = all.filter { !$0.address.contains("/") }
                 Section {
                     // Why a machine can't connect, in full, with a way to try again; the other
                     // machines carry on.
@@ -88,23 +91,17 @@ struct AgentsView: View {
                             .foregroundStyle(.tertiary)
                             .selectionDisabled()
                     }
-                    ForEach(terminals) { terminal in
-                        AgentRow(terminal: terminal, subagents: session.runningSubagents(address: terminal.address))
-                            .tag("\(host.id.uuidString)|\(terminal.address)")
-                            .contextMenu {
-                                Button("Open", systemImage: "arrow.forward.circle") { open(host.id, terminal.address) }
-                                if let openBeside {
-                                    Button("Open Beside", systemImage: "rectangle.split.2x1") {
-                                        openBeside(host.id, terminal.address)
-                                    }
-                                }
-                                Button("Copy Address", systemImage: "doc.on.doc") {
-                                    UIPasteboard.general.string = terminal.address
-                                }
-                            }
-                    }
+                    ForEach(terminals) { terminal in row(terminal, host: host, session: session) }
                 } header: {
                     MachineHeader(host: host, session: session, count: terminals.count)
+                }
+                ForEach(linkedGroups(all, host: host, session: session), id: \.name) { group in
+                    Section {
+                        ForEach(group.terminals) { terminal in row(terminal, host: host, session: session) }
+                    } header: {
+                        LinkedMachineHeader(name: group.name, via: host.name, state: group.state,
+                                            count: group.terminals.count)
+                    }
                 }
             }
         }
@@ -139,6 +136,40 @@ struct AgentsView: View {
         }
         .task { connectAll() }
         .onChange(of: hosts.hosts) { connectAll() }
+    }
+
+    @ViewBuilder
+    private func row(_ terminal: Terminal, host: Host, session: HostSession) -> some View {
+                        AgentRow(terminal: terminal, subagents: session.runningSubagents(address: terminal.address))
+                            .tag("\(host.id.uuidString)|\(terminal.address)")
+                            .contextMenu {
+                                Button("Open", systemImage: "arrow.forward.circle") { open(host.id, terminal.address) }
+                                if let openBeside {
+                                    Button("Open Beside", systemImage: "rectangle.split.2x1") {
+                                        openBeside(host.id, terminal.address)
+                                    }
+                                }
+                                Button("Copy Address", systemImage: "doc.on.doc") {
+                                    UIPasteboard.general.string = terminal.address
+                                }
+                            }
+    }
+
+    struct LinkedGroup { let name: String; let state: String?; let terminals: [Terminal] }
+
+    /// The terminals of each machine this core is linked to, by machine. A machine that's also
+    /// added to Bergr directly is left out here: its agents already show under it.
+    private func linkedGroups(_ all: [Terminal], host: Host, session: HostSession) -> [LinkedGroup] {
+        let direct = Set(hosts.hosts.filter { $0.id != host.id }.flatMap { [$0.name.lowercased(), $0.target.host.lowercased()] })
+        let byMachine = Dictionary(grouping: all.filter { $0.address.contains("/") }) {
+            String($0.address.prefix { $0 != "/" })
+        }
+        return byMachine.keys.sorted().compactMap { name in
+            let machine = session.machines.first { $0.name == name }
+            let names = [name, machine?.host, machine?.target].compactMap { $0?.lowercased() }
+            if names.contains(where: direct.contains) { return nil }
+            return LinkedGroup(name: name, state: machine?.state, terminals: byMachine[name] ?? [])
+        }
     }
 
     private func connectAll() {
@@ -182,6 +213,36 @@ private struct MachineHeader: View {
         case .connecting: "Connecting…"
         case .failed(_, let retrying): retrying ? "Reconnecting…" : "Can't connect"
         case .idle: "Not connected"
+        }
+    }
+}
+
+/// A machine reached through another machine's herdr-core.
+private struct LinkedMachineHeader: View {
+    let name: String
+    let via: String
+    let state: String?
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text(name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+            Text(state == "unreachable" ? "unreachable · via \(via)" : "via \(via)")
+                .font(.footnote).foregroundStyle(.secondary)
+            Spacer()
+            Text("\(count)").font(.footnote).monospacedDigit().foregroundStyle(.secondary)
+        }
+        .textCase(nil)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var color: Color {
+        switch state {
+        case "connected": .green
+        case "connecting", "needs_login": .yellow
+        case "unreachable": .red
+        default: .gray
         }
     }
 }
