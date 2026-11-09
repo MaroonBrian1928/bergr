@@ -192,7 +192,7 @@ final class PushRegistration {
             // after the relay secret was forgotten.
             guard let secret = relaySecret ?? (current.0 ? nil : "") else { continue }
             written[id] = (identity, state)
-            let command = Self.command(token: token, secret: secret, enabled: current.0)
+            let command = Self.command(token: token, secret: secret, enabled: current.0, host: id)
             let enabled = current.0
             Task { @MainActor [weak self] in
                 if enabled, let reason = await Self.probe(session) {
@@ -416,17 +416,19 @@ final class PushRegistration {
 
     /// What goes in the payload for this device: the relay and its secret, not the APNs token.
     nonisolated static func payload(token: String, secret: String, enabled: Bool, relay: URL = relayURL,
-                                    name: String, key: Data? = PushAlertKey.current()) -> Data {
+                                    name: String, key: Data? = PushAlertKey.current(), host: UUID? = nil) -> Data {
         var device: [String: Any] = ["id": deviceID(token: token), "relay": relay.absoluteString,
                                      "secret": secret, "name": name]
+        // Bergr's id for this machine, sent back with each alert so a tap opens this machine.
+        if let host { device["host_id"] = host.uuidString }
         if let key { device["key"] = key.base64EncodedString() }
         let object: [String: Any] = ["op": enabled ? "add" : "remove", "device": device]
         return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
     }
 
     /// Script and payload both travel base64-encoded, so no shell quoting can break them.
-    static func command(token: String, secret: String, enabled: Bool) -> String {
-        command(payload: payload(token: token, secret: secret, enabled: enabled, name: UIDevice.current.name))
+    static func command(token: String, secret: String, enabled: Bool, host: UUID? = nil) -> String {
+        command(payload: payload(token: token, secret: secret, enabled: enabled, name: UIDevice.current.name, host: host))
     }
 
     nonisolated static func command(payload: Data) -> String {
@@ -468,6 +470,8 @@ final class PushRegistration {
     func target(_ info: [AnyHashable: Any]) -> (host: UUID, address: String)? {
         guard let address = info["address"] as? String, let sessions else { return nil }
         let hostname = info["host"] as? String ?? ""
+        // Helpers from version 6 send Bergr's own id for the machine.
+        if let id = UUID(uuidString: hostname), sessions.existing(id) != nil { return (id, address) }
         let matches = sessions.ids.compactMap { sessions.existing($0) }
             .filter { $0.terminals.contains { $0.address == address } }
         let best = matches.first { $0.host.name.caseInsensitiveCompare(hostname) == .orderedSame }

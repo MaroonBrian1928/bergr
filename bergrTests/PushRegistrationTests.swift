@@ -22,6 +22,13 @@ struct PushRegistrationTests {
         #expect((try JSONSerialization.jsonObject(with: removed) as? [String: Any])?["op"] as? String == "remove")
     }
 
+    @Test func payloadCarriesHostID() throws {
+        let host = UUID()
+        let data = PushRegistration.payload(token: "ab12", secret: "s", enabled: true, name: "Phone", key: nil, host: host)
+        let device = try #require((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["device"] as? [String: Any])
+        #expect(device["host_id"] as? String == host.uuidString)
+    }
+
     @Test func deviceIDIsStableAndHidesToken() {
         #expect(PushRegistration.deviceID(token: "ab12") == PushRegistration.deviceID(token: "ab12"))
         #expect(PushRegistration.deviceID(token: "ab12").count == 16)

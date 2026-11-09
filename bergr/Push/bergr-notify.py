@@ -25,7 +25,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 5
+VERSION = 6
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 ALERT_STATES = ("blocked", "done")
 KINDS = ("permission", "question", "auth")
@@ -381,7 +381,8 @@ def send_alert(cfg, title, body, address, host, jwt_cache):
     # Devices registered through a relay carry its address and a secret; the relay holds the key.
     for device in [d for d in devices if d.get("relay") and d.get("secret")]:
         try:
-            send_relay(device, title, body, address, host)
+            # The app's own id for this machine when it gave one, so a tap opens the right one.
+            send_relay(device, title, body, address, device.get("host_id") or host)
             sent += 1
         except Exception as e:
             log(f"push to {device.get('name', 'device')} through the relay failed: {e}")
