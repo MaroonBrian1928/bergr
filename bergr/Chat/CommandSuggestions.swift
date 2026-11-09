@@ -2,13 +2,29 @@ import SwiftUI
 
 /// Picks the commands (`/…`) or skills (`$…`) that a reply draft could be starting with.
 enum CommandMatcher {
-    /// Matches while `draft` starts with "/" or "$" and has no whitespace yet: names starting with the
-    /// draft first (case-insensitive), then names containing the rest of it, at most `limit`.
-    /// Empty when the draft is not a command prefix, or when it already equals the only match.
+    /// The word being typed at the end of the draft when it's a command ("/…" or "$…"), anywhere
+    /// in the message: at the start or after a space, not yet followed by one.
+    static func token(in draft: String) -> Range<String.Index>? {
+        guard let last = draft.last, !last.isWhitespace else { return nil }
+        let start = draft.lastIndex(where: \.isWhitespace).map { draft.index(after: $0) } ?? draft.startIndex
+        guard draft[start] == "/" || draft[start] == "$" else { return nil }
+        return start..<draft.endIndex
+    }
+
+    /// The draft with the command being typed replaced by `name` and a space.
+    static func picking(_ name: String, in draft: String) -> String {
+        guard let range = token(in: draft) else { return name + " " }
+        return draft.replacingCharacters(in: range, with: name + " ")
+    }
+
+    /// Matches while the word being typed starts with "/" or "$" (see `token`): names starting
+    /// with it first (case-insensitive), then names containing the rest of it, at most `limit`.
+    /// Empty when no command is being typed, or when it already equals the only match.
     static func matches(_ commands: [ChatFeed.Command], draft: String, limit: Int = 6) -> [ChatFeed.Command] {
-        guard let sigil = draft.first, sigil == "/" || sigil == "$",
-              !draft.contains(where: \.isWhitespace) else { return [] }
-        let query = draft.lowercased()
+        guard let range = token(in: draft) else { return [] }
+        let typed = draft[range]
+        let sigil = typed.first!
+        let query = typed.lowercased()
         let rest = String(query.dropFirst())
         var starts: [ChatFeed.Command] = []
         var contains: [ChatFeed.Command] = []
@@ -58,7 +74,7 @@ struct CommandSuggestions: View {
 
     private func row(_ command: ChatFeed.Command) -> some View {
         Button {
-            draft.wrappedValue = command.name + " "
+            draft.wrappedValue = CommandMatcher.picking(command.name, in: draft.wrappedValue)
             picks += 1
         } label: {
             HStack(spacing: 10) {
@@ -81,7 +97,7 @@ struct CommandSuggestions: View {
     /// The name with the typed part (after its sigil) in semibold.
     private func highlighted(_ name: String) -> AttributedString {
         var text = AttributedString(name)
-        let typed = String(draft.wrappedValue.dropFirst())
+        let typed = CommandMatcher.token(in: draft.wrappedValue).map { String(draft.wrappedValue[$0].dropFirst()) } ?? ""
         if !typed.isEmpty, let range = text.range(of: typed, options: .caseInsensitive) {
             text[range].font = Font.callout.monospaced().weight(.semibold)
         }

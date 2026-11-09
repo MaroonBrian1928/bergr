@@ -46,7 +46,11 @@ struct CommandSuggestionsTests {
     @Test func plainTextMatchesNothing() {
         #expect(names("") == [])
         #expect(names("compact") == [])
-        #expect(names("hello /comp") == [])
+        #expect(names("hello /comp") == ["/compact"])
+        #expect(names("hello/comp") == [])
+        #expect(names("hello /compact now") == [])
+        #expect(CommandMatcher.picking("/compact", in: "please run /comp") == "please run /compact ")
+        #expect(CommandMatcher.picking("/compact", in: "/co") == "/compact ")
     }
 
     @Test func exactSingleMatchIsEmpty() {
