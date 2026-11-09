@@ -32,6 +32,8 @@ final class PushRegistration {
     }
     enum HelperState: Equatable { case checking, current, missing, outdated, installing, failed(String) }
     var pendingInstall: PendingInstall?
+    /// Shown once an install or update finished, so the tap has a visible result.
+    var finishedMessage: String?
     /// What the last check found on each machine, for Settings.
     private(set) var helperState: [UUID: HelperState] = [:]
     static let declinedKey = "bergr.push.declined"
@@ -291,6 +293,12 @@ final class PushRegistration {
         if result?["ok"] as? Bool == true {
             lastError = nil
             helperState[id] = .current
+            let updated = before == .outdated
+            // A real alert from the machine, through the whole chain, proves it works.
+            let sent = await Self.output("python3 -I ~/.local/bin/bergr-notify --test 2>&1", on: session)
+            let tested = sent?.contains("sent 1") == true || sent?.contains("sent 2") == true
+            finishedMessage = (updated ? "The push helper on \(name) is updated." : "Push alerts are set up on \(name).")
+                + (tested ? " A test alert is on its way." : " The test alert didn't go out; check Settings → Push alerts.")
         } else {
             helperState[id] = before
             let reason = result?["error"] as? String ?? "no answer from the machine"

@@ -173,6 +173,14 @@ struct RootView: View {
         } message: { _ in
             Text("It watches your agents with herdr-core and sends an alert when one needs you. It installs to ~/.local/bin/bergr-notify and runs as a user service. Nothing runs as root.")
         }
+        .alert(
+            PushRegistration.shared.finishedMessage ?? "",
+            isPresented: Binding(
+                get: { PushRegistration.shared.finishedMessage != nil && PushRegistration.shared.pendingInstall == nil },
+                set: { if !$0 { PushRegistration.shared.finishedMessage = nil } })
+        ) {
+            Button("OK", role: .cancel) {}
+        }
         // The chat on screen doesn't alert about itself.
         .onChange(of: selectedTerminal, initial: true) { _, address in
             notifier?.focusedAddress = selectedHost.wrappedValue.flatMap { host in address.map { (host, $0) } }
