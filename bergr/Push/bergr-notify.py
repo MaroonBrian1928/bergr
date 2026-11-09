@@ -12,6 +12,8 @@ separate sandbox and production keys under apns.sandbox / apns.production) and "
 Usage: bergr-notify.py [--test | --version]   (--test sends one test alert to every device and exits)
 """
 import base64
+import hashlib
+import hmac
 import json
 import os
 import socket
@@ -23,7 +25,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 4
+VERSION = 5
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 ALERT_STATES = ("blocked", "done")
 KINDS = ("permission", "question", "auth")
@@ -322,10 +324,36 @@ def send_ntfy(cfg, title, body, address):
         resp.read()
 
 
+def encrypt_alert(key_bytes, title, body, iv=None):
+    """Base64 blob the phone's Notification Service Extension decrypts (see Shared/PushAlertKey.swift):
+    iv16 || AES-256-CBC/PKCS7(JSON {title, body}) || HMAC-SHA256(iv || ct). key_bytes: 32 enc || 32 mac."""
+    if len(key_bytes) != 64:
+        raise ValueError("alert key must be 64 bytes")
+    iv = os.urandom(16) if iv is None else bytes(iv)
+    plain = json.dumps({"title": title, "body": body}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    # openssl needs -K/-iv as hex in argv (visible to local ps); the iv is public and the key is
+    # only visible to the same user, which is the account holding push.json anyway.
+    r = subprocess.run(["openssl", "enc", "-aes-256-cbc", "-K", key_bytes[:32].hex(), "-iv", iv.hex()],
+                       input=plain, capture_output=True, timeout=10)
+    if r.returncode != 0 or not r.stdout:
+        raise RuntimeError("openssl enc failed")
+    signed = iv + r.stdout
+    mac = hmac.new(key_bytes[32:], signed, hashlib.sha256).digest()
+    return base64.b64encode(signed + mac).decode("ascii")
+
+
 def relay_request(device, title, body, address, host):
     """(url, headers, body bytes) for a push through the relay."""
     url = device["relay"].rstrip("/") + "/v1/push"
     payload = {"title": title[:100], "body": body[:400], "address": address[:64], "host": host[:100]}
+    if device.get("key"):
+        # Never send the text in the clear when the phone has a key; fall back to a generic alert.
+        try:
+            key = base64.b64decode(device["key"], validate=True)
+            payload = {"e": encrypt_alert(key, title[:100], body[:400]), "address": address[:64], "host": host[:100]}
+        except Exception as e:
+            log(f"alert encryption failed ({type(e).__name__}); sending without text")
+            payload = {"title": "Bergr", "body": "An agent needs you", "address": address[:64], "host": host[:100]}
     # Cloudflare turns away Python's default User-Agent (error 1010), so name ourselves.
     headers = {"authorization": "Bearer " + device["secret"], "content-type": "application/json",
                "user-agent": f"bergr-notify/{VERSION}"}

@@ -18,10 +18,10 @@ Run the tests with `npm test` (no wrangler needed).
 
 - `POST /v1/register` `{"token","bundle_id","sandbox"}` returns `{"secret"}`.
 - `DELETE /v1/register` with `Authorization: Bearer <secret>` returns 204.
-- `POST /v1/push` with `Authorization: Bearer <secret>` and `{"title","body","address","host"}` returns `{"ok":true}`. 410 `{"error":"unregistered"}` means the device is gone; drop the secret.
+- `POST /v1/push` with `Authorization: Bearer <secret>` and `{"title","body","address","host"}` (or `{"e","address","host"}` with `e` an end-to-end encrypted base64 blob of at most 3000 characters) returns `{"ok":true}`. 410 `{"error":"unregistered"}` means the device is gone; drop the secret.
 
 Limits: 4 KB bodies, 120 pushes per secret per hour, 20 registrations per IP per hour.
 
 ## Privacy
 
-The relay stores only device tokens and secret hashes, and sees alert text in transit (end-to-end encryption is planned via a Notification Service Extension).
+The relay stores only device tokens and secret hashes, and, for plain `title`/`body` pushes, sees alert text in transit. Pushes with `e` carry only an opaque blob: the relay and Apple show a generic "An agent needs you" and the phone's Notification Service Extension decrypts the real text.

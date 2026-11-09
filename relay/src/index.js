@@ -141,6 +141,8 @@ async function unregister(request, env) {
 }
 
 const LIMITS = { title: 100, body: 400, address: 64, host: 100 };
+const E_MAX = 3000;
+const E_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 async function push(request, env) {
   const declared = parseInt(request.headers.get("content-length") || "0", 10);
@@ -155,10 +157,16 @@ async function push(request, env) {
 
   const body = await readJson(request);
   if (body instanceof Response) return body;
+  // Either plain title+body, or `e`: an end-to-end encrypted blob the phone's extension opens.
+  const encrypted = body.e !== undefined;
   for (const [field, max] of Object.entries(LIMITS)) {
+    if (encrypted && (field === "title" || field === "body")) continue;
     if (typeof body[field] !== "string" || body[field].length > max) {
       return err(400, `invalid ${field}`);
     }
+  }
+  if (encrypted && (typeof body.e !== "string" || !body.e || body.e.length > E_MAX || !E_RE.test(body.e))) {
+    return err(400, "invalid e");
   }
   if (!(await countHit(env.REGISTRATIONS, `rl:${hash}:${hourBucket()}`, PUSH_LIMIT_PER_HOUR))) {
     return err(429, "rate limited");
@@ -185,15 +193,29 @@ async function push(request, env) {
         "apns-collapse-id": body.address,
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        aps: {
-          alert: { title: body.title, body: body.body },
-          sound: "default",
-          "thread-id": body.address,
-        },
-        address: body.address,
-        host: body.host,
-      }),
+      body: JSON.stringify(
+        encrypted
+          ? {
+              aps: {
+                alert: { title: "Bergr", body: "An agent needs you" },
+                "mutable-content": 1,
+                sound: "default",
+                "thread-id": body.address,
+              },
+              e: body.e,
+              address: body.address,
+              host: body.host,
+            }
+          : {
+              aps: {
+                alert: { title: body.title, body: body.body },
+                sound: "default",
+                "thread-id": body.address,
+              },
+              address: body.address,
+              host: body.host,
+            },
+      ),
     });
   } catch (e) {
     console.error("apns fetch failed", e && e.name);

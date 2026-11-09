@@ -295,6 +295,28 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(payload["address"], "t1")
         self.assertNotIn("token", payload)
 
+    KEY = bytes(range(64))
+    # Same vector is asserted in bergrTests/PushAlertKeyTests.swift.
+    VECTOR = "AAECAwQFBgcICQoLDA0ODxNVq97wh/GLkAxEMJ7AXen/gWiU2YHklMcDCLwbK3tmDUM82gsiA4U1kYZzXM+PU6MMSTcmxMr/pFssU3PRmdc="
+
+    def test_encrypt_vector(self):
+        self.assertEqual(notify.encrypt_alert(self.KEY, "T", "B", iv=bytes(range(16))), self.VECTOR)
+
+    def test_relay_request_encrypted(self):
+        import base64
+        dev = dict(self.DEVICE, key=base64.b64encode(self.KEY).decode())
+        _, _, data = notify.relay_request(dev, "Title", "Secret body", "t1", "pop")
+        payload = json.loads(data)
+        self.assertEqual(set(payload), {"e", "address", "host"})
+        self.assertNotIn(b"Secret", data)
+
+    def test_relay_request_bad_key_sends_no_text(self):
+        dev = dict(self.DEVICE, key="AAAA")
+        _, _, data = notify.relay_request(dev, "Title", "Secret body", "t1", "pop")
+        payload = json.loads(data)
+        self.assertEqual(payload["body"], "An agent needs you")
+        self.assertNotIn(b"Secret", data)
+
     def test_relay_devices_need_no_key(self):
         sent = []
         orig = notify.send_relay

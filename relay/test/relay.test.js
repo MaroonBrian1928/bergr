@@ -165,3 +165,28 @@ test("delete registration and unknown route", async () => {
   assert.equal((await doPush(env, secret)).status, 401);
   assert.equal((await handle(req("/nope", "GET"), env)).status, 404);
 });
+
+test("encrypted push forwards opaque blob with placeholder alert", async () => {
+  const { env } = await makeEnv();
+  const { secret } = await (await reg(env)).json();
+  const e = "QUJD".repeat(100);
+  const p = await handle(req("/v1/push", "POST", { e, address: "addr1", host: "h" }, { authorization: `Bearer ${secret}` }), env);
+  assert.equal(p.status, 200);
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    aps: { alert: { title: "Bergr", body: "An agent needs you" }, "mutable-content": 1, sound: "default", "thread-id": "addr1" },
+    e,
+    address: "addr1",
+    host: "h",
+  });
+});
+
+test("encrypted push rejects oversize or non-base64 e", async () => {
+  const { env } = await makeEnv();
+  const { secret } = await (await reg(env)).json();
+  const send = (e) => handle(req("/v1/push", "POST", { e, address: "a", host: "h" }, { authorization: `Bearer ${secret}` }), env);
+  assert.equal((await send("A".repeat(3000))).status, 200);
+  assert.equal((await send("A".repeat(3001))).status, 400);
+  assert.equal((await send("not base64!")).status, 400);
+  assert.equal((await send(5)).status, 400);
+  assert.equal(calls.length, 1);
+});
