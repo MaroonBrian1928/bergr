@@ -200,13 +200,33 @@ final class ChatFeed {
         let command = "python3 -I -c 'import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))' "
             + "\(encoded) \(agent.rawValue) \(pid) \(Self.shellQuote(cwd)) \(Self.shellQuote(sessionHint ?? "-"))"
         while !Task.isCancelled {
+            stalled = false
             do {
                 let pipe = try await session.openExec(command)
+                // The helper pings every second. A channel that died quietly (the phone or the
+                // machine slept) sends nothing and never errors, so without pings for a while,
+                // close it and follow the conversation again; otherwise the chat and its
+                // sub-agent count freeze at the last thing heard.
+                lastHeard = .now
+                let watchdog = Task { @MainActor [weak self] in
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .seconds(5))
+                        guard let self, !Task.isCancelled else { return }
+                        if Date.now.timeIntervalSince(self.lastHeard) > Self.stallAfter {
+                            self.stalled = true
+                            pipe.close()
+                            return
+                        }
+                    }
+                }
+                defer { watchdog.cancel() }
                 try await withTaskCancellationHandler {
                     try await read(pipe)
                 } onCancel: {
                     pipe.close()
                 }
+            } catch is CancellationError where stalled && !Task.isCancelled {
+                // Closed by the watchdog: reconnect below.
             } catch is CancellationError {
                 return
             } catch {
@@ -217,11 +237,17 @@ final class ChatFeed {
         }
     }
 
+    /// When the helper was last heard from (it pings every second).
+    @ObservationIgnored private var lastHeard = Date.now
+    @ObservationIgnored private var stalled = false
+    static let stallAfter: TimeInterval = 15
+
     private func read(_ pipe: ExecPipe) async throws {
         var pending = Data()
         var pings = 0
         var sawConversation = false
         for try await chunk in pipe.output {
+            lastHeard = .now
             pending.append(chunk)
             while let newline = pending.firstIndex(of: 0x0A) {
                 let line = pending[pending.startIndex..<newline]
