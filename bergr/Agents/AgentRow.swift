@@ -12,7 +12,8 @@ struct AgentRow: View {
 
     private var kind: AgentKind { AgentKind.of(terminal) }
     private var state: AgentState? { terminal.agentState }
-    private var dimmed: Bool { !terminal.isLive || state == nil || state == .idle }
+    /// Plain shells and finished terminals step back; every agent, idle ones too, reads at full strength.
+    private var dimmed: Bool { !terminal.isLive || state == nil }
 
     var body: some View {
         HStack(spacing: 10) {
