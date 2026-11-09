@@ -25,6 +25,7 @@ struct ChatView: View {
     @State private var pending: [Pending] = []
     @State private var sent = 0
     @State private var showingUsage = false
+    @State private var selecting: SelectableMessage?
     @State private var showingModels = false
     /// When this chat first saw the agent working, for a timer that doesn't restart on every
     /// redraw when herdr-core doesn't say when its status changed.
@@ -231,6 +232,7 @@ struct ChatView: View {
             UsageSheet(usage: feed.usage, agent: agent, machine: session?.host.name,
                        setUp: session.map { session in { try await session.setUpClaudeStatusLine() } })
         }
+        .sheet(item: $selecting) { SelectTextSheet(text: $0.text) }
     }
 
     @ToolbarContentBuilder
@@ -406,6 +408,7 @@ struct ChatView: View {
     @ViewBuilder
     private func copyButton(_ text: String) -> some View {
         Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+        Button("Select Text", systemImage: "selection.pin.in.out") { selecting = SelectableMessage(text: text) }
     }
 
     /// How a row arrives: your reply replacing its sending copy doesn't move; an agent's reply
