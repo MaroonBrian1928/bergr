@@ -119,8 +119,10 @@ struct TerminalScreenView: View {
         // The session follows the conversation and keeps following it if this screen goes away
         // for a moment. Keyed by the agent only: the foreground process changes whenever the
         // agent runs a command, and the feed finds a new conversation in the same terminal itself.
-        .task(id: chat ? agent?.rawValue : nil) {
-            guard chat, let agent, let terminal else { return }
+        // Also keyed by the line being up: going to the background closes the line and ends the
+        // feeds, so coming back must ask for a new one (the old one stays on screen meanwhile).
+        .task(id: chat ? agent.map { "\($0.rawValue) \(session.state == .connected)" } : nil) {
+            guard chat, let agent, let terminal, session.state == .connected else { return }
             model.wantsKeyboard = false
             // The agent's own process if it's in front; else the terminal's folder finds it.
             let front = terminal.foreground.flatMap { fg in
