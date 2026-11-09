@@ -164,7 +164,8 @@ struct ChatView: View {
         .defaultScrollAnchor(.bottom)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
         #if DEBUG
-        .modifier(BounceProbe(feed: feed, terminal: terminal, model: model, state: state))
+        .modifier(BounceProbe(feed: feed, terminal: terminal, model: model, state: state,
+                              on: UserDefaults.standard.bool(forKey: "bergr.bounceProbe")))
         #endif
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentSize.height - geometry.visibleRect.maxY
@@ -264,7 +265,7 @@ struct ChatView: View {
             if feed.usage != nil || agent == .claude {
                 Button("Usage", systemImage: "gauge.with.dots.needle.50percent") { showingUsage = true }
             }
-            permissionsMenu
+            PermissionsMenu(agent: agent, model: model, saved: feed.usage?.mode, enabled: canType) { sendError = $0 }
             if let onInfo {
                 Button("Info", systemImage: "info.circle", action: onInfo)
             }
@@ -322,26 +323,6 @@ struct ChatView: View {
         return feed.models.first { $0.id.lowercased() == id || $0.name.lowercased() == id }
     }
 
-    /// The agent's permission mode, current one checked; switching goes through the terminal.
-    private var permissionsMenu: some View {
-        let current = PermissionModes.current(agent, in: model.frame.textLines, saved: feed.usage?.mode)
-        return Menu {
-            ForEach(PermissionModes.modes(agent), id: \.self) { mode in
-                Button {
-                    Task {
-                        if let problem = await PermissionModes.set(mode, agent: agent, model: model,
-                                                                   saved: feed.usage?.mode) { sendError = problem }
-                    }
-                } label: {
-                    if mode == current { Label(mode, systemImage: "checkmark") } else { Text(mode) }
-                }
-            }
-        } label: {
-            Label("Permissions" + (current.map { " · \($0)" } ?? ""), systemImage: "lock.shield")
-        }
-        .disabled(!canType)
-    }
-
     /// herdr-core's time of the status change: the timer survives reopening the chat.
     private var workingSince: Date {
         terminal?.statusMs.map { Date(timeIntervalSince1970: Double($0) / 1000) } ?? workingSeen ?? .now
@@ -359,11 +340,11 @@ struct ChatView: View {
                     .padding(.horizontal, 20)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if let terminal, terminal.isLive, state == "blocked" || AnswerParser.inLogin(model.frame.textLines) {
-                AnswerCard(status: terminal.status, model: model, palette: palette) { question, answer in
+            if let terminal, terminal.isLive {
+                AnswerSlot(terminal: terminal, model: model, blocked: state == "blocked", palette: palette,
+                           transition: arrival) { question, answer in
                     feed.recordDecision(question: question, answer: answer)
                 }
-                    .transition(arrival)
             }
             inputBar
         }
@@ -623,7 +604,7 @@ struct ChatView: View {
                 }
                 ModelChip(usage: feed.usage, effort: feed.chosenEffort, agent: agent, palette: palette, enabled: canType,
                           open: feed.models.isEmpty ? nil : { showingModels = true },
-                          shown: agent == .antigravity ? AntigravityStatus.read(model.frame.textLines) : nil)
+                          screen: agent == .antigravity ? model : nil)
                 // Long-press: the context and plan limits (also in ⋯ → Usage).
                 .contextMenu {
                     if feed.usage != nil || agent == .claude {
@@ -1245,12 +1226,19 @@ private struct BounceProbe: ViewModifier {
     let terminal: Terminal?
     let model: TerminalScreenModel
     let state: String?
+    /// `-bergr.bounceProbe YES`: it reads the terminal screen, which would rebuild the chat on every redraw.
+    let on: Bool
 
     private static func log(_ text: String) {
         print(String(format: "[bounce] %.3f ", Date.now.timeIntervalSince1970) + text)
     }
 
+    @ViewBuilder
     func body(content: Content) -> some View {
+        if on { probed(content) } else { content }
+    }
+
+    private func probed(_ content: Content) -> some View {
         content
             .onScrollGeometryChange(for: [CGFloat].self) { g in
                 [g.contentSize.height, g.contentOffset.y, g.containerSize.height, g.contentInsets.top, g.contentInsets.bottom]
@@ -1367,5 +1355,54 @@ private struct ReadingSpinner: View {
                 try? await Task.sleep(for: .milliseconds(600))
                 withAnimation(.easeIn(duration: 0.2)) { visible = true }
             }
+    }
+}
+
+// The terminal's screen changes many times a second while an agent works. Only these small views
+// read it, so a redraw there doesn't rebuild the whole conversation.
+
+/// The answer card, while the agent asks something or the screen shows a login.
+private struct AnswerSlot: View {
+    let terminal: Terminal
+    let model: TerminalScreenModel
+    let blocked: Bool
+    let palette: ChatPalette
+    let transition: AnyTransition
+    let record: (String, String) -> Void
+
+    var body: some View {
+        if blocked || AnswerParser.inLogin(model.frame.textLines) {
+            AnswerCard(status: terminal.status, model: model, palette: palette) { record($0, $1) }
+                .transition(transition)
+        }
+    }
+}
+
+/// The agent's permission mode, current one checked; switching goes through the terminal.
+private struct PermissionsMenu: View {
+    let agent: ChatAgent
+    let model: TerminalScreenModel
+    let saved: String?
+    let enabled: Bool
+    let failed: (String) -> Void
+
+    var body: some View {
+        let current = PermissionModes.current(agent, in: model.frame.textLines, saved: saved)
+        Menu {
+            ForEach(PermissionModes.modes(agent), id: \.self) { mode in
+                Button {
+                    Task {
+                        if let problem = await PermissionModes.set(mode, agent: agent, model: model, saved: saved) {
+                            failed(problem)
+                        }
+                    }
+                } label: {
+                    if mode == current { Label(mode, systemImage: "checkmark") } else { Text(mode) }
+                }
+            }
+        } label: {
+            Label("Permissions" + (current.map { " · \($0)" } ?? ""), systemImage: "lock.shield")
+        }
+        .disabled(!enabled)
     }
 }

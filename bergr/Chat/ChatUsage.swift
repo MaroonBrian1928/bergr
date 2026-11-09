@@ -176,12 +176,14 @@ struct ModelChip: View {
 
     /// The model and effort as the screen shows them, for agents whose files don't say (Antigravity).
     var shown: (model: String, effort: String?)?
+    /// The terminal to read `shown` from (Antigravity), read here so only the chip redraws with it.
+    var screen: TerminalScreenModel?
     /// How full the context is (0…1), shown as a small gauge at the front of the chip; nil hides it.
     var context: Double? = nil
 
     private var label: String {
         // What the screen shows is live; the agent's settings (in `usage`) fill in until it does.
-        if let shown {
+        if let shown = shown ?? screen.flatMap({ AntigravityStatus.read($0.frame.textLines) }) {
             return shown.model + (shown.effort.map { " · " + EffortName.display($0) } ?? "")
         }
         guard let name = usage?.modelName else { return agent.displayName }
