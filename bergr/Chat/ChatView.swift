@@ -719,11 +719,27 @@ struct ChatView: View {
             for i in pending.indices where pending[i].queued { pending[i].pushed = true }
         }
         pushes += 1
+        let waiting = pending.filter(\.queued).map(\.text)
         Task {
             model.press(.escape)
-            try? await Task.sleep(for: .milliseconds(600))
+            // Return only once the queued text is back in the prompt: Claude Code takes a moment
+            // to stop, and a Return before then lands on an empty prompt (a second tap was needed).
+            await waitForScreen(upTo: .seconds(3)) { lines in
+                let bottom = lines.suffix(12).joined(separator: " ")
+                return waiting.contains { bottom.contains(String($0.prefix(24))) }
+            }
             model.press(.enter)
         }
+    }
+
+    /// Waits until the terminal screen shows what `done` looks for, or the time runs out; then a
+    /// short pause more, for the program to take input.
+    private func waitForScreen(upTo limit: Duration, _ done: @escaping ([String]) -> Bool) async {
+        let end = ContinuousClock.now + limit
+        while ContinuousClock.now < end, !done(model.frame.textLines) {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        try? await Task.sleep(for: .milliseconds(150))
     }
 
     /// `interrupting`: stop the agent first (Esc), then send, instead of queueing behind its work.
@@ -777,8 +793,10 @@ struct ChatView: View {
             }
             if interrupting {
                 model.press(.escape)
-                // Time for the agent to stop and show its prompt again before the reply arrives.
-                try? await Task.sleep(for: .milliseconds(600))
+                // Type only once the agent has stopped (its screen says so), or it's queued again.
+                await waitForScreen(upTo: .seconds(3)) { lines in
+                    lines.suffix(20).contains { $0.contains("Interrupted") }
+                }
             }
             // Image paths go first, pasted as the terminal would get them; the agents attach them.
             let message = (paths + (text.isEmpty ? [] : [text])).joined(separator: " ")
