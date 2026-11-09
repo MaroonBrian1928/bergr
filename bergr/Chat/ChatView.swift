@@ -1148,15 +1148,6 @@ private struct WorkingRow: View {
         "Reticulating the plan", "Hatching the eggs", "Tickling the kernel", "Mapping the maze",
     ]
 
-    /// What turns beside the words: a different symbol and motion with each new phrase.
-    private enum Motion: CaseIterable { case rotate, bounce, wiggle, pulse, breathe, layers }
-    // Symbols with parts that move on their own (orbits, sand, rays, dots), animated part by part.
-    private static let marks: [(symbol: String, motion: Motion)] = [
-        ("sparkles", .layers), ("gearshape.2", .rotate), ("atom", .rotate), ("hourglass", .rotate), ("lightbulb.max", .layers),
-        ("wand.and.stars", .layers), ("waveform", .layers), ("brain", .pulse), ("sparkle", .breathe),
-        ("progress.indicator", .layers), ("ellipsis.bubble", .layers), ("sparkle.magnifyingglass", .wiggle),
-        ("wand.and.rays", .bounce),
-    ]
 
     var body: some View {
         TimelineView(.periodic(from: since, by: 1)) { context in
@@ -1165,22 +1156,9 @@ private struct WorkingRow: View {
             let step = seconds / 3
             let seed = Int(since.timeIntervalSince1970)
             let verb = Self.phrases[Self.order(Self.phrases.count, seed: seed)[step % Self.phrases.count]]
-            let mark = Self.marks[Self.order(Self.marks.count, seed: seed &+ 1)[step % Self.marks.count]]
+            let markIndex = Self.order(WorkingMark.count, seed: seed &+ 1)[step % WorkingMark.count]
             HStack(spacing: 8) {
-                Image(systemName: mark.symbol)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(palette.accent)
-                    .frame(width: 18)
-                    // One symbol becomes the next: shared parts morph, the rest swap layer by layer.
-                    .contentTransition(.symbolEffect(.replace.magic(fallback: .replace.byLayer.offUp)))
-                    .symbolEffect(.rotate.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .rotate)
-                    .symbolEffect(.bounce.up.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .bounce)
-                    .symbolEffect(.wiggle.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .wiggle)
-                    .symbolEffect(.pulse.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .pulse)
-                    .symbolEffect(.breathe.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .breathe)
-                    .symbolEffect(.variableColor.iterative.dimInactiveLayers.nonReversing, options: .repeating,
-                                  isActive: !reduceMotion && mark.motion == .layers)
-                    .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: mark.symbol)
+                WorkingMark(index: markIndex, color: palette.accent)
                 HStack(spacing: 0) {
                     Text(verb + "…")
                         .font(.footnote.weight(.semibold))
