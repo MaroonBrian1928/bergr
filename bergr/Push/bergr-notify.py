@@ -9,7 +9,7 @@ Config: ~/.config/bergr/push.json, re-read when its mtime changes. Modes: "apns"
 ES256 JWT signed with the openssl CLI;
 separate sandbox and production keys under apns.sandbox / apns.production) and "ntfy" (POST to a topic).
 
-Usage: bergr-notify.py [--test]   (--test sends one test alert to every device and exits)
+Usage: bergr-notify.py [--test | --version]   (--test sends one test alert to every device and exits)
 """
 import base64
 import json
@@ -21,6 +21,8 @@ import time
 import urllib.parse
 import urllib.request
 
+# Bumped when the script changes; the app compares it with the installed copy to offer updates.
+VERSION = 1
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 ALERT_STATES = ("blocked", "done")
 KINDS = ("permission", "question", "auth")
@@ -330,6 +332,9 @@ def run():
 
 
 def main(argv):
+    if "--version" in argv:
+        print(VERSION)
+        return 0
     if "--test" in argv:
         cfg = ConfigWatcher(CONFIG_PATH).get()
         if cfg is None:

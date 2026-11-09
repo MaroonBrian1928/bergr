@@ -29,4 +29,31 @@ struct PushRegistrationTests {
         #expect(String(decoding: script, as: UTF8.self) == PushRegistration.mergeScript)
         #expect(Data(base64Encoded: String(args.last!)) == payload)
     }
+
+    @MainActor @Test func parsesVersionLine() {
+        #expect(PushRegistration.version(in: "import os\nVERSION = 7\nx = 1") == 7)
+        #expect(PushRegistration.version(in: "# VERSION = 3\n") == nil)
+        #expect((PushRegistration.bundledVersion ?? 0) >= 1)
+    }
+
+    @Test func declineSetRoundTrips() throws {
+        let defaults = try #require(UserDefaults(suiteName: "PushRegistrationTests.\(UUID())"))
+        let a = UUID(), b = UUID()
+        #expect(PushRegistration.declinedHosts(defaults).isEmpty)
+        PushRegistration.setDeclined(true, host: a, defaults: defaults)
+        PushRegistration.setDeclined(true, host: b, defaults: defaults)
+        #expect(PushRegistration.declinedHosts(defaults) == [a.uuidString, b.uuidString])
+        PushRegistration.setDeclined(false, host: a, defaults: defaults)
+        #expect(PushRegistration.declinedHosts(defaults) == [b.uuidString])
+    }
+
+    @Test func installerCommandCarriesInstallerAndArgs() throws {
+        let parts = PushRegistration.installerCommand(installer: "print(1)", op: "install", script: "VERSION = 1")
+            .split(separator: " ")
+        #expect(parts.prefix(3) == ["python3", "-I", "-c"])
+        #expect(String(decoding: try #require(Data(base64Encoded: String(parts[parts.count - 2]))), as: UTF8.self) == "print(1)")
+        let args = try #require(Data(base64Encoded: String(parts.last!)))
+        let object = try #require(try JSONSerialization.jsonObject(with: args) as? [String: String])
+        #expect(object == ["op": "install", "script": "VERSION = 1"])
+    }
 }

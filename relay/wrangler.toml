@@ -1,0 +1,13 @@
+name = "bergr-relay"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Run `npx wrangler kv namespace create REGISTRATIONS` and paste the id below.
+[[kv_namespaces]]
+binding = "REGISTRATIONS"
+id = "REPLACE_WITH_KV_ID"
+
+# Secrets (set with `npx wrangler secret put <NAME>`):
+#   APNS_TEAM_ID, APNS_SANDBOX_KEY_ID, APNS_SANDBOX_KEY,
+#   APNS_PRODUCTION_KEY_ID, APNS_PRODUCTION_KEY
+# Optional var: ALLOWED_BUNDLE_IDS = "com.example.bergr,com.example.bergr.dev"

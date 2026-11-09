@@ -21,6 +21,16 @@ struct SettingsView: View {
 
     private static let sourceCode = URL(string: "https://github.com/MaroonBrian1928/bergr")!
 
+    private static func helperText(_ state: PushRegistration.HelperState?) -> String {
+        switch state {
+        case .current: "helper running"
+        case .installing: "installing…"
+        case .missing: "not installed"
+        case .outdated: "helper needs an update"
+        case nil: "checking…"
+        }
+    }
+
     var body: some View {
         Form {
             Section {
@@ -83,9 +93,23 @@ struct SettingsView: View {
                     }
                 }
                 .frame(minHeight: 44)
+                if push.enabled, let sessions {
+                    ForEach(sessions.ids.compactMap { sessions.existing($0) }.filter { $0.state == .connected }, id: \.host.id) { session in
+                        let state = push.helperState[session.host.id]
+                        HStack {
+                            Text("\(session.host.name): \(Self.helperText(state))")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                            Spacer()
+                            if state == .missing || state == .outdated {
+                                Button(state == .outdated ? "Update" : "Install") { push.installFromSettings(on: session) }
+                                    .buttonStyle(.borderless)
+                            }
+                        }
+                    }
+                }
             } footer: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Sends alerts through Apple even when Bergr isn't running. Needs bergr-notify running on the machine.")
+                    Text("Sends alerts through Apple even when Bergr isn't running. Bergr installs a small helper (bergr-notify) on each machine to send them.")
                     if let error = push.lastError { Text(error).foregroundStyle(.red) }
                 }
             }

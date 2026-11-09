@@ -23,6 +23,18 @@ final class PushRegistration {
     var deviceToken: String?
     var lastError: String?
 
+    /// A machine that needs the helper installed or updated, waiting for the user's answer.
+    struct PendingInstall {
+        let session: HostSession
+        let hostName: String
+        let isUpdate: Bool
+    }
+    enum HelperState: Equatable { case current, missing, outdated, installing }
+    var pendingInstall: PendingInstall?
+    /// What the last check found on each machine, for Settings.
+    private(set) var helperState: [UUID: HelperState] = [:]
+    static let declinedKey = "bergr.push.declined"
+
     @ObservationIgnored private(set) weak var sessions: SessionStore?
     /// Per machine: which session and (token, enabled) state was last written there.
     @ObservationIgnored private var written: [UUID: (session: ObjectIdentifier, state: String)] = [:]
@@ -78,20 +90,120 @@ final class PushRegistration {
             if let last = written[id], last.session == identity, last.state == state { continue }
             written[id] = (identity, state)
             let command = Self.command(token: token, enabled: current.0)
+            let enabled = current.0
             Task { @MainActor [weak self] in
-                if await Self.run(command, on: session) == false, self?.written[id]?.state == state {
-                    self?.written[id] = nil
+                if await Self.run(command, on: session) == false {
+                    if self?.written[id]?.state == state { self?.written[id] = nil }
+                    return
                 }
+                if enabled { await self?.checkHelper(on: session) } else { await self?.removeHelper(on: session) }
             }
         }
     }
 
     private static func run(_ command: String, on session: HostSession) async -> Bool {
-        guard let pipe = try? await session.openExec(command) else { return false }
+        await output(command, on: session)?.contains("ok") ?? false
+    }
+
+    private static func output(_ command: String, on session: HostSession) async -> String? {
+        guard let pipe = try? await session.openExec(command) else { return nil }
         defer { pipe.close() }
         var out = Data()
-        do { for try await chunk in pipe.output { out.append(chunk) } } catch { return false }
-        return String(decoding: out, as: UTF8.self).contains("ok")
+        do { for try await chunk in pipe.output { out.append(chunk) } } catch { return nil }
+        return String(decoding: out, as: UTF8.self)
+    }
+
+    // MARK: Helper service
+
+    private static let bundledScript: String? = Bundle.main.url(forResource: "bergr-notify", withExtension: "py")
+        .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+    private static let installer: String? = Bundle.main.url(forResource: "install-helper", withExtension: "py")
+        .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+
+    /// The `VERSION = n` line of a bergr-notify.py source.
+    nonisolated static func version(in source: String) -> Int? {
+        guard let match = source.firstMatch(of: /(?m)^VERSION\s*=\s*(\d+)/) else { return nil }
+        return Int(match.1)
+    }
+
+    static var bundledVersion: Int? { bundledScript.flatMap { version(in: $0) } }
+
+    nonisolated static func declinedHosts(_ defaults: UserDefaults = .standard) -> Set<String> {
+        Set(defaults.stringArray(forKey: declinedKey) ?? [])
+    }
+
+    nonisolated static func setDeclined(_ declined: Bool, host: UUID, defaults: UserDefaults = .standard) {
+        var set = declinedHosts(defaults)
+        if declined { set.insert(host.uuidString) } else { set.remove(host.uuidString) }
+        defaults.set(set.sorted(), forKey: declinedKey)
+    }
+
+    /// The command that runs install-helper.py with these arguments on the machine.
+    nonisolated static func installerCommand(installer: String, op: String, script: String? = nil) -> String {
+        var object: [String: Any] = ["op": op]
+        if let script { object["script"] = script }
+        let args = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
+        return "python3 -I -c 'import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))' "
+            + Data(installer.utf8).base64EncodedString() + " " + args.base64EncodedString()
+    }
+
+    private static func helperResult(_ op: String, script: String? = nil, on session: HostSession) async -> [String: Any]? {
+        guard let installer else { return nil }
+        let command = installerCommand(installer: installer, op: op, script: script)
+        guard let out = await output(command, on: session) else { return nil }
+        let line = out.split(separator: "\n").last.map(String.init) ?? ""
+        return (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any]
+    }
+
+    /// Asks once (per machine) to install or update the helper when it is missing or older than the bundled one.
+    private func checkHelper(on session: HostSession) async {
+        guard let bundled = Self.bundledVersion, let status = await Self.helperResult("status", on: session) else { return }
+        let id = session.host.id
+        let installed = status["installed"] as? Bool ?? false
+        let version = status["version"] as? Int
+        if installed, let version, version >= bundled {
+            helperState[id] = .current
+            return
+        }
+        helperState[id] = installed ? .outdated : .missing
+        guard enabled, pendingInstall == nil, !Self.declinedHosts().contains(id.uuidString) else { return }
+        pendingInstall = PendingInstall(session: session, hostName: session.host.name, isUpdate: installed)
+    }
+
+    private func removeHelper(on session: HostSession) async {
+        helperState[session.host.id] = nil
+        _ = await Self.helperResult("uninstall", on: session)
+    }
+
+    /// Installs (or updates) the helper after the user agreed.
+    func install(on session: HostSession) async {
+        let id = session.host.id
+        let name = session.host.name
+        guard let script = Self.bundledScript else {
+            lastError = "Couldn't install the push helper on \(name): the helper is missing from the app."
+            return
+        }
+        let before = helperState[id]
+        helperState[id] = .installing
+        let result = await Self.helperResult("install", script: script, on: session)
+        if result?["ok"] as? Bool == true {
+            lastError = nil
+            helperState[id] = .current
+        } else {
+            helperState[id] = before
+            let reason = result?["error"] as? String ?? "no answer from the machine"
+            lastError = "Couldn't install the push helper on \(name): \(reason)"
+        }
+    }
+
+    func decline(_ pending: PendingInstall) {
+        Self.setDeclined(true, host: pending.session.host.id)
+    }
+
+    /// Settings' Install button: clears an earlier "Not now" and installs right away.
+    func installFromSettings(on session: HostSession) {
+        Self.setDeclined(false, host: session.host.id)
+        Task { await install(on: session) }
     }
 
     // MARK: Command
