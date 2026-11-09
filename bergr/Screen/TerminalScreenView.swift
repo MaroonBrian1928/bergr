@@ -111,6 +111,12 @@ struct TerminalScreenView: View {
         // The title bar sits on the terminal's background: match its brightness, not the app's.
         .toolbarColorScheme(chat ? colorScheme : theme.dark ? .dark : .light, for: .navigationBar)
         .onChange(of: theme, initial: true) { _, theme in model.theme = theme }
+        // Back from the background (or a dropped line): the line is new, and the terminal's
+        // channel went with the old one. Attach again, or a reply typed in the chat goes nowhere
+        // until the terminal itself is opened.
+        .onChange(of: session.state == .connected) { _, connected in
+            if connected, model.started { model.reconnect() }
+        }
         .toolbar {
             if pane == nil {
                 ToolbarItemGroup(placement: .topBarTrailing) { terminalButtons(agent: agent, chat: chat) }

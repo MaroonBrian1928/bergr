@@ -87,6 +87,9 @@ final class TerminalScreenModel {
         pump = Task { await run() }
     }
 
+    /// Whether it has been started (attached once), so it can attach again.
+    var started: Bool { session != nil }
+
     /// Attaches again (a channel that died quietly, e.g. after the app was in the background,
     /// swallows input without an error). Input sent meanwhile waits and goes once attached.
     func reconnect() {
