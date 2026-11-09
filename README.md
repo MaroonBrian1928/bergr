@@ -19,22 +19,26 @@ bergr connects to your machines over SSH and shows every coding agent that herdr
 on all of them at once: which ones are working, which are done, and which need you. Open one and you
 get its conversation as a chat, with a real terminal underneath when you want it.
 
-- **Every agent at a glance**: one list across your machines, the ones that need you on top, with
-  Claude Code, Codex and Antigravity marked by their logos and their sub-agents counted
+- **Every agent at a glance**: one list across your machines, sorted by what needs you (needs you,
+  finished, working, idle) or grouped by machine, with Claude Code, Codex and Antigravity marked by
+  their logos and their sub-agents counted; machines linked to another machine's herdr-core show too
 - **A chat for each agent**: replies as they stream in, tool runs, plans, images and sub-agents;
-  reply, attach images, switch the model, effort and permission mode, and see how full the context
-  is and how much of your plan you've used
+  reply (or paste a screenshot), queue a reply while it works or send it now, slash commands and
+  skills from anywhere in a message, switch the model, effort and permission mode, and see how full
+  the context is and how much of your plan you've used
 - **Answer in one tap**: an agent's question or approval becomes buttons, in the chat, on the Lock
   Screen and in the Dynamic Island; every answer stays in the conversation
-- **Stays with you in the background**: a Live Activity and notifications when an agent finishes or
-  needs you, and a Home Screen widget
+- **Stays with you in the background**: a Live Activity, a Home Screen widget, and optional push
+  alerts when an agent finishes or needs you, end-to-end encrypted, with a small helper on each
+  machine that Bergr installs for you (see [Push alerts](#push-alerts))
 - **A real terminal**, powered by [Ghostty](https://ghostty.org)'s libghostty-vt: key bar, hardware
   keyboards, links, scrollback and pinch to zoom
 - **Keys in the Secure Enclave**, optionally behind Face ID, or import your own; host keys checked
   on every connect, and connections that follow your VPN
 
 On the iPad and the unfolded iPhone Duo, the agents sit next to the conversation, and a second
-conversation can open beside the first. It works on every iPhone and iPad with iOS 26 or later.
+conversation can open beside the first. It works on every iPhone and iPad with iOS 26 or later, and
+on Apple silicon Macs as an iPad app.
 
 <p align="center">
   <picture>
@@ -69,7 +73,19 @@ just video     # the README video and screenshots, from the demo machine
 ```
 
 To run it on your own iPhone, sign with your team: set `BERGR_TEAM` and `BERGR_BUNDLE_ID_PREFIX`
-in `.envrc.local` (see `.envrc`), then `just phone`. `just` lists the other commands.
+in `.envrc.local` (see `.envrc`), then `just phone`; `just mac` installs it on this Mac. `just`
+lists the other commands.
+
+## Push alerts
+
+Push alerts are optional (Settings → Push alerts). When they're on, Bergr offers to install a small
+helper, `bergr-notify`, on each machine: a Python script that runs as a user service (systemd on
+Linux, a LaunchAgent on macOS), follows `hc events`, and sends an alert when an agent finishes a
+turn or needs you. The alert text is encrypted on the machine with a key only your phone holds;
+the relay in [`relay/`](relay) (a Cloudflare Worker) and Apple only pass an opaque blob along.
+
+Building it yourself, push alerts need your own relay and APNs key: deploy `relay/` as its
+README describes, and point the app at it with the `bergr.push.relay` user default.
 
 ## License
 
