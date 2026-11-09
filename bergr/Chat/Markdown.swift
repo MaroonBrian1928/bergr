@@ -290,8 +290,17 @@ private struct TableView: View {
     let rows: [[String]]
     let palette: ChatPalette
 
+    /// Each column as wide as its longest cell needs, between 64 and 240 points (about 7.5 pt a character).
+    static func widths(_ rows: [[String]], columns: Int) -> [CGFloat] {
+        (0..<columns).map { c in
+            let longest = rows.map { c < $0.count ? $0[c].count : 0 }.max() ?? 0
+            return min(240, max(64, CGFloat(longest) * 7.5))
+        }
+    }
+
     var body: some View {
         let columns = rows.map(\.count).max() ?? 0
+        let widths = Self.widths(rows, columns: columns)
         ScrollView(.horizontal, showsIndicators: false) {
             Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
                 ForEach(rows.indices, id: \.self) { r in
@@ -299,8 +308,10 @@ private struct TableView: View {
                         ForEach(0..<columns, id: \.self) { c in
                             Text(inlineMarkdown(c < rows[r].count ? rows[r][c] : "", palette: palette))
                                 .font(r == 0 ? .subheadline.weight(.semibold) : .subheadline)
-                                .frame(minWidth: 48, maxWidth: 240, alignment: .leading)
+                                // A set width per column: with a flexible one, Grid sized rows for
+                                // unwrapped text, and wrapped lines drew over the next row.
                                 .fixedSize(horizontal: false, vertical: true)
+                                .frame(width: widths[c], alignment: .leading)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 10)
                         }

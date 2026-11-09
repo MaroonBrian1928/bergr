@@ -1156,16 +1156,23 @@ private struct WorkingRow: View {
             let step = seconds / 3
             let seed = Int(since.timeIntervalSince1970)
             let verb = Self.phrases[Self.order(Self.phrases.count, seed: seed)[step % Self.phrases.count]]
-            let markIndex = Self.order(WorkingMark.count, seed: seed &+ 1)[step % WorkingMark.count]
+            // The picture stays twice as long as a phrase, long enough for its motion to read.
+            let markStep = seconds / 6
+            let markIndex = Self.order(WorkingMark.count, seed: seed &+ 1)[markStep % WorkingMark.count]
             HStack(spacing: 8) {
                 WorkingMark(index: markIndex, color: palette.accent)
                 HStack(spacing: 0) {
-                    Text(verb + "…")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(palette.accent)
-                        .contentTransition(reduceMotion ? .identity : .numericText())
-                        .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: verb)
-                        .shimmer(palette: palette)
+                    // One phrase gives way to the next: a short blurred crossfade with a small rise
+                    // (a word rolling letter by letter, like a number, read as a glitch).
+                    ZStack(alignment: .leading) {
+                        Text(verb + "…")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(palette.accent)
+                            .shimmer(palette: palette)
+                            .id(verb)
+                            .transition(reduceMotion ? .opacity : .phraseChange)
+                    }
+                    .animation(.smooth(duration: 0.28), value: verb)
                     Text(" · " + Self.elapsed(seconds))
                         .font(.footnote)
                         .monospacedDigit()
@@ -1217,7 +1224,8 @@ private struct Shimmer: ViewModifier {
                     .allowsHitTesting(false)
                 }
                 .onAppear {
-                    withAnimation(.linear(duration: 1.6).repeatForever(autoreverses: false)) { phase = 1 }
+                    // A sweep, then a rest: calmer next to the moving mark.
+                    withAnimation(.easeInOut(duration: 1.8).delay(1.2).repeatForever(autoreverses: false)) { phase = 1 }
                 }
         }
     }
@@ -1461,5 +1469,22 @@ struct SeededRandom: RandomNumberGenerator {
         z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
         z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
         return z ^ (z >> 31)
+    }
+}
+
+/// A blurred crossfade with a small rise, for one phrase replacing another.
+private struct PhraseChange: ViewModifier {
+    let shown: Bool
+    let rise: CGFloat
+    func body(content: Content) -> some View {
+        content.opacity(shown ? 1 : 0).blur(radius: shown ? 0 : 3).offset(y: shown ? 0 : rise)
+    }
+}
+
+private extension AnyTransition {
+    static var phraseChange: AnyTransition {
+        .asymmetric(
+            insertion: .modifier(active: PhraseChange(shown: false, rise: 4), identity: PhraseChange(shown: true, rise: 0)),
+            removal: .modifier(active: PhraseChange(shown: false, rise: -4), identity: PhraseChange(shown: true, rise: 0)))
     }
 }
