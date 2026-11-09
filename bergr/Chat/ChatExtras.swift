@@ -1,3 +1,4 @@
+import ImageIO
 import SwiftUI
 
 /// The agent's task list: what's done, what's under way, what's still to come.
@@ -77,40 +78,87 @@ struct PlanCard: View {
 }
 
 /// An image in the conversation. Tap to see it full size, and share it.
+///
+/// Decoding a JPEG is slow, and this view's body runs on every chat update: it shows a copy
+/// shrunk to its display size, made once off the main thread and cached, and decodes the full
+/// image only when opened.
 struct ImageBubble: View {
     let data: Data
     let fromUser: Bool
     let palette: ChatPalette
+    @State private var thumb: UIImage?
+    @State private var full: UIImage?
     @State private var showing = false
 
     var body: some View {
-        if let image = UIImage(data: data) {
-            Button {
-                showing = true
-            } label: {
-                // Its own size, at most 240 × 260 and in proportion, so it sits against its side
-                // instead of in the middle of a wider box.
-                let scale = min(240 / max(image.size.width, 1), 260 / max(image.size.height, 1), 1)
-                Image(uiImage: image)
-                    .resizable()
-                    .frame(width: image.size.width * scale, height: image.size.height * scale)
+        Group {
+            if let size = ImageThumbs.pixelSize(data) {
+                Button {
+                    full = UIImage(data: data)
+                    showing = full != nil
+                } label: {
+                    // Its own size, at most 240 × 260 and in proportion, so it sits against its side
+                    // instead of in the middle of a wider box.
+                    let scale = min(240 / max(size.width, 1), 260 / max(size.height, 1), 1)
+                    let frame = CGSize(width: size.width * scale, height: size.height * scale)
+                    ZStack {
+                        palette.bubble
+                        if let thumb { Image(uiImage: thumb).resizable() }
+                    }
+                    .frame(width: frame.width, height: frame.height)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: fromUser ? .trailing : .leading)
+                .contentShape(Rectangle())
+                .accessibilityLabel("Image")
+                .accessibilityHint("Opens the image full screen, to zoom")
+                .fullScreenCover(isPresented: $showing) {
+                    // No zoom transition: its drag-to-close gesture took every pinch and pan.
+                    if let full { ImageViewer(image: full) }
+                }
+            } else {
+                Label("Image", systemImage: "photo")
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+                    .frame(maxWidth: .infinity, alignment: fromUser ? .trailing : .leading)
             }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: fromUser ? .trailing : .leading)
-            .contentShape(Rectangle())
-            .accessibilityLabel("Image")
-            .accessibilityHint("Opens the image full screen, to zoom")
-            .fullScreenCover(isPresented: $showing) {
-                // No zoom transition: its drag-to-close gesture took every pinch and pan.
-                ImageViewer(image: image)
-            }
-        } else {
-            Label("Image", systemImage: "photo")
-                .font(.footnote)
-                .foregroundStyle(palette.secondary)
-                .frame(maxWidth: .infinity, alignment: fromUser ? .trailing : .leading)
         }
+        .task(id: data.count) { thumb = await ImageThumbs.thumbnail(data) }
+    }
+}
+
+/// Small copies of conversation images, for display.
+enum ImageThumbs {
+    private static let cache = NSCache<NSString, UIImage>()
+
+    /// Width and height in points from the file's header, without decoding it.
+    static func pixelSize(_ data: Data) -> CGSize? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              var w = props[kCGImagePropertyPixelWidth] as? CGFloat,
+              var h = props[kCGImagePropertyPixelHeight] as? CGFloat else { return nil }
+        if let o = props[kCGImagePropertyOrientation] as? UInt32, (5...8).contains(o) { swap(&w, &h) }
+        return CGSize(width: w, height: h)
+    }
+
+    /// A copy at most 260 points (in screen pixels) on its long side, decoded off the main thread.
+    static func thumbnail(_ data: Data) async -> UIImage? {
+        let key = "\(data.count)-\(data.prefix(64).hashValue)-\(data.suffix(64).hashValue)" as NSString
+        if let hit = cache.object(forKey: key) { return hit }
+        let maxPixels = 260 * 3
+        let image = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+            ]
+            return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary).map { UIImage(cgImage: $0) }
+        }.value
+        if let image { cache.setObject(image, forKey: key) }
+        return image
     }
 }
 
