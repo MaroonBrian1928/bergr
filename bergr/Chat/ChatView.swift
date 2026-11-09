@@ -488,10 +488,12 @@ struct ChatView: View {
         return rows
     }
 
-    /// Sub-agents that no tool call in the conversation started.
+    /// Sub-agents that no tool call in the conversation started, while they still run. A finished
+    /// one whose call isn't loaded (it was before a compaction, or beyond the backlog) has nowhere
+    /// to sit, and piling those at the end of every visit only buries the conversation.
     private var looseSubagents: [ChatFeed.SubagentInfo] {
         let tools = Set(feed.items.filter { if case .tool = $0.kind { true } else { false } }.map(\.id))
-        return feed.subagents.filter { $0.parent.map { !tools.contains($0) } ?? true }
+        return feed.subagents.filter { ($0.parent.map { !tools.contains($0) } ?? true) && $0.state == .running }
     }
 
     @ViewBuilder
