@@ -32,7 +32,9 @@ struct TerminalScreenView: View {
             return terminal?.cwd.hasSuffix("infra") == true ? .codex : .claude
         }
         #endif
-        guard let terminal, session.canRunCommands, !address.contains("/") else { return nil }
+        // Not tied to the line being up: while it reconnects (back from the background) the chat
+        // stays and waits, instead of the terminal flashing up until the line is back.
+        guard let terminal, !session.host.isDemo, !address.contains("/") else { return nil }
         return ChatAgent.detect(terminal)
     }
 
