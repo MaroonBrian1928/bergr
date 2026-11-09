@@ -653,6 +653,17 @@ struct ChatView: View {
                 .disabled(!ready && !stops)
                 .accessibilityLabel(stops ? "Interrupt \(agent.displayName)" : "Send")
                 .sensoryFeedback(.impact(weight: .light), trigger: sent)
+                // While the agent works, a tap queues the reply (the agent reads it after its
+                // current step); long-press can stop it and send at once instead.
+                .contextMenu {
+                    if state == "working", ready {
+                        Button("Send Now", systemImage: "bolt.fill") { send(interrupting: true) }
+                        Button("Queue", systemImage: "text.badge.plus") { send() }
+                    }
+                }
+                .accessibilityAction(named: "Send Now") {
+                    if state == "working", ready { send(interrupting: true) }
+                }
             }
             .padding(.trailing, 2)
             .padding(.bottom, 2)
@@ -678,7 +689,8 @@ struct ChatView: View {
         }
     }
 
-    private func send() {
+    /// `interrupting`: stop the agent first (Esc), then send, instead of queueing behind its work.
+    private func send(interrupting: Bool = false) {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let images = attachments
         guard (!text.isEmpty || !images.isEmpty), canType else { return }
@@ -722,6 +734,11 @@ struct ChatView: View {
                     pending.removeLast()
                     return
                 }
+            }
+            if interrupting {
+                model.press(.escape)
+                // Time for the agent to stop and show its prompt again before the reply arrives.
+                try? await Task.sleep(for: .milliseconds(600))
             }
             // Image paths go first, pasted as the terminal would get them; the agents attach them.
             let message = (paths + (text.isEmpty ? [] : [text])).joined(separator: " ")
