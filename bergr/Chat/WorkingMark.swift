@@ -8,21 +8,18 @@ import SwiftUI
 struct WorkingMark: View {
     /// Which picture (any integer; wraps).
     let index: Int
+    /// The picture before it, and when the change began: the mark flows from that one into this
+    /// one. Given by the caller (it knows when the picture changes), so the very first frame of a
+    /// change is already part of the flow, with no frame of the new picture before it.
+    var previous: Int?
+    var changedAt: Date = .distantPast
     let color: Color
     var size: CGFloat = 20
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var morph: Morph?
 
     static let count = Pattern.allCases.count
-    /// How long one picture takes to become the next.
-    static let morphDuration = 0.55
-
-    /// A change under way: the old picture, when it started, and which old stroke goes to which new one.
-    private struct Morph {
-        let from: Pattern
-        let start: Date
-        let pairs: [Int]
-    }
+    /// How long one picture takes to become the next: slow enough to watch it happen.
+    static let morphDuration = 1.1
 
     var body: some View {
         TimelineView(.animation(paused: reduceMotion)) { context in
@@ -31,29 +28,31 @@ struct WorkingMark: View {
                 let now = Pattern.at(index)
                 let r = min(canvas.width, canvas.height) / 2
                 let center = CGPoint(x: canvas.width / 2, y: canvas.height / 2)
-                let p = morph.map { min(1, context.date.timeIntervalSince($0.start) / Self.morphDuration) } ?? 1
+                let p = context.date.timeIntervalSince(changedAt) / Self.morphDuration
+                let morphing = !reduceMotion && previous != nil && p < 1 && p >= 0
+                let from = Pattern.at(previous ?? index)
+                // Pairs fixed for the whole change (taken at its start), so no stroke switches partner midway.
+                let pairs = morphing ? Stroke.pairs(from: from, to: now, at: changedAt.timeIntervalSinceReferenceDate)
+                                     : []
+                let k = Ease.smoother(p)
+                // The whole mark turns a little as it changes, so the strokes sweep together.
+                let swirl = morphing ? sin(.pi * k) * 0.5 : 0
                 for i in 0..<Stroke.count {
                     var s = now.stroke(i, t)
-                    if let morph, p < 1 {
-                        s = Stroke.mix(morph.from.stroke(morph.pairs[i], t), s, Ease.settle(p))
-                    }
+                    if morphing { s = Stroke.mix(from.stroke(pairs[i], t), s, k).turned(swirl) }
                     s.draw(in: &gc, center: center, radius: r, color: color)
                 }
             }
         }
         .frame(width: size, height: size)
-        .onChange(of: index) { old, new in
-            guard !reduceMotion else { morph = nil; return }
-            let t = Date.now.timeIntervalSinceReferenceDate
-            morph = Morph(from: Pattern.at(old), start: .now,
-                          pairs: Stroke.pairs(from: Pattern.at(old), to: Pattern.at(new), at: t))
-        }
         .accessibilityHidden(true)
     }
 }
 
 /// Curves for the motion: nothing in the mark moves at a constant speed.
 enum Ease {
+    /// Slow, fast, slow, with gentler ends than `inOut`: for the change from one picture to the next.
+    static func smoother(_ x: Double) -> Double { let x = clamp(x); return x * x * x * (x * (6 * x - 15) + 10) }
     /// Slow, fast, slow.
     static func inOut(_ x: Double) -> Double { let x = clamp(x); return x * x * (3 - 2 * x) }
     /// Fast, then slowing down.
@@ -108,6 +107,14 @@ struct Stroke {
         return pairs
     }
 
+    /// Turned around the middle by `a` radians.
+    func turned(_ a: Double) -> Stroke {
+        var s = self
+        (s.x, s.y) = (x * cos(a) - y * sin(a), x * sin(a) + y * cos(a))
+        s.angle += a
+        return s
+    }
+
     func draw(in gc: inout GraphicsContext, center: CGPoint, radius r: CGFloat, color: Color) {
         guard opacity > 0.01 else { return }
         let half = length / 2
@@ -150,10 +157,9 @@ enum Pattern: CaseIterable {
             let a = f / n * .pi * 2 + turned
             return Stroke(x: cos(a) * 0.6, y: sin(a) * 0.6, length: 0.34, angle: a, width: 0.2)
         case .spinner:
-            // Spokes; a bright head runs round, quick then easing, leaving a fading trail.
+            // Spokes; a bright head runs round at an even pace, leaving a fading trail.
             let a = f / n * .pi * 2
-            let lap = t / 1.1
-            let head = (floor(lap) + Ease.inOut(Ease.frac(lap))) * n
+            let head = t / 1.1 * n
             let age = Ease.frac((head - f) / n)
             return Stroke(x: cos(a) * 0.6, y: sin(a) * 0.6, length: 0.36, angle: a, width: Stroke.line,
                           opacity: 0.2 + 0.8 * pow(1 - age, 2))
@@ -169,8 +175,8 @@ enum Pattern: CaseIterable {
             let glint = Ease.bump(Ease.frac(t * 0.55 + f * 0.27) * 2.5)
             return Stroke(x: cos(a) * 0.78, y: sin(a) * 0.78, width: 0.18 * glint + 0.04, opacity: glint)
         case .wave:
-            // Bars like a voice: two waves at different speeds, so it never quite repeats.
-            let h = 0.3 + 0.7 * Ease.inOut(0.5 + 0.25 * sin(t * 3.1 + f * 0.75) + 0.25 * sin(t * 1.7 - f * 1.3))
+            // Bars rising and falling in one smooth wave that travels across them.
+            let h = 0.3 + 0.7 * (0.5 + 0.5 * sin(t * 3.2 - f * 0.8))
             return Stroke(x: -0.8 + f * (1.6 / (n - 1)), y: 0, length: h * 1.5, angle: .pi / 2, width: 0.14)
         case .dots:
             // Typing dots that hop in turn, landing softly. The other strokes sit behind them, so a

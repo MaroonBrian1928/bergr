@@ -1159,8 +1159,11 @@ private struct WorkingRow: View {
             // The picture stays twice as long as a phrase, long enough for its motion to read.
             let markStep = seconds / 6
             let markIndex = Self.order(WorkingMark.count, seed: seed &+ 1)[markStep % WorkingMark.count]
+            let markOrder = Self.order(WorkingMark.count, seed: seed &+ 1)
+            let previousMark = markStep > 0 ? markOrder[(markStep - 1) % WorkingMark.count] : nil
             HStack(spacing: 8) {
-                WorkingMark(index: markIndex, color: palette.accent)
+                WorkingMark(index: markIndex, previous: previousMark,
+                            changedAt: since.addingTimeInterval(Double(markStep * 6)), color: palette.accent)
                 HStack(spacing: 0) {
                     // One phrase gives way to the next: a short blurred crossfade with a small rise
                     // (a word rolling letter by letter, like a number, read as a glitch).
