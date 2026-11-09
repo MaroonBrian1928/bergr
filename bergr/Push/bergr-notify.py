@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 3
+VERSION = 4
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 ALERT_STATES = ("blocked", "done")
 KINDS = ("permission", "question", "auth")
@@ -39,7 +39,7 @@ def log(msg):
 
 def initial_state():
     """last: address -> last status state seen; sent: (address, turn, state) already pushed."""
-    return {"last": {}, "sent": set()}
+    return {"last": {}, "sent": set(), "terms": {}}
 
 
 def _text(value):
@@ -133,13 +133,62 @@ def apns_payload(title, body, address, host):
     }
 
 
+def apply_event(terms, line):
+    """Folds one `hc events` line into `terms` (address -> terminal record). The stream starts
+    with a snapshot ({"terminals": [...]}), then sends one JSON-RPC notification per change
+    ({"method": "event", "params": {"type", "terminal", "data"}}), a heartbeat every 15 s, and
+    "missed" with a fresh snapshot after falling behind. Returns the new map, or None when the
+    line changes nothing (heartbeats, unknown methods)."""
+    msg = json.loads(line)
+    if not isinstance(msg, dict):
+        raise ValueError("not an object")
+    if "terminals" in msg or msg.get("method") == "missed":
+        terminals = msg["terminals"] if "terminals" in msg else (msg.get("params") or {}).get("terminals")
+        if not isinstance(terminals, list):
+            raise ValueError("terminals is not a list")
+        return {t["address"]: t for t in terminals if isinstance(t, dict) and isinstance(t.get("address"), str)}
+    if msg.get("method") != "event":
+        return None
+    p = msg.get("params") or {}
+    kind, address, data = p.get("type"), p.get("terminal"), p.get("data")
+    if not isinstance(address, str):
+        return None
+    terms = dict(terms)
+    data = data if isinstance(data, dict) else {}
+    if kind in ("created", "restarted"):
+        terms[address] = data
+        return terms
+    if kind == "removed":
+        terms.pop(address, None)
+        return terms
+    term = dict(terms.get(address) or {"address": address})
+    if kind == "status":
+        term["status"] = data.get("status")
+    elif kind == "turn":
+        term["turn"] = data.get("turn")
+    elif kind == "labels":
+        record = data.get("record")
+        if isinstance(record, dict):
+            term = dict(record)
+        else:
+            term["labels"] = data.get("labels") or {}
+    elif kind == "title":
+        term["title"] = data.get("title")
+    else:
+        return None
+    terms[address] = term
+    return terms
+
+
 def alerts_for(prev_state, line):
     """Processes one `hc events` line. Returns (new_state, alerts); alerts are dicts with
     address, turn, state, title, body. A malformed line leaves the state unchanged."""
     prev = prev_state if prev_state is not None else initial_state()
     try:
-        event = json.loads(line)
-        terminals = event["terminals"]
+        terms = apply_event(prev.get("terms", {}), line)
+        if terms is None:
+            return prev, []
+        terminals = list(terms.values())
         if not isinstance(terminals, list):
             raise ValueError("terminals is not a list")
     except (ValueError, KeyError, TypeError) as e:
@@ -159,9 +208,12 @@ def alerts_for(prev_state, line):
         present.add(address)
         status = term.get("status") if isinstance(term.get("status"), dict) else {}
         state = status.get("state")
+        turn_now = term.get("turn")
         known = address in last
-        changed = known and state != last[address]
-        last[address] = state
+        # herdr-core can report "done" before the turn number moves on, so a new turn while
+        # still blocked/done counts as a change too.
+        changed = known and (state != last[address][0] or (turn_now != last[address][1] and state in ALERT_STATES))
+        last[address] = (state, turn_now)
         if not changed or state not in ALERT_STATES or term.get("notify") is False:
             continue
         turn = term.get("turn")
@@ -183,7 +235,7 @@ def alerts_for(prev_state, line):
 
     last = {a: s for a, s in last.items() if a in present}
     sent = {k for k in sent if k[0] in present}
-    return {"last": last, "sent": sent}, alerts
+    return {"last": last, "sent": sent, "terms": terms}, alerts
 
 
 # ---- I/O

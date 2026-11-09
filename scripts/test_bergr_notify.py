@@ -70,7 +70,7 @@ class Alerts(Base):
     def test_first_line_no_alert(self):
         state, alerts = notify.alerts_for(None, line(term(state="blocked", turn=5)))
         self.assertEqual(alerts, [])
-        self.assertEqual(state["last"], {"t1": "blocked"})
+        self.assertEqual(state["last"], {"t1": ("blocked", 5)})
 
     def test_working_to_blocked_alerts(self):
         state, _ = notify.alerts_for(None, line(term(state="working", turn=5)))
@@ -239,6 +239,48 @@ class ApnsKeyTests(unittest.TestCase):
     def test_missing_environment_raises(self):
         with self.assertRaises(KeyError):
             notify.apns_key({"team_id": "T", "sandbox": {"key_id": "S", "key_path": "s"}}, False)
+
+
+def ev(kind, address, data):
+    return json.dumps({"jsonrpc": "2.0", "method": "event",
+                       "params": {"seq": 1, "type": kind, "terminal": address, "data": data}})
+
+
+class EventStreamTests(unittest.TestCase):
+    def start(self, **kw):
+        state, alerts = notify.alerts_for(None, line(term(**kw)))
+        self.assertEqual(alerts, [])
+        return state
+
+    def test_status_event_alerts(self):
+        state = self.start(state="working", turn=5, seen=4)
+        state, alerts = notify.alerts_for(state, ev("status", "t1", {"status": {"app": "claude-code", "state": "done"}}))
+        self.assertEqual([a["title"] for a in alerts], ["Claude finished"])
+
+    def test_done_then_turn(self):
+        state = self.start(state="working", turn=5, seen=5)
+        state, alerts = notify.alerts_for(state, ev("status", "t1", {"status": {"app": "claude-code", "state": "done"}}))
+        self.assertEqual(alerts, [])  # turn 5 already seen
+        state, alerts = notify.alerts_for(state, ev("turn", "t1", {"turn": 6}))
+        self.assertEqual([(a["turn"], a["state"]) for a in alerts], [(6, "done")])
+
+    def test_heartbeat_and_unknown_ignored(self):
+        state = self.start(state="working", turn=5)
+        same, alerts = notify.alerts_for(state, json.dumps({"jsonrpc": "2.0", "method": "heartbeat", "params": {"seq": 2}}))
+        self.assertEqual((same, alerts), (state, []))
+
+    def test_seen_label_event_suppresses(self):
+        state = self.start(state="working", turn=5, seen=4)
+        state, _ = notify.alerts_for(state, ev("labels", "t1", {"labels": {"herdr.seen": "5"}}))
+        state, alerts = notify.alerts_for(state, ev("status", "t1", {"status": {"app": "claude-code", "state": "done"}}))
+        self.assertEqual(alerts, [])
+
+    def test_created_terminal_then_blocked(self):
+        state = self.start(state="working", turn=5)
+        new = term(addr="t9", state="working", turn=1)
+        state, _ = notify.alerts_for(state, ev("created", "t9", new))
+        state, alerts = notify.alerts_for(state, ev("status", "t9", {"status": {"app": "codex", "state": "blocked", "kind": "permission"}}))
+        self.assertEqual([a["title"] for a in alerts], ["Codex needs you"])
 
 
 class RelayTests(unittest.TestCase):
