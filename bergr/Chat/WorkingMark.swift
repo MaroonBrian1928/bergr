@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The mark beside "Thinking…": eight small strokes that make a little moving picture (orbits,
-/// gears, falling sand, a spinner, a twinkle, a wave, dots, a ripple) and flow into the next
+/// gears, a spinner, a twinkle, a wave, dots, a ripple) and flow into the next
 /// picture when it changes. Drawn here rather than with SF Symbols, whose effects mostly move
 /// the whole symbol; here the parts move, each with a rhythm of its own (nothing at constant
 /// speed), and lines are thinner than dots so the pictures read at this size.
@@ -121,7 +121,7 @@ struct Stroke {
 }
 
 enum Pattern: CaseIterable {
-    case orbit, gear, hourglass, spinner, twinkle, wave, dots, ripple
+    case orbit, gear, spinner, twinkle, wave, dots, ripple
 
     static func at(_ index: Int) -> Pattern {
         let all = allCases
@@ -149,21 +149,6 @@ enum Pattern: CaseIterable {
             let turned = (floor(beat) + Ease.settle(min(1, Ease.frac(beat) / 0.55))) * (.pi / 4)
             let a = f / n * .pi * 2 + turned
             return Stroke(x: cos(a) * 0.6, y: sin(a) * 0.6, length: 0.34, angle: a, width: 0.2)
-        case .hourglass:
-            // Sand falls, speeding up, fading in at the top and out at the bottom; every 4 s the
-            // glass turns over with a spring and rests.
-            let cycle = 4.0, turning = 0.7
-            let local = Ease.frac(t / cycle) * cycle
-            let flipping = max(0, local - (cycle - turning)) / turning
-            let turn = (floor(t / cycle) + Ease.settle(flipping)) * .pi
-            if i < 2 {  // the two rims
-                return rotated(Stroke(x: 0, y: i == 0 ? -0.82 : 0.82, length: 0.9, angle: 0, width: Stroke.line),
-                               turn)
-            }
-            let fall = Ease.frac(t * 0.7 + (f - 2) / 6)
-            let y = -0.55 + Ease.in(fall) * 1.15
-            let x = (f.truncatingRemainder(dividingBy: 2) == 0 ? 1 : -1) * 0.12 * (1 - fall) * abs(y)
-            return rotated(Stroke(x: x, y: y, width: 0.2, opacity: Ease.bump(fall) * (1 - flipping)), turn)
         case .spinner:
             // Spokes; a bright head runs round, quick then easing, leaving a fading trail.
             let a = f / n * .pi * 2
