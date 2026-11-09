@@ -728,8 +728,26 @@ struct ChatView: View {
                 let bottom = lines.suffix(12).joined(separator: " ")
                 return waiting.contains { bottom.contains(String($0.prefix(24))) }
             }
+            // An agent that sends its queue by itself once stopped: nothing to press.
+            if waiting.allSatisfy({ text in !model.frame.textLines.suffix(12).joined(separator: " ")
+                .contains(String(text.prefix(24))) }) { return }
             model.press(.enter)
         }
+    }
+
+    /// Waits until herdr-core says the agent stopped working (the same for every agent), or the
+    /// time runs out; then a short pause more, for its prompt to take input.
+    private func waitUntilStopped(upTo limit: Duration) async {
+        guard let session, let address = terminal?.address else {
+            try? await Task.sleep(for: .seconds(1))
+            return
+        }
+        let end = ContinuousClock.now + limit
+        // Read from the session each time: this view's own copy of the status doesn't change.
+        while ContinuousClock.now < end, session.terminal(address)?.status?.state == "working" {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        try? await Task.sleep(for: .milliseconds(250))
     }
 
     /// Waits until the terminal screen shows what `done` looks for, or the time runs out; then a
@@ -794,9 +812,7 @@ struct ChatView: View {
             if interrupting {
                 model.press(.escape)
                 // Type only once the agent has stopped (its screen says so), or it's queued again.
-                await waitForScreen(upTo: .seconds(3)) { lines in
-                    lines.suffix(20).contains { $0.contains("Interrupted") }
-                }
+                await waitUntilStopped(upTo: .seconds(3))
             }
             // Image paths go first, pasted as the terminal would get them; the agents attach them.
             let message = (paths + (text.isEmpty ? [] : [text])).joined(separator: " ")
