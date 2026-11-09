@@ -5,7 +5,7 @@ compatibility_date = "2026-10-01"
 # Run `npx wrangler kv namespace create REGISTRATIONS` and paste the id below.
 [[kv_namespaces]]
 binding = "REGISTRATIONS"
-id = "REPLACE_WITH_KV_ID"
+id = "e5a0f8f192cd4fabb85bcc1a434c4567"
 
 # Secrets (set with `npx wrangler secret put <NAME>`):
 #   APNS_TEAM_ID, APNS_SANDBOX_KEY_ID, APNS_SANDBOX_KEY,

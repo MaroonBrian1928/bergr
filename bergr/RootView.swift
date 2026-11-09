@@ -168,7 +168,7 @@ struct RootView: View {
                 set: { if !$0 { PushRegistration.shared.pendingInstall = nil } }),
             presenting: PushRegistration.shared.pendingInstall
         ) { pending in
-            Button("Install") { Task { await PushRegistration.shared.install(on: pending.session) } }
+            Button(pending.isUpdate ? "Update" : "Install") { Task { await PushRegistration.shared.install(on: pending.session) } }
             Button("Not now", role: .cancel) { PushRegistration.shared.decline(pending) }
         } message: { _ in
             Text("It watches your agents with herdr-core and sends an alert when one needs you. It installs to ~/.local/bin/bergr-notify and runs as a user service. Nothing runs as root.")
