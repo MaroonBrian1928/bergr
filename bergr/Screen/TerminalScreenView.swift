@@ -70,7 +70,8 @@ struct TerminalScreenView: View {
                     // swiping left pushes them away. (Folded, the edge is the stack's back swipe.)
                     onEdgeSwipe: sizeClass == .regular ? { toRight in
                         if toRight == expanded { withAnimation { expanded = !toRight } }
-                    } : nil
+                    } : nil,
+                    drawing: !chat
                 ) { cols, rows in
                     if case .attaching = model.phase {
                         let watch = watchByDefault || session.watchNext == address

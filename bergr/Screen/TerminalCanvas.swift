@@ -1105,6 +1105,9 @@ struct TerminalCanvas: UIViewRepresentable {
     var onEdgeSwipe: ((_ toRight: Bool) -> Void)?
     /// A quick look: see `TerminalCanvasView.cropped`.
     var cropped = false
+    /// False while something covers it completely (the chat): it keeps its size and input but
+    /// stops drawing, which otherwise went on for every change on the screen underneath.
+    var drawing = true
     let onGridSize: (Int, Int) -> Void
 
     func makeUIView(context: Context) -> TerminalCanvasView {
@@ -1122,6 +1125,10 @@ struct TerminalCanvas: UIViewRepresentable {
     }
 
     func updateUIView(_ view: TerminalCanvasView, context: Context) {
+        if view.isHidden == drawing {
+            view.isHidden = !drawing
+            if drawing { view.setNeedsDisplay() }
+        }
         view.model = model
         view.fontFamily = fontFamily
         view.fontSize = fontSize

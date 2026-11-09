@@ -904,7 +904,6 @@ private struct UserBubble: View {
     var body: some View {
         Text(text)
             .foregroundStyle(palette.text)
-            .textSelection(.enabled)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .background(palette.bubble, in: RoundedRectangle(cornerRadius: 20, style: .continuous))

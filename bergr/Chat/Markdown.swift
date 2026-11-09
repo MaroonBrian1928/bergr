@@ -255,7 +255,8 @@ struct MarkdownView: View {
             }
         }
         .foregroundStyle(palette.text)
-        .textSelection(.enabled)
+        // No .textSelection: on the Mac it made every scroll-wheel event hit-test the outline of
+        // every message's text (a third of the time spent scrolling). Copy and Select Text are in the long-press menu.
     }
 
     /// Inline text with the not yet revealed words transparent.
