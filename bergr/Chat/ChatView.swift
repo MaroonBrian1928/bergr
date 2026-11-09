@@ -130,6 +130,14 @@ struct ChatView: View {
                     VStack(alignment: .trailing, spacing: 6) {
                         UserBubble(text: reply.text, palette: palette)
                             .opacity(0.55)
+                            // Sent while the agent works, it waits in the agent's queue: long-press
+                            // can stop the agent so it's read now.
+                            .contextMenu {
+                                if state == "working", !reply.failed {
+                                    Button("Send Now", systemImage: "bolt.fill") { pushNow() }
+                                }
+                                copyButton(reply.text)
+                            }
                             .accessibilityLabel(reply.failed ? "Not delivered: \(reply.text)" : "Sending: \(reply.text)")
                         if reply.failed {
                             HStack(spacing: 12) {
@@ -685,6 +693,16 @@ struct ChatView: View {
         model.type(text)
         Task {
             try? await Task.sleep(for: .milliseconds(150))
+            model.press(.enter)
+        }
+    }
+
+    /// Stops the agent so the replies waiting in its queue are read now. Claude Code puts queued
+    /// messages back in its prompt when interrupted; Return sends them (on an empty prompt it does nothing).
+    private func pushNow() {
+        Task {
+            model.press(.escape)
+            try? await Task.sleep(for: .milliseconds(600))
             model.press(.enter)
         }
     }
