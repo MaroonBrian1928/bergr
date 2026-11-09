@@ -23,8 +23,12 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse
     ) async {
-        guard let target = Self.target(response.notification.request.content.userInfo) else { return }
-        await MainActor.run { NotificationRouter.shared.pending = target }
+        let info = response.notification.request.content.userInfo
+        await MainActor.run {
+            // Local alerts carry Bergr's host id; pushes name the machine by hostname.
+            guard let target = Self.target(info) ?? PushRegistration.shared.target(info) else { return }
+            NotificationRouter.shared.pending = target
+        }
     }
 
     func userNotificationCenter(

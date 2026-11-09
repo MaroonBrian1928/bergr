@@ -4,6 +4,7 @@ import UserNotifications
 
 @main
 struct BergrApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var hosts = HostStore()
     @State private var keys = KeyLibrary()
     @AppStorage(Appearance.key) private var appearance = Appearance.system

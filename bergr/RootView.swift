@@ -156,6 +156,7 @@ struct RootView: View {
                 self.notifier = notifier
                 // The Lock Screen and Dynamic Island summary while kept connected in the background.
                 LiveActivityController.run(sessions: sessions)
+                PushRegistration.shared.run(sessions: sessions)
             }
         }
         // The chat on screen doesn't alert about itself.

@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage(TerminalTheme.darkKey) private var darkTheme = TerminalTheme.defaultDark
     @Environment(\.colorScheme) private var colorScheme
     @State private var keepAlive = KeepAlive.shared
+    @State private var push = PushRegistration.shared
     /// Adds the demo machine and shows it.
     var addDemo: () -> Void = {}
 
@@ -71,6 +72,22 @@ struct SettingsView: View {
                 Text("Alerts")
             } footer: {
                 Text("Keeps your machines connected while Bergr is in the background, so it can notify you when an agent needs you or finishes. It does this the way SSH apps do, with a low-accuracy location session: iOS shows a blue location indicator while it runs, it uses extra battery, and it asks for notification and \"Always\" location permission. Your location is never stored or sent anywhere.")
+            }
+
+            Section {
+                Toggle(isOn: $push.enabled) {
+                    Label {
+                        Text("Push alerts")
+                    } icon: {
+                        SettingsIcon("app.badge.fill", color: .orange)
+                    }
+                }
+                .frame(minHeight: 44)
+            } footer: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Sends alerts through Apple even when Bergr isn't running. Needs bergr-notify running on the machine.")
+                    if let error = push.lastError { Text(error).foregroundStyle(.red) }
+                }
             }
 
             Section {
