@@ -1129,26 +1129,63 @@ private struct WorkingRow: View {
     let since: Date
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    // Playful on purpose (the user asked for it, as in Claude's own apps); the accessibility label
-    // says plainly that the agent is working.
-    private static let verbs = ["Thinking", "Pondering", "Brewing", "Scheming", "Tinkering", "Noodling",
-                                "Conjuring", "Mulling", "Crafting", "Untangling", "Percolating", "Wrangling"]
+    // Playful on purpose (the user asked for it, in the spirit of old sim-game loading screens);
+    // the accessibility label says plainly that the agent is working. Kept short: one line.
+    static let phrases = [
+        "Thinking", "Pondering", "Brewing", "Scheming", "Tinkering", "Noodling", "Percolating",
+        "Wrangling", "Untangling", "Conjuring",
+        "Calibrating llamas", "Polishing semicolons", "Herding stray bytes", "Fluffing pillows",
+        "Aligning the ley lines", "Recounting the sheep", "Feeding the hamsters", "Tuning the flux",
+        "Defrosting the cache", "Folding spacetime", "Unspooling yarn", "Buttering the bits",
+        "Simmering the logic", "Greasing the gears", "Charming the compiler", "Bribing the linter",
+        "Inflating balloons", "Sorting the sprinkles", "Teaching ducks to code", "Warming the tubes",
+        "Rotating the pixels", "Watering the trees", "Shearing the yaks", "Combing the graph",
+        "Negotiating with gnomes", "Untying knots", "Stacking the turtles", "Whittling the stack",
+        "Consulting the oracle", "Dusting the cobwebs", "Rounding up the herd", "Coaxing the cursor",
+        "Steeping the tea", "Planting breadcrumbs", "Sharpening the crayons", "Spinning the plates",
+        "Chasing the rabbit", "Waking the daemons", "Knitting the threads", "Leveling the terrain",
+        "Zoning the suburbs", "Paving the cowpaths", "Rerouting the river", "Raising the barn",
+        "Reticulating the plan", "Hatching the eggs", "Tickling the kernel", "Mapping the maze",
+    ]
+
+    /// What turns beside the words: a different symbol and motion with each new phrase.
+    private enum Motion: CaseIterable { case rotate, bounce, wiggle, pulse, breathe, layers }
+    private static let marks: [(symbol: String, motion: Motion)] = [
+        ("sparkle", .rotate), ("gearshape.2", .rotate), ("hammer", .wiggle), ("wand.and.stars", .bounce),
+        ("hourglass", .rotate), ("lightbulb.max", .pulse), ("cpu", .breathe), ("atom", .rotate),
+        ("wind", .layers), ("dice", .bounce), ("puzzlepiece", .wiggle), ("flame", .breathe),
+        ("cloud.sun", .bounce), ("leaf", .wiggle), ("waveform", .layers), ("hare", .bounce),
+        ("tortoise", .wiggle), ("sparkles", .pulse), ("wrench.and.screwdriver", .wiggle), ("globe.americas", .rotate),
+    ]
 
     var body: some View {
         TimelineView(.periodic(from: since, by: 1)) { context in
             let seconds = max(0, Int(context.date.timeIntervalSince(since)))
-            let verb = Self.verbs[(seconds / 3 + Int(since.timeIntervalSince1970)) % Self.verbs.count]
+            // A new phrase every 3 s, in an order of its own for each run.
+            let step = seconds / 3
+            let seed = Int(since.timeIntervalSince1970)
+            let verb = Self.phrases[(step &* 7 &+ seed) % Self.phrases.count]
+            let mark = Self.marks[(step &* 3 &+ seed / 7) % Self.marks.count]
             HStack(spacing: 8) {
-                Image(systemName: "sparkle")
+                Image(systemName: mark.symbol)
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(palette.accent)
-                    .symbolEffect(.rotate, options: .repeating, isActive: !reduceMotion)
-                    .symbolEffect(.breathe, options: .repeating, isActive: !reduceMotion)
+                    .frame(width: 18)
+                    .contentTransition(.symbolEffect(.replace.magic(fallback: .downUp.byLayer)))
+                    .symbolEffect(.rotate, options: .repeating, isActive: !reduceMotion && mark.motion == .rotate)
+                    .symbolEffect(.bounce.up.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .bounce)
+                    .symbolEffect(.wiggle, options: .repeating, isActive: !reduceMotion && mark.motion == .wiggle)
+                    .symbolEffect(.pulse.byLayer, options: .repeating, isActive: !reduceMotion && mark.motion == .pulse)
+                    .symbolEffect(.breathe, options: .repeating, isActive: !reduceMotion && mark.motion == .breathe)
+                    .symbolEffect(.variableColor.iterative.reversing, options: .repeating,
+                                  isActive: !reduceMotion && mark.motion == .layers)
+                    .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: mark.symbol)
                 HStack(spacing: 0) {
                     Text(verb + "…")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(palette.accent)
-                        .contentTransition(.identity)
+                        .contentTransition(reduceMotion ? .identity : .numericText())
+                        .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: verb)
                         .shimmer(palette: palette)
                     Text(" · " + Self.elapsed(seconds))
                         .font(.footnote)
