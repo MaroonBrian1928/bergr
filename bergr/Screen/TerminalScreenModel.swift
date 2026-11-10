@@ -168,7 +168,13 @@ final class TerminalScreenModel {
         } catch {
             if !Task.isCancelled { phase = .failed(error.localizedDescription) }
         }
-        if !Task.isCancelled { renderNow() }
+        if !Task.isCancelled {
+            // The channel is gone: forget it, so the next thing sent attaches again first
+            // instead of going into a dead channel.
+            attached = nil
+            pump = nil
+            renderNow()
+        }
     }
 
     // MARK: Size
@@ -266,7 +272,9 @@ final class TerminalScreenModel {
             return setWatching(false)
         }
         guard let attached else {
-            if pump != nil { pendingInput.append(data) }
+            // Attaching: it goes once attached. The channel ended or failed: attach again first.
+            if pump != nil || session != nil { pendingInput.append(data) }
+            if pump == nil, session != nil { pump = Task { await run() } }
             return
         }
         // Typing makes us the active viewer again; show the live screen.

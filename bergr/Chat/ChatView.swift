@@ -83,7 +83,9 @@ struct ChatView: View {
         // The design preview's live mode can type (no terminal behind it), to test the keyboard.
         if UserDefaults.standard.bool(forKey: "bergr.chatPreviewLive") { return true }
         #endif
-        return model.phase == .live && terminal?.isLive == true
+        // Also while the terminal (re)attaches, e.g. back from the background: what's sent waits
+        // and goes once it's attached, so the keyboard isn't taken away meanwhile.
+        return (model.phase == .live || model.started) && terminal?.isLive == true
     }
     /// The trimmed search text, or nil when not searching.
     private var search: String? {
