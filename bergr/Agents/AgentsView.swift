@@ -95,7 +95,7 @@ struct AgentsView: View {
             ForEach(hosts.hosts) { host in
                 let session = sessions.session(for: host)
                 let all = AgentsOrdering.ordered(session.terminals.filter(\.isLive))
-                // This core's own terminals; ones it reaches on its linked machines (`pwnpc/t3`)
+                // This core's own terminals; ones it reaches on its linked machines (`laptop/t3`)
                 // get a section of their own below.
                 let terminals = all.filter { !$0.address.contains("/") }
                 Section {
