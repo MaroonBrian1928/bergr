@@ -443,7 +443,7 @@ class Claude:
                 text = block.get("text") or ""
                 if kind == "user":
                     shell = shell_text(text)
-                    if shell:
+                    if shell and shell[0] != "shell":
                         yield {"t": "msg", "id": bid, "role": shell[0], "text": shell[1]}
                         continue
                     text = user_text(text)
@@ -524,6 +524,26 @@ def shell_text(text):
     if s.startswith("<bash-input>"):
         command = tag(s, "bash-input")
         return ("user", "!" + command.strip()) if command and command.strip() else None
+    if s.startswith("<user_shell_command>"):
+        # Codex: <command>…</command><result>Exit code: N\nDuration: … seconds\nOutput:\n…</result>
+        command = (tag(s, "command") or "").strip()
+        if not command:
+            return None
+        lines = (tag(s, "result") or "").strip("\n").split("\n")
+        code, body = None, []
+        for line in lines:
+            if line.startswith("Exit code:") and code is None and not body:
+                code = line.split(":", 1)[1].strip()
+            elif (line.startswith("Duration:") or line.startswith("Wall time")) and not body:
+                continue
+            elif line.strip() == "Output:" and not body:
+                continue
+            else:
+                body.append(line)
+        out = "\n".join(body).strip("\n").replace("```", "`\u200b``")
+        if code and code != "0":
+            out = (out + "\n" if out else "") + f"(exit code {code})"
+        return ("shell", ("!" + command, "```\n" + (out or "(no output)") + "\n```"))
     if s.startswith("<bash-stdout>") or s.startswith("<bash-stderr>"):
         out = "\n".join(x for x in ((tag(s, "bash-stdout") or "").rstrip(), (tag(s, "bash-stderr") or "").rstrip()) if x)
         out = out.replace("```", "`\u200b``")
@@ -743,6 +763,11 @@ class Codex:
             text = "".join(c.get("text") or "" for c in p.get("content") or []
                            if c.get("type") in ("input_text", "output_text", "text"))
             if p["role"] == "user":
+                shell = shell_text(text)
+                if shell and shell[0] == "shell":
+                    yield {"t": "msg", "id": pid, "role": "user", "text": shell[1][0]}
+                    yield {"t": "msg", "id": f"{pid}-out", "role": "assistant", "text": shell[1][1]}
+                    return
                 text = user_text(text)
                 if text is None:
                     return
@@ -881,6 +906,32 @@ class Antigravity:
                               (since,)).fetchall()
         finally:
             db.close()
+
+    def shell_commands(self, offset):
+        """`!` commands typed in this folder since the agent started: Antigravity keeps them only in
+        its input history (history.jsonl, "type": "shell"), not in the conversation, and keeps no
+        output. Returns the user messages and the offset to read on from."""
+        out = []
+        try:
+            with open(os.path.join(self.base, "history.jsonl"), "rb") as fh:
+                fh.seek(0, 2)
+                if fh.tell() < offset:
+                    offset = 0
+                fh.seek(offset)
+                data = fh.read()
+        except OSError:
+            return out, offset
+        end = data.rfind(b"\n") + 1
+        for line in data[:end].splitlines():
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") == "shell" and os.path.realpath(d.get("workspace") or "") == os.path.realpath(CWD) and (d.get("display") or "").strip() \
+                    and (d.get("timestamp") or 0) / 1000 >= STARTED:
+                out.append({"t": "msg", "id": f"h{d['timestamp']}", "role": "user",
+                            "text": "!" + d["display"].strip()})
+        return out, offset + end
 
     def parse_row(self, idx, kind, payload):
         payload = payload or b""
@@ -1086,7 +1137,7 @@ def antigravity_model():
 
 
 def follow_antigravity(source):
-    path, since, tick = None, 0, 0
+    path, since, tick, history = None, 0, 0, 0
     while True:
         now = source.locate() if tick % 5 == 0 else path
         if tick % 5 == 0:
@@ -1096,7 +1147,7 @@ def follow_antigravity(source):
                 emit(status)
         tick += 1
         if now and now != path:
-            path, since = now, 0
+            path, since, history = now, 0, 0
             emit({"t": "reset", "agent": AGENT, "session": os.path.basename(now)})
             # A reset clears what the app knows: send the model and mode again.
             source.status = antigravity_model()
@@ -1113,6 +1164,9 @@ def follow_antigravity(source):
             # Steps fill in while they run: read the last few again next time (the app upserts).
             if rows:
                 since = max(since, rows[-1][0] - 2)
+            shells, history = source.shell_commands(history)
+            for ev in shells:
+                emit(ev)
         emit({"t": "ping"})
         flush()
         time.sleep(1)

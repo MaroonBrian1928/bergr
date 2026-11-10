@@ -137,6 +137,37 @@ class ShellCommands(Base):
         self.assertEqual(evs, [{"t": "msg", "id": "b2.0", "role": "assistant", "text": "```\na\nb\n```"}])
 
 
+    def test_codex_user_shell_command(self):
+        ns = load("codex", self.home)
+        text = ("<user_shell_command>\n<command>\necho hi\n</command>\n<result>\nExit code: 0\n"
+                "Duration: 0.03 seconds\nOutput:\nhi\n\n</result>\n</user_shell_command>")
+        evs = list(ns["Codex"]().parse({"type": "response_item", "payload": {
+            "type": "message", "id": "m1", "role": "user", "content": [{"type": "input_text", "text": text}]}}))
+        self.assertEqual(evs, [{"t": "msg", "id": "m1", "role": "user", "text": "!echo hi"},
+                               {"t": "msg", "id": "m1-out", "role": "assistant", "text": "```\nhi\n```"}])
+
+    def test_codex_failed_command_shows_exit_code(self):
+        ns = load("codex", self.home)
+        text = ("<user_shell_command><command>false</command><result>\nExit code: 1\nDuration: 0 seconds\n"
+                "Output:\n</result></user_shell_command>")
+        evs = list(ns["Codex"]().parse({"type": "response_item", "payload": {
+            "type": "message", "id": "m2", "role": "user", "content": [{"type": "input_text", "text": text}]}}))
+        self.assertEqual(evs[1]["text"], "```\n(exit code 1)\n```")
+
+    def test_antigravity_shell_commands_from_history(self):
+        import json as j
+        base = os.path.join(self.home, ".gemini", "antigravity-cli")
+        os.makedirs(base)
+        with open(os.path.join(base, "history.jsonl"), "w") as fh:
+            fh.write(j.dumps({"display": "ls", "timestamp": 5000, "workspace": "/work", "type": "shell"}) + "\n")
+            fh.write(j.dumps({"display": "hello", "timestamp": 6000, "workspace": "/work"}) + "\n")
+            fh.write(j.dumps({"display": "pwd", "timestamp": 7000, "workspace": "/elsewhere", "type": "shell"}) + "\n")
+        ns = load("antigravity", self.home)
+        evs, offset = ns["Antigravity"]().shell_commands(0)
+        self.assertEqual(evs, [{"t": "msg", "id": "h5000", "role": "user", "text": "!ls"}])
+        self.assertEqual(ns["Antigravity"]().shell_commands(offset)[0], [])
+
+
 class ToolOutput(Base):
     def test_claude_tool_result(self):
         ns = load("claude", self.home)
