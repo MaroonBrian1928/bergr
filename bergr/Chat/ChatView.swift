@@ -197,8 +197,11 @@ struct ChatView: View {
                     .transition(.identity)
                 }
                 if search == nil, state == "working" {
-                    WorkingRow(agent: agent, detail: terminal?.status?.msg ?? terminal?.status?.title, palette: palette,
-                               since: workingSince)
+                    // herdr's status is mostly the agent's description of its current tool, which
+                    // the live tool run above already shows; it only adds something between tools.
+                    WorkingRow(agent: agent,
+                               detail: liveRunID == nil ? terminal?.status?.msg ?? terminal?.status?.title : nil,
+                               palette: palette, since: workingSince)
                         // Fades in by drawing alone, and makes way for the reply at once.
                         .modifier(ArriveIn(active: true, rise: false))
                         .transition(.identity)
