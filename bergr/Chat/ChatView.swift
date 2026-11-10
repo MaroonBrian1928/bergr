@@ -863,6 +863,22 @@ struct ChatView: View {
         try? await Task.sleep(for: .milliseconds(250))
     }
 
+    /// A Return can be lost (sent on a channel that was being replaced as the app came back): the
+    /// text sits in the agent's input, unsent. If after a moment the reply isn't in the
+    /// conversation and its text is still on the input's last lines, Return again (twice at most).
+    private func confirmEnter(for id: UUID, text: String) async {
+        let probe = String(text.replacingOccurrences(of: "\n", with: " ").prefix(24))
+        guard probe.count >= 3 else { return }
+        for _ in 0..<2 {
+            try? await Task.sleep(for: .milliseconds(2500))
+            guard let reply = pending.first(where: { $0.id == id }), !reply.failed else { return }
+            if state == "working" { return }
+            let bottom = model.frame.textLines.suffix(6)
+            guard bottom.contains(where: { $0.contains(probe) }) else { return }
+            model.press(.enter)
+        }
+    }
+
     /// Waits until the terminal screen shows what `done` looks for, or the time runs out; then a
     /// short pause more, for the program to take input.
     private func waitForScreen(upTo limit: Duration, _ done: @escaping ([String]) -> Bool) async {
@@ -942,6 +958,7 @@ struct ChatView: View {
             // Return on its own, a moment later, so the agent sees it as "send" and not as part of the text.
             try? await Task.sleep(for: .milliseconds(150))
             model.press(.enter)
+            await confirmEnter(for: reply.id, text: message)
         }
     }
 

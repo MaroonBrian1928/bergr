@@ -30,6 +30,8 @@ final class TerminalScreenModel {
 
     private var vt: VirtualTerminal?
     private var attached: AttachedTerminal?
+    /// When the current channel attached: a reconnect right after it is the same comeback.
+    private var attachedAt: Date?
     private var pump: Task<Void, Never>?
     private var renderScheduled = false
     /// What this view would like (fits its bounds); sent whenever we act.
@@ -95,6 +97,12 @@ final class TerminalScreenModel {
     /// swallows input without an error). Input sent meanwhile waits and goes once attached.
     func reconnect() {
         guard session != nil else { return }
+        // Coming back fires several of these together (the app turning active, the line coming
+        // back, the screen reappearing). Each one closed the channel the one before had just
+        // opened, and a key sent in between went out on a channel being closed: one attach is
+        // enough. Already attaching, or attached a moment ago: keep it.
+        if pump != nil, attached == nil { return }
+        if let at = attachedAt, Date.now.timeIntervalSince(at) < 3 { return }
         stop()
         pump = Task { await run() }
     }
@@ -133,6 +141,7 @@ final class TerminalScreenModel {
                 display: theme.displayFacts)
             guard !Task.isCancelled else { return await attached.detach() }
             self.attached = attached
+            attachedAt = .now
             reportedFocus = false
             let vt = try VirtualTerminal(
                 cols: max(attached.terminal.cols, 1), rows: max(attached.terminal.rows, 1))
