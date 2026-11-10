@@ -348,22 +348,27 @@ struct ChatView: View {
         moreMenu
     }
 
+    /// Its own view, compared by what it shows: rebuilt on every screen change (a working Codex
+    /// redraws its timer each second), an open menu closed before you could pick anything.
     private var moreMenu: some View {
-        Menu {
-            Button("Search", systemImage: "magnifyingglass") {
+        MoreMenu(
+            agent: agent, hasUsage: feed.usage != nil || agent == .claude, hasInfo: onInfo != nil,
+            currentMode: PermissionModes.current(agent, in: model.textLines, saved: feed.usage?.mode),
+            saved: feed.usage?.mode, canSetMode: canType,
+            search: {
                 withAnimation(motion) { searching = true }
                 searchFocused = true
-            }
-            if feed.usage != nil || agent == .claude {
-                Button("Usage", systemImage: "gauge.with.dots.needle.50percent") { showingUsage = true }
-            }
-            PermissionsMenu(agent: agent, model: model, saved: feed.usage?.mode, enabled: canType) { sendError = $0 }
-            if let onInfo {
-                Button("Info", systemImage: "info.circle", action: onInfo)
-            }
-        } label: {
-            Label("More", systemImage: "ellipsis")
-        }
+            },
+            usage: { showingUsage = true },
+            setMode: { mode in
+                Task {
+                    if let problem = await PermissionModes.set(mode, agent: agent, model: model, saved: feed.usage?.mode) {
+                        sendError = problem
+                    }
+                }
+            },
+            info: { onInfo?() })
+        .equatable()
     }
 
     private var contextItem: some ToolbarContent {
@@ -1876,31 +1881,45 @@ private struct AnswerSlot: View {
 }
 
 /// The agent's permission mode, current one checked; switching goes through the terminal.
-private struct PermissionsMenu: View {
+private struct MoreMenu: View, Equatable {
     let agent: ChatAgent
-    let model: TerminalScreenModel
+    let hasUsage: Bool
+    let hasInfo: Bool
+    let currentMode: String?
     let saved: String?
-    let enabled: Bool
-    let failed: (String) -> Void
+    let canSetMode: Bool
+    let search: () -> Void
+    let usage: () -> Void
+    let setMode: (String) -> Void
+    let info: () -> Void
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.agent == b.agent && a.hasUsage == b.hasUsage && a.hasInfo == b.hasInfo
+            && a.currentMode == b.currentMode && a.saved == b.saved && a.canSetMode == b.canSetMode
+    }
 
     var body: some View {
-        let current = PermissionModes.current(agent, in: model.textLines, saved: saved)
         Menu {
-            ForEach(PermissionModes.modes(agent), id: \.self) { mode in
-                Button {
-                    Task {
-                        if let problem = await PermissionModes.set(mode, agent: agent, model: model, saved: saved) {
-                            failed(problem)
-                        }
+            Button("Search", systemImage: "magnifyingglass", action: search)
+            if hasUsage {
+                Button("Usage", systemImage: "gauge.with.dots.needle.50percent", action: usage)
+            }
+            Menu {
+                ForEach(PermissionModes.modes(agent), id: \.self) { mode in
+                    Button { setMode(mode) } label: {
+                        if mode == currentMode { Label(mode, systemImage: "checkmark") } else { Text(mode) }
                     }
-                } label: {
-                    if mode == current { Label(mode, systemImage: "checkmark") } else { Text(mode) }
                 }
+            } label: {
+                Label("Permissions" + (currentMode.map { " · \($0)" } ?? ""), systemImage: "lock.shield")
+            }
+            .disabled(!canSetMode)
+            if hasInfo {
+                Button("Info", systemImage: "info.circle", action: info)
             }
         } label: {
-            Label("Permissions" + (current.map { " · \($0)" } ?? ""), systemImage: "lock.shield")
+            Label("More", systemImage: "ellipsis")
         }
-        .disabled(!enabled)
     }
 }
 
