@@ -485,12 +485,37 @@ struct ChatView: View {
     private func copyButton(_ text: String) -> some View {
         // The copies together: the message, then each command in it, then Select Text.
         Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
-        let commands = Commands.in(text)
-        ForEach(commands, id: \.self) { command in
-            Button(commands.count == 1 ? "Copy Command" : "Copy “\(Commands.label(command))”",
-                   systemImage: "terminal") { UIPasteboard.general.string = command }
-        }
+        commandButtons(Commands.in(text))
         Button("Select Text", systemImage: "selection.pin.in.out") { selecting = SelectableMessage(text: text) }
+    }
+
+    /// Copy and Run for each command: Run sends it as a `!` shell command, the way typing it would
+    /// (only one-line commands, and only whole ones: a shortened one ends in "…").
+    @ViewBuilder
+    private func commandButtons(_ commands: [String]) -> some View {
+        ForEach(commands, id: \.self) { command in
+            let one = commands.count == 1
+            Button(one ? "Copy Command" : "Copy “\(Commands.label(command))”", systemImage: "doc.on.clipboard") {
+                UIPasteboard.general.string = command
+            }
+            if Commands.runnable(command) {
+                Button(one ? "Run Command" : "Run “\(Commands.label(command))”", systemImage: "terminal") {
+                    run(command)
+                }
+                .disabled(!canType)
+            }
+        }
+    }
+
+    /// Runs a command in the agent's terminal as a `!` shell command, through the reply path (so it
+    /// shows in the chat with its output); what's being written in the reply box stays there.
+    private func run(_ command: String) {
+        let keptDraft = draft, keptAttachments = attachments
+        draft = "!" + command
+        attachments = []
+        send()
+        draft = keptDraft
+        attachments = keptAttachments
     }
 
     // MARK: Rows
@@ -609,8 +634,13 @@ struct ChatView: View {
             let mine = agents.filter { a in a.parent.map { p in items.contains { $0.id == p } } ?? false }
             VStack(alignment: .leading, spacing: 0) {
                 if !steps.isEmpty {
+                    let commands = Commands.ran(steps.map { ($0.name, $0.summary) })
                     ToolRun(steps: steps, palette: palette, running: row.id == liveRunID,
                             waiting: state == "blocked" && row.id == rows.last?.id)
+                        // The commands the agent ran: copy one, or run it again.
+                        .contextMenu {
+                            if !commands.isEmpty { commandButtons(commands) }
+                        }
                 }
                 if !mine.isEmpty { SubagentGroup(agents: mine, palette: palette) }
             }
@@ -1799,6 +1829,24 @@ enum Commands {
             add(String(match.output.1))
         }
         return Array(out.prefix(8))
+    }
+
+    /// The commands a run of tool steps ran (shell steps; the command is the summary's last line,
+    /// below the agent's description of it).
+    static func ran(_ steps: [(name: String, summary: String)]) -> [String] {
+        let shells: Set<String> = ["bash", "exec", "shell", "run_command", "local_shell", "exec_command"]
+        var out: [String] = []
+        for step in steps where shells.contains(step.name.lowercased()) {
+            let command = step.summary.split(separator: "\n").last.map(String.init)?
+                .trimmingCharacters(in: .whitespaces) ?? ""
+            if !command.isEmpty, !out.contains(command) { out.append(command) }
+        }
+        return Array(out.suffix(8))
+    }
+
+    /// Whether Run can send it: one line, and not shortened on the way here.
+    static func runnable(_ command: String) -> Bool {
+        !command.contains("\n") && !command.hasSuffix("…") && !command.isEmpty
     }
 
     /// The menu's name for one command: its first line, shortened.
