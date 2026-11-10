@@ -17,6 +17,9 @@ struct SettingsView: View {
     @State private var keepAlive = KeepAlive.shared
     @AppStorage(LiveActivityController.pushKey) private var liveActivityPush = false
     @AppStorage(QuietAgents.key) private var hideAfter = QuietAgents.defaultSeconds
+    private var liveActivityHistory: [String] {
+        UserDefaults.standard.stringArray(forKey: LiveActivityController.historyKey) ?? []
+    }
     @AppStorage(LiveActivityController.contentKey) private var liveActivityContent = "counts"
     @State private var push = PushRegistration.shared
     /// Adds the demo machine and shows it.
@@ -165,6 +168,15 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.menu)
                     .frame(minHeight: 44)
+                    if !liveActivityHistory.isEmpty {
+                        DisclosureGroup("Recent") {
+                            ForEach(liveActivityHistory.reversed(), id: \.self) { line in
+                                Text(line).font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                            }
+                        }
+                        .font(.subheadline)
+                        .frame(minHeight: 44)
+                    }
                 }
             } footer: {
                 Text(!push.enabled

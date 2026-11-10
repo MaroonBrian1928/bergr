@@ -127,9 +127,20 @@ final class LiveActivityController {
         center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.inBackground = false; self?.reconcile() }
         }
-        // Leftovers from a previous run (the app was killed while one was showing).
+        // Leftovers from a previous run. One the machines update through the relay is theirs: iOS
+        // can relaunch Bergr in the background after the phone locks, and ending it here closed it
+        // the moment it appeared. It's adopted, and ends when Bergr is opened. Others (updated by
+        // the app itself, now gone) end.
+        let inForeground = UIApplication.shared.applicationState == .active
         for old in Activity<BergrActivityAttributes>.activities {
-            Task { await old.end(nil, dismissalPolicy: .immediate) }
+            if old.pushToken != nil, !inForeground, activity == nil {
+                activity = old
+                inBackground = true
+                registerForPush(old)
+                Self.note("adopted on launch")
+            } else {
+                Task { await old.end(nil, dismissalPolicy: .immediate) }
+            }
         }
         observe()
         writeSnapshot()
@@ -240,6 +251,7 @@ final class LiveActivityController {
                 lastSent = state
                 lastSentAt = Date()
                 if pushed { registerForPush(started) }
+                Self.note(pushed ? "started, updated by the machines" : "started, updated by Bergr")
             } catch {
                 activity = nil
             }
@@ -263,10 +275,21 @@ final class LiveActivityController {
 
     private func end() {
         guard let activity else { return }
+        Self.note(inBackground ? "ended in the background (nothing to show)" : "ended: Bergr opened")
         self.activity = nil
         lastSent = nil
         Task { await activity.end(nil, dismissalPolicy: .immediate) }
         if registeredForPush { unregisterFromPush() }
+    }
+
+    /// The last few things that happened to the Live Activity, with times (Settings shows them
+    /// under Live Activity): when one closes early, this says whether Bergr ended it or iOS did.
+    nonisolated static let historyKey = "bergr.liveActivity.history"
+    nonisolated static func note(_ what: String) {
+        let line = Date.now.formatted(date: .omitted, time: .standard) + " " + what
+        var lines = UserDefaults.standard.stringArray(forKey: historyKey) ?? []
+        lines.append(line)
+        UserDefaults.standard.set(Array(lines.suffix(8)), forKey: historyKey)
     }
 
     // MARK: Updated through the relay
@@ -283,6 +306,12 @@ final class LiveActivityController {
         background = app.beginBackgroundTask { app.endBackgroundTask(background) }
         tokenTask = Task { [weak self] in
             defer { app.endBackgroundTask(background) }
+            // iOS ending it (dismissed from the Lock Screen, its time up) goes in the history too.
+            Task {
+                for await state in activity.activityStateUpdates where state == .dismissed || state == .ended {
+                    Self.note(state == .dismissed ? "dismissed by iOS or from the Lock Screen" : "ended by iOS")
+                }
+            }
             for await data in activity.pushTokenUpdates {
                 let token = PushRegistration.hex(data)
                 guard let self, await self.post(path: "v1/activity", method: "POST",

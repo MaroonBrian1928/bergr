@@ -268,9 +268,11 @@ async function activityRegister(request, env) {
   // Finished agents untouched for longer than this (seconds; 0: never) don't count: the phone's
   // setting, passed on to the helpers, which know when each agent last changed.
   const hideAfter = Math.max(0, Math.min(parseInt(body.hide_after ?? "86400", 10) || 0, 30 * 86400));
+  const before = JSON.parse((await env.REGISTRATIONS.get(`la:${d.hash}`)) || "null");
   await env.REGISTRATIONS.put(`la:${d.hash}`, JSON.stringify({ token: body.token, mode, hideAfter }), { expirationTtl: ACTIVITY_TTL });
-  // A new activity starts from nothing: the machines' next posts fill it.
-  await env.REGISTRATIONS.delete(`las:${d.hash}`);
+  // A new activity starts from nothing (the machines' next posts fill it); the same one
+  // registered again (Bergr relaunched in the background) keeps what the machines said.
+  if (before?.token !== body.token) await env.REGISTRATIONS.delete(`las:${d.hash}`);
   return json(200, { ok: true, mode });
 }
 

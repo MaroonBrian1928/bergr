@@ -276,3 +276,13 @@ test("the phone's hide-after setting is handed to the helpers", async () => {
   const r = await post(env, secret, { machine: "m1", needsYou: 0, working: 1, done: 0 });
   assert.equal((await r.json()).hide_after, 3600);
 });
+
+test("the same activity registered again keeps the machines' counts", async () => {
+  const { env } = await makeEnv();
+  const secret = await withActivity(env);
+  await post(env, secret, { machine: "m1", needsYou: 0, working: 2, done: 0 });
+  await handle(req("/v1/activity", "POST", { token: LA_TOKEN, mode: "counts" }, auth(secret)), env);
+  assert.ok([...env.REGISTRATIONS.m.keys()].some((k) => k.startsWith("las:")));
+  await handle(req("/v1/activity", "POST", { token: "ef".repeat(40), mode: "counts" }, auth(secret)), env);
+  assert.ok(![...env.REGISTRATIONS.m.keys()].some((k) => k.startsWith("las:")));
+});
