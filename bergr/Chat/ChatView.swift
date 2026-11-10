@@ -1501,6 +1501,7 @@ private struct WorkingRow: View {
             let markIndex = Self.order(WorkingMark.count, seed: seed &+ 1)[markStep % WorkingMark.count]
             let markOrder = Self.order(WorkingMark.count, seed: seed &+ 1)
             let previousMark = markStep > 0 ? markOrder[(markStep - 1) % WorkingMark.count] : nil
+            VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
                 WorkingMark(index: markIndex, previous: previousMark,
                             changedAt: since.addingTimeInterval(Double(markStep * 6)), color: palette.accent)
@@ -1520,15 +1521,21 @@ private struct WorkingRow: View {
                         .font(.footnote)
                         .monospacedDigit()
                         .foregroundStyle(palette.secondary)
-                    if let detail, !detail.isEmpty {
-                        Text(" · " + detail)
-                            .font(.footnote)
-                            .foregroundStyle(palette.secondary)
-                    }
                 }
                 .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            // What herdr-core says the agent is doing, on a line of its own under the phrase:
+            // sharing the phrase's line, a long phrase squeezed it to "…" and it seemed missing.
+            if let detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+                    .lineLimit(2)
+                    .padding(.leading, 28)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .accessibilityElement(children: .ignore)
