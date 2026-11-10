@@ -428,6 +428,13 @@ class Claude:
                     self.results[b["tool_use_id"]] = {
                         "error": bool(b.get("is_error")) or tur.get("status") in ("failed", "error"),
                         "async": bool(tur.get("isAsync"))}
+                    # The answers to a question it asked (AskUserQuestion), keyed by question text:
+                    # the cards show what was picked. Declined, they close without one.
+                    asked = getattr(self, "asked", {}).get(b["tool_use_id"])
+                    if asked:
+                        answers = tur.get("answers") if isinstance(tur.get("answers"), dict) else {}
+                        for ev in asked:
+                            yield dict(ev, answer=str(answers.get(ev["title"]) or "Skipped"))
         msg = d.get("message") or {}
         usage = msg.get("usage") if kind == "assistant" else None
         if isinstance(usage, dict) and msg.get("model") and msg.get("model") != "<synthetic>":
@@ -475,6 +482,24 @@ class Claude:
                         if ev:
                             ev["fromTool"] = True
                             yield ev
+            elif t == "tool_use" and block.get("name") == "AskUserQuestion" \
+                    and isinstance((block.get("input") or {}).get("questions"), list):
+                # Its questions as cards: each option is picked in the terminal by its number,
+                # and the cards come in order (the terminal asks them one after another).
+                asked = []
+                for qi, q in enumerate(block["input"]["questions"]):
+                    if not isinstance(q, dict) or not q.get("question"):
+                        continue
+                    opts = [o for o in q.get("options") or [] if isinstance(o, dict) and o.get("label")]
+                    asked.append({"t": "question", "id": f"{block.get('id') or bid}-q{qi}", "title": q["question"],
+                                  "options": [o["label"] for o in opts],
+                                  "details": [o.get("description") or "" for o in opts],
+                                  "keys": True, "multi": bool(q.get("multiSelect")),
+                                  "group": block.get("id") or bid, "index": qi, "count": len(block["input"]["questions"])})
+                if not hasattr(self, "asked"):
+                    self.asked = {}
+                self.asked[block.get("id") or bid] = asked
+                yield from asked
             elif t == "tool_use" and block.get("name") == "TodoWrite" \
                     and isinstance((block.get("input") or {}).get("todos"), list):
                 yield plan_event([(x.get("content"), x.get("status")) for x in block["input"]["todos"]

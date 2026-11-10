@@ -165,6 +165,19 @@ final class ChatFeed {
     /// read again), and when: the chat fades those in. Set before they're shown, so the very
     /// first frame of a new row already knows it is new.
     private(set) var arrivedAt: [String: Date] = [:]
+
+    /// More about a question card than its title and options (Claude's AskUserQuestion): option
+    /// descriptions, that it's answered in the terminal by number, its place among the questions
+    /// asked together, and the answer once given.
+    struct QuestionInfo: Equatable {
+        var details: [String] = []
+        var keys = false
+        var group: String?
+        var index = 0
+        var count = 1
+        var answer: String?
+    }
+    private(set) var questionInfo: [String: QuestionInfo] = [:]
     /// The backlog is in: items that arrive from now on are live.
     private(set) var caughtUp = false
     private(set) var usage: Usage?
@@ -448,6 +461,16 @@ final class ChatFeed {
             }
         } else if type == "question" {
             kind = .question(title: event["title"] as? String ?? "", options: event["options"] as? [String] ?? [])
+            if event["keys"] as? Bool == true || event["answer"] != nil {
+                var info = questionInfo[id] ?? QuestionInfo()
+                if let d = event["details"] as? [String] { info.details = d }
+                if let k = event["keys"] as? Bool { info.keys = k }
+                if let g = event["group"] as? String { info.group = g }
+                if let i = event["index"] as? Int { info.index = i }
+                if let c = event["count"] as? Int { info.count = c }
+                if let a = event["answer"] as? String { info.answer = a }
+                if questionInfo[id] != info { questionInfo[id] = info }
+            }
         } else if type == "tool" {
             kind = .tool(name: event["name"] as? String ?? "tool", summary: event["summary"] as? String ?? "")
         } else {

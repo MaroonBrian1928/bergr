@@ -161,6 +161,37 @@ class Backlog(Base):
         self.assertEqual(ns["image_size"](base64.b64encode(jpeg).decode()), (600, 300))
 
 
+class ClaudeQuestions(Base):
+    def test_question_cards_and_their_answers(self):
+        ns = load("claude", self.home)
+        c = ns["Claude"]()
+        q = [{"question": "Pick a color?", "header": "Color", "multiSelect": False,
+              "options": [{"label": "Red", "description": "Warm"}, {"label": "Blue", "description": "Cool"}]},
+             {"question": "Pick a size?", "header": "Size", "multiSelect": False,
+              "options": [{"label": "Small"}, {"label": "Large"}]}]
+        evs = list(c.parse({"type": "assistant", "uuid": "a", "message": {"content": [
+            {"type": "tool_use", "id": "toolu_q", "name": "AskUserQuestion", "input": {"questions": q}}]}}))
+        cards = [e for e in evs if e["t"] == "question"]
+        self.assertEqual([(e["id"], e["title"], e["options"], e["index"]) for e in cards],
+                         [("toolu_q-q0", "Pick a color?", ["Red", "Blue"], 0), ("toolu_q-q1", "Pick a size?", ["Small", "Large"], 1)])
+        self.assertEqual(cards[0]["details"], ["Warm", "Cool"])
+        self.assertTrue(all(e["keys"] and "answer" not in e for e in cards))
+        evs = list(c.parse({"type": "user", "uuid": "r", "toolUseResult": {"answers": {"Pick a color?": "Blue", "Pick a size?": "Small"}},
+                            "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_q", "content": "answered"}]}}))
+        answered = {e["id"]: e["answer"] for e in evs if e["t"] == "question"}
+        self.assertEqual(answered, {"toolu_q-q0": "Blue", "toolu_q-q1": "Small"})
+
+    def test_declined_question_closes(self):
+        ns = load("claude", self.home)
+        c = ns["Claude"]()
+        list(c.parse({"type": "assistant", "uuid": "a", "message": {"content": [
+            {"type": "tool_use", "id": "toolu_x", "name": "AskUserQuestion",
+             "input": {"questions": [{"question": "Go?", "options": [{"label": "Yes"}, {"label": "No"}]}]}}]}}))
+        evs = list(c.parse({"type": "user", "uuid": "r", "toolUseResult": "Error: rejected",
+                            "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_x", "content": "rejected", "is_error": True}]}}))
+        self.assertEqual([e["answer"] for e in evs if e["t"] == "question"], ["Skipped"])
+
+
 class PastedMessages(Base):
     def test_pasted_reply_is_shown_unwrapped(self):
         ns = load("claude", self.home)

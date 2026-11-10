@@ -49,6 +49,8 @@ struct ChatView: View {
     @State private var awayFromLatest = false
     /// Messages in the chat when you scrolled away from the latest: the ones after it are new.
     @State private var seenMessages = 0
+    /// Options picked on Claude's question cards, until the conversation records the answers.
+    @State private var questionPicks: [String: String] = [:]
     /// The search field at the top shows while searching; closing it clears the search.
     @State private var searching = false
     @FocusState private var searchFocused: Bool
@@ -436,7 +438,9 @@ struct ChatView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let terminal, terminal.isLive {
-                AnswerSlot(terminal: terminal, model: model, blocked: state == "blocked", palette: palette,
+                // Not while a question card is open: the cards answer it, and the screen-guessed
+                // buttons (Yes, No, Return, Esc) only showed without the question.
+                AnswerSlot(terminal: terminal, model: model, blocked: state == "blocked" && !questionOpen, palette: palette,
                            transition: arrival) { question, answer in
                     feed.recordDecision(question: question, answer: answer)
                 }
@@ -503,6 +507,25 @@ struct ChatView: View {
                     run(command)
                 }
                 .disabled(!canType)
+            }
+        }
+    }
+
+    /// Picks an option of Claude's question in the terminal: its number picks it and moves to the
+    /// next question; after the last, the review screen ("Ready to submit your answers?") has
+    /// Submit selected, so Return sends them.
+    private func pick(_ choice: String, in options: [String], question id: String, info: ChatFeed.QuestionInfo) {
+        guard let at = options.firstIndex(of: choice), at < 9, canType else { return }
+        if model.watching { model.setWatching(false) }
+        questionPicks[id] = choice
+        model.type(String(at + 1))
+        guard info.index == info.count - 1 else { return }
+        Task { @MainActor in
+            await waitForScreen(upTo: .seconds(3)) { lines in
+                lines.contains { $0.contains("Ready to submit your answers?") }
+            }
+            if model.frame.textLines.contains(where: { $0.contains("Ready to submit your answers?") }) {
+                model.press(.enter)
             }
         }
     }
@@ -582,6 +605,14 @@ struct ChatView: View {
         }
         guard let at = feed.arrivedAt[id] else { return false }
         return Date.now.timeIntervalSince(at) < 1.5
+    }
+
+    /// One of Claude's question cards is waiting for an answer.
+    private var questionOpen: Bool {
+        feed.items.suffix(12).contains { item in
+            guard case .question = item.kind, let info = feed.questionInfo[item.id], info.keys else { return false }
+            return info.answer == nil && questionPicks[item.id] == nil
+        }
     }
 
     /// Messages (yours, the agent's, images, answers), not tool steps: what "N new" counts.
@@ -679,10 +710,25 @@ struct ChatView: View {
             case .note(let text):
                 NoteRow(text: text, palette: palette)
             case .question(let title, let options):
-                QuestionCard(title: title, options: options, answer: answer(after: item.id), palette: palette,
-                             enabled: canType) { choice in
-                    draft = choice
-                    send()
+                if let info = feed.questionInfo[item.id], info.keys {
+                    // Claude's: picked in the terminal by number, one question after another.
+                    let earlierOpen = info.index > 0 && info.group.map { group in
+                        (0..<info.index).contains { i in
+                            let id = "\(group)-q\(i)"
+                            return feed.questionInfo[id]?.answer == nil && questionPicks[id] == nil
+                        }
+                    } == true
+                    QuestionCard(title: title, options: options, details: info.details,
+                                 answer: info.answer ?? questionPicks[item.id], palette: palette,
+                                 enabled: canType && !earlierOpen) { choice in
+                        pick(choice, in: options, question: item.id, info: info)
+                    }
+                } else {
+                    QuestionCard(title: title, options: options, answer: answer(after: item.id), palette: palette,
+                                 enabled: canType) { choice in
+                        draft = choice
+                        send()
+                    }
                 }
             case .tool:
                 EmptyView()
@@ -1650,6 +1696,8 @@ private struct NoteRow: View {
 private struct QuestionCard: View {
     let title: String
     let options: [String]
+    /// A line under each option (Claude's option descriptions), when there are any.
+    var details: [String] = []
     let answer: String?
     let palette: ChatPalette
     let enabled: Bool
@@ -1669,8 +1717,16 @@ private struct QuestionCard: View {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Text(letter).font(.footnote.weight(.semibold).monospaced())
                             .foregroundStyle(picked ? Color.white.opacity(0.8) : palette.secondary)
-                        Text(option).font(.callout).multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(option).font(.callout).multilineTextAlignment(.leading)
+                            if index < details.count, !details[index].isEmpty {
+                                Text(details[index])
+                                    .font(.footnote)
+                                    .foregroundStyle(picked ? Color.white.opacity(0.8) : palette.secondary)
+                                    .multilineTextAlignment(.leading)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         if picked { Image(systemName: "checkmark") }
                     }
                     .foregroundStyle(picked ? Color.white : palette.text)
