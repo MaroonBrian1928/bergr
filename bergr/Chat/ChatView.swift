@@ -400,9 +400,7 @@ struct ChatView: View {
             if agent == .claude, let newer = feed.newerAgent, !updateDismissed {
                 UpdateBanner(running: feed.agentVersion, installed: newer, palette: palette,
                              canUpdate: canType && state != "working") {
-                    // Claude Code's own command: installs, then restarts into the new version
-                    // with this conversation.
-                    typeLine("/update")
+                    restartAgent()
                 } dismiss: {
                     updateDismissed = true
                 }
@@ -757,6 +755,31 @@ struct ChatView: View {
         .animation(motion, value: ready)
         .animation(motion, value: state)
         .animation(motion, value: shellMode)
+    }
+
+    /// Restarts Claude Code into the newest installed version with this conversation: exits it,
+    /// waits for the shell, then starts it again as it was started (same options) resuming this
+    /// conversation. (Claude Code's own /update and /restart refuse while Remote Control is on.)
+    private func restartAgent() {
+        guard let id = feed.conversationID, let address = terminal?.address, let session else { return }
+        let argv = terminal?.foreground.flatMap { ChatAgent.detect(name: $0.name, argv: $0.argv) == .claude ? $0.argv : nil }
+            ?? ["claude"]
+        let command = RestartCommand.make(argv: argv, conversation: id)
+        updateDismissed = true
+        typeLine("/exit")
+        // Unstructured: it outlives this chat, which goes away while Claude isn't running.
+        Task { @MainActor in
+            let deadline = Date.now.addingTimeInterval(15)
+            while Date.now < deadline {
+                try? await Task.sleep(for: .milliseconds(300))
+                let fg = session.terminal(address)?.foreground
+                if let fg, ChatAgent.detect(name: fg.name, argv: fg.argv) != .claude { break }
+            }
+            try? await Task.sleep(for: .milliseconds(400))
+            model.type(command)
+            try? await Task.sleep(for: .milliseconds(150))
+            model.press(.enter)
+        }
     }
 
     /// Types a line into the terminal and presses Return, the way a reply goes.
@@ -1718,12 +1741,12 @@ private struct UpdateBanner: View {
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(palette.text)
                 Text(canUpdate ? "This chat runs \(running ?? "an older version"). Restarting keeps the conversation."
-                               : "Update once Claude finishes this step.")
+                               : "Restart once Claude finishes this step.")
                     .font(.caption)
                     .foregroundStyle(palette.secondary)
             }
             Spacer(minLength: 0)
-            Button("Update", action: update)
+            Button("Restart", action: update)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(palette.onAccent)
                 .buttonStyle(.borderedProminent)
@@ -1740,5 +1763,32 @@ private struct UpdateBanner: View {
         .padding(.trailing, 6)
         .padding(.vertical, 8)
         .background(palette.bubble, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+/// The command that starts Claude Code again as it was started, resuming a conversation.
+enum RestartCommand {
+    static func make(argv: [String], conversation: String) -> String {
+        var args: [String] = []
+        var skip = false
+        // Drop what picked the conversation before; the resume below picks this one.
+        for (i, arg) in argv.enumerated() {
+            if skip { skip = false; continue }
+            if i == 0 { continue }
+            if ["--resume", "-r", "--session-id"].contains(arg) {
+                // Its value follows, unless the next one is another option (a bare --resume).
+                if i + 1 < argv.count, !argv[i + 1].hasPrefix("-") { skip = true }
+                continue
+            }
+            if arg == "--continue" || arg == "-c" || arg.hasPrefix("--resume=") || arg.hasPrefix("--session-id=") { continue }
+            args.append(arg)
+        }
+        // `claude` by name: the newest version installed, not the path the old one ran from.
+        return (["claude"] + args + ["--resume", conversation]).map(quote).joined(separator: " ")
+    }
+
+    static func quote(_ s: String) -> String {
+        if !s.isEmpty, s.allSatisfy({ $0.isLetter || $0.isNumber || "-_./=:@%+,".contains($0) }) { return s }
+        return "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

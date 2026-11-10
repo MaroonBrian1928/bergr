@@ -184,6 +184,8 @@ final class ChatFeed {
     /// A newer Claude Code is installed on the machine than this conversation runs (`/update`
     /// restarts into it): the installed version, else nil.
     private(set) var newerAgent: String?
+    /// The conversation being followed (Claude: its session id).
+    private(set) var conversationID: String?
     /// The Claude Code version this conversation runs.
     private(set) var agentVersion: String?
     /// The effort last chosen here, for agents that don't record it (Claude).
@@ -262,6 +264,10 @@ final class ChatFeed {
                 switch type {
                 case "reset":
                     sawConversation = true
+                    // The transcript's file name: the conversation's id, for `claude --resume`.
+                    conversationID = (event["session"] as? String).map {
+                        $0.hasSuffix(".jsonl") ? String($0.dropLast(6)) : $0
+                    }
                     caughtUp = false
                     building = []
                     index = [:]
