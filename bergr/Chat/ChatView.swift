@@ -796,7 +796,12 @@ struct ChatView: View {
 
     /// `interrupting`: stop the agent first (Esc), then send, instead of queueing behind its work.
     private func send(interrupting: Bool = false) {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A shell command as the agents record it: `!` then the command, no space between
+        // (else the sent bubble never matches the conversation and stays "Not delivered").
+        if text.hasPrefix("!"), attachments.isEmpty {
+            text = "!" + text.dropFirst().trimmingCharacters(in: .whitespaces)
+        }
         let images = attachments
         guard (!text.isEmpty || !images.isEmpty), canType else { return }
         // Replying takes the terminal over, like typing in it does.

@@ -135,6 +135,9 @@ class ShellCommands(Base):
         evs = list(c.parse({"type": "user", "uuid": "b2", "message": {
             "content": "<bash-stdout>a\nb</bash-stdout><bash-stderr></bash-stderr>"}}))
         self.assertEqual(evs, [{"t": "msg", "id": "b2.0", "role": "assistant", "text": "```\na\nb\n```"}])
+        evs = list(c.parse({"type": "user", "uuid": "b3", "message": {
+            "content": "<bash-stdout>main -&gt; main &amp; x</bash-stdout>"}}))
+        self.assertEqual(evs[0]["text"], "```\nmain -> main & x\n```")
 
 
     def test_codex_user_shell_command(self):

@@ -20,6 +20,7 @@
 # Usage: agent-feed.py <claude|codex|antigravity> <pid> <cwd> [session-id|-]
 # The session id comes from the agent's launch command (claude --resume <id>, codex resume <id>).
 # Read-only: it never writes to the agents' files.
+import html
 import base64, glob, json, os, re, sqlite3, subprocess, sys, time
 
 AGENT, PID, CWD = sys.argv[1], int(sys.argv[2] or 0), sys.argv[3]
@@ -514,7 +515,8 @@ class Claude:
 def tag(s, name):
     """The text inside <name>…</name>, or None."""
     m = re.search(rf"<{name}>(.*?)</{name}>", s, re.S)
-    return m.group(1) if m else None
+    # Claude Code escapes &, < and > inside these tags.
+    return html.unescape(m.group(1)) if m else None
 
 
 def shell_text(text):
