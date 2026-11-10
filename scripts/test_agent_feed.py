@@ -138,15 +138,27 @@ class ToolResultImages(Base):
 
 
 class Backlog(Base):
-    def test_history_keeps_last_version_and_latest_tool_images(self):
+    PNG = "iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAEUlEQVR4nGNgYGD4z8DAwMAAAA0ABftJ5UQAAAAASUVORK5CYII="
+
+    def test_history_sends_placeholders_then_images_newest_first(self):
         ns = load("claude", self.home)
-        evs = [{"t": "version", "running": "1", "installed": "3"}]
-        evs += [{"t": "image", "id": f"i{n}", "fromTool": True} for n in range(10)]
-        evs += [{"t": "version", "running": "3", "installed": None}, {"t": "msg", "id": "m"}]
-        out = ns["backlog"](evs)
-        self.assertEqual([e for e in out if e["t"] == "version"], [{"t": "version", "running": "3", "installed": None}])
-        self.assertEqual([e["id"] for e in out if e["t"] == "image"], [f"i{n}" for n in range(4, 10)])
-        self.assertEqual(out[-1], {"t": "msg", "id": "m"})
+        evs = [{"t": "version", "running": "1", "installed": "3"},
+               {"t": "image", "id": "a", "role": "user", "mime": "image/png", "data": self.PNG},
+               {"t": "msg", "id": "m"},
+               {"t": "image", "id": "b", "role": "assistant", "mime": "image/png", "data": self.PNG, "fromTool": True},
+               {"t": "version", "running": "3", "installed": None}]
+        head, later = ns["backlog"](evs)
+        self.assertEqual([e["t"] for e in head], ["image", "msg", "image", "version"])
+        self.assertNotIn("data", head[0])
+        self.assertEqual((head[0]["width"], head[0]["height"]), (3, 2))
+        self.assertEqual([e["id"] for e in later], ["b", "a"])
+        self.assertTrue(all(e["data"] == self.PNG for e in later))
+
+    def test_jpeg_size(self):
+        import base64
+        ns = load("claude", self.home)
+        jpeg = b"\xff\xd8\xff\xe0\x00\x04ab\xff\xc0\x00\x11\x08\x01\x2c\x02\x58\x03"
+        self.assertEqual(ns["image_size"](base64.b64encode(jpeg).decode()), (600, 300))
 
 
 class PastedMessages(Base):

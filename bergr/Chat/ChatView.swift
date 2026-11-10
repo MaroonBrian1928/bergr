@@ -519,7 +519,7 @@ struct ChatView: View {
                     return (question + " " + answer).localizedStandardContains(search) ? row : nil
                 case .question(let title, let options):
                     return ([title] + options).joined(separator: " ").localizedStandardContains(search) ? row : nil
-                case .tool, .image:
+                case .tool, .image, .imageLoading:
                     return nil
                 }
             case .tools(let items):
@@ -615,6 +615,9 @@ struct ChatView: View {
                 PlanCard(steps: steps, palette: palette)
             case .image(let data, let fromUser):
                 ImageBubble(data: data, fromUser: fromUser, palette: palette)
+                    .transition(.opacity)
+            case .imageLoading(let width, let height, let fromUser):
+                ImagePlaceholder(width: width, height: height, fromUser: fromUser, palette: palette)
             case .decision(let question, let answer):
                 DecisionRow(question: question, answer: answer, palette: palette)
                     .transition(arrival)

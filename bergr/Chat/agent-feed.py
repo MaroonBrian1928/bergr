@@ -1215,17 +1215,50 @@ def list_models():
     return []
 
 
-BACKLOG_TOOL_IMAGES = 6  # images tools brought back, sent from a conversation's history
+def image_size(data):
+    """Width and height of a base64 PNG, JPEG, GIF or WebP from its header, or None."""
+    try:
+        head = base64.b64decode(data[:65536] + "=" * (-len(data[:65536]) % 4), validate=False)
+    except Exception:
+        return None
+    if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
+        return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return int.from_bytes(head[6:8], "little"), int.from_bytes(head[8:10], "little")
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP" and head[12:16] == b"VP8X":
+        return 1 + int.from_bytes(head[24:27], "little"), 1 + int.from_bytes(head[27:30], "little")
+    if head[:2] == b"\xff\xd8":
+        i = 2
+        while i + 9 < len(head):
+            if head[i] != 0xFF:
+                i += 1
+                continue
+            marker, length = head[i + 1], int.from_bytes(head[i + 2:i + 4], "big")
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                return int.from_bytes(head[i + 7:i + 9], "big"), int.from_bytes(head[i + 5:i + 7], "big")
+            i += 2 + length
+    return None
 
 
 def backlog(events):
-    """A conversation's history as it opens, trimmed: one version event (the last; the earlier
-    ones would flash the update prompt), and only the latest images tools brought back (a long
-    conversation can hold hundreds of screenshots, megabytes the chat would wait for)."""
+    """A conversation's history as it opens: the text first, every image as a sized placeholder
+    in its place, and the images themselves after (the newest first), so the chat shows at once
+    and fills in. One version event, the last: the earlier ones would flash the update prompt."""
     versions = [i for i, ev in enumerate(events) if ev.get("t") == "version"]
-    tool_images = [i for i, ev in enumerate(events) if ev.get("fromTool")]
-    drop = set(versions[:-1]) | set(tool_images[:-BACKLOG_TOOL_IMAGES])
-    return [ev for i, ev in enumerate(events) if i not in drop]
+    head, images = [], []
+    for i, ev in enumerate(events):
+        if ev.get("t") == "version" and i != versions[-1]:
+            continue
+        if ev.get("t") == "image" and ev.get("data"):
+            size = image_size(ev["data"])
+            placeholder = {k: v for k, v in ev.items() if k != "data"}
+            if size:
+                placeholder["width"], placeholder["height"] = size
+            head.append(placeholder)
+            images.append(ev)
+            continue
+        head.append(ev)
+    return head, images[::-1]
 
 
 def follow_jsonl(source):
@@ -1243,11 +1276,20 @@ def follow_jsonl(source):
             opening = True
         if tail:
             events = [ev for d in tail.lines() for ev in (source.parse(d) or ())]
+            later = []
             if opening:
-                events, opening = backlog(events), False
+                (events, later), opening = backlog(events), False
             for ev in events:
                 ev.pop("fromTool", None)
                 emit(ev)
+            if later:
+                # The chat shows on the first ping; the images fill their places after it.
+                emit({"t": "ping"})
+                flush()
+                for ev in later:
+                    ev.pop("fromTool", None)
+                    emit(ev)
+                    flush()
         if path and hasattr(source, "subagents") and time.time() - sub_at >= 2:
             sub_at = time.time()
             try:

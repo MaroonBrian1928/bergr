@@ -314,3 +314,34 @@ private struct ZoomableImage: UIViewRepresentable {
         }
     }
 }
+
+/// Where an image will be, while it arrives: its size (the same box an `ImageBubble` takes, so
+/// nothing moves when it lands), softly pulsing.
+struct ImagePlaceholder: View {
+    let width: Double?
+    let height: Double?
+    let fromUser: Bool
+    let palette: ChatPalette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var dim = false
+
+    var body: some View {
+        let w = max(width ?? 240, 1), h = max(height ?? 180, 1)
+        let scale = min(240 / w, 260 / h, 1)
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(palette.bubble)
+            .overlay {
+                Image(systemName: "photo")
+                    .font(.title3)
+                    .foregroundStyle(palette.secondary.opacity(0.6))
+            }
+            .frame(width: w * scale, height: h * scale)
+            .opacity(dim ? 0.55 : 1)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: fromUser ? .trailing : .leading)
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { dim = true }
+            }
+            .accessibilityLabel("Image, loading")
+    }
+}

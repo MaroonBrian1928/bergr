@@ -78,6 +78,9 @@ final class ChatFeed {
         case plan([PlanStep])
         /// An image in the conversation; `fromUser` puts it on the user's side.
         case image(data: Data, fromUser: Bool)
+        /// An image still on its way (a conversation's history sends the text first): its size,
+        /// when the header gave it, so the placeholder takes the image's place without a jump.
+        case imageLoading(width: Double?, height: Double?, fromUser: Bool)
         /// An answer given from the chat to an agent's question or approval prompt. Agents don't
         /// write these to their files, so the app keeps them.
         case decision(question: String, answer: String)
@@ -412,8 +415,14 @@ final class ChatFeed {
             building.append(Item(id: id, kind: .plan(steps)))
             return
         } else if type == "image" {
-            guard let b64 = event["data"] as? String, let data = Data(base64Encoded: b64) else { return }
-            kind = .image(data: data, fromUser: event["role"] as? String == "user")
+            let fromUser = event["role"] as? String == "user"
+            if let b64 = event["data"] as? String {
+                guard let data = Data(base64Encoded: b64) else { return }
+                kind = .image(data: data, fromUser: fromUser)
+            } else {
+                kind = .imageLoading(width: (event["width"] as? NSNumber)?.doubleValue,
+                                     height: (event["height"] as? NSNumber)?.doubleValue, fromUser: fromUser)
+            }
         } else if type == "question" {
             kind = .question(title: event["title"] as? String ?? "", options: event["options"] as? [String] ?? [])
         } else if type == "tool" {
