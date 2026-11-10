@@ -1,3 +1,4 @@
+// Modified for Bergr, 2026, from Hirte (Apache-2.0). See the git history for all changes.
 import XCTest
 
 /// Walks through the demo machine. Set BERGR_SHOTS (TEST_RUNNER_BERGR_SHOTS for xcodebuild)

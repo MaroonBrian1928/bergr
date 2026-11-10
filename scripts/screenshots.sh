@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Modified for Bergr, 2026, from Hirte (Apache-2.0). See the git history for all changes.
 # App Store screenshots: runs the demo UI test on a clean simulator and frames each capture
 # with a caption, at the device's own screenshot size (iPhone 17 Pro: 1206×2622, the slot App Store
 # Connect requires; 17 Pro Max: 1320×2868; iPhone Duo outer display: 1398×2034).

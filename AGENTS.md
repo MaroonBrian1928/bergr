@@ -69,3 +69,10 @@ App tests: `xcodebuild … -only-testing:bergrTests test` (unit) or `-only-testi
 - **Workarounds for herdr-core bugs** say so in a comment (what the core does, the version it was
   seen in), so they can be removed once it's fixed upstream.
 - Commit messages: a short imperative subject, then what changed and why.
+
+## Modified-file notices (Apache-2.0 §4b)
+
+A file that came from Hirte and is changed for Bergr carries, at its top (after a shebang or
+`swift-tools-version` line): `Modified for Bergr, 2026, from Hirte (Apache-2.0). See the git
+history for all changes.` in the file's comment syntax. Add it when first changing such a file.
+Files Bergr added need no notice.

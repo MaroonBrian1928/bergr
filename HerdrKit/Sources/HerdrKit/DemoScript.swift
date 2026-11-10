@@ -1,3 +1,4 @@
+// Modified for Bergr, 2026, from Hirte (Apache-2.0). See the git history for all changes.
 import Foundation
 
 /// What the demo machine shows: three projects with agents, tests, a dev server and a shell.

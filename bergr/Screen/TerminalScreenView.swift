@@ -1,3 +1,4 @@
+// Modified for Bergr, 2026, from Hirte (Apache-2.0). See the git history for all changes.
 import HerdrKit
 import SwiftUI
 

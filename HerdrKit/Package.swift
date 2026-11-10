@@ -1,4 +1,5 @@
 // swift-tools-version: 6.2
+// Modified for Bergr, 2026, from Hirte (Apache-2.0). See the git history for all changes.
 import PackageDescription
 
 let package = Package(

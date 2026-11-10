@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Modified for Bergr, 2026, from Hirte (Apache-2.0). See the git history for all changes.
 # A video of the demo on a real iPhone (made for the unfolded iPhone Duo): runs the UI test
 # DemoTourTests/testDeviceVideoTour on the device, where Bergr Dev records its own screen, then
 # copies the recording over and compresses it. Works over Wi-Fi; the phone must be unlocked.

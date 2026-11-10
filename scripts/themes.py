@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified for Bergr, 2026, from Hirte (Apache-2.0). See the git history for all changes.
 """Build bergr/Settings/themes.json: the terminal themes offered in Settings.
 
 Colors come from Ghostty's theme collection (iTerm2-Color-Schemes, MIT), which `just ghostty`

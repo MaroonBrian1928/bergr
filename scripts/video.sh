@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Modified for Bergr, 2026, from Hirte (Apache-2.0). See the git history for all changes.
 # The README video: records the UI test DemoTourTests/testVideoTour on a clean simulator, cuts it to
 # the app and frames it on Bergr's charcoal with rounded corners.
 # Output: .build/video/<device>/bergr.mp4 (and bergr.gif, small, for places that don't play video)

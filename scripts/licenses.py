@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified for Bergr, 2026, from Hirte (Apache-2.0). See the git history for all changes.
 """Collect the licenses of everything shipped inside Bergr into bergr/Licenses/licenses.json.
 
 Run with `just licenses` after changing Swift packages or the Ghostty pin. Needs resolved

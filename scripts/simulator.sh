@@ -1,3 +1,4 @@
+# Modified for Bergr, 2026, from Hirte (Apache-2.0). See the git history for all changes.
 # Sourced by screenshots.sh and video.sh. Needs $device_type, $sim_name and $appearance; sets $device:
 # a booted simulator in US English with Apple's marketing status bar and no Bergr Dev installed.
 
