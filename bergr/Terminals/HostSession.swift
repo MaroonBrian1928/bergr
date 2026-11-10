@@ -140,6 +140,10 @@ final class HostSession {
     /// Conversations being followed, by terminal address. The session owns them, not the screen:
     /// a screen can disappear for a moment during navigation, and that mustn't end the feed.
     @ObservationIgnored private var feeds: [String: (agent: ChatAgent, feed: ChatFeed, task: Task<Void, Never>, used: Date)] = [:]
+    /// Feeds whose line went away (the app went to the background): kept, not their tasks, so
+    /// coming back follows the conversation into the same feed. The chat keeps showing what it
+    /// had while the conversation is read again, instead of going blank and rebuilding.
+    @ObservationIgnored private var pausedFeeds: [String: (agent: ChatAgent, feed: ChatFeed)] = [:]
     /// Each feed is an SSH channel (sshd allows 10 per connection by default; herdr-core uses one).
     private static let maxFeeds = 4
 
@@ -154,7 +158,8 @@ final class HostSession {
         while feeds.count >= Self.maxFeeds, let oldest = feeds.min(by: { $0.value.used < $1.value.used })?.key {
             feeds.removeValue(forKey: oldest)?.task.cancel()
         }
-        let feed = ChatFeed()
+        let paused = pausedFeeds.removeValue(forKey: address)
+        let feed = paused?.agent == agent ? paused!.feed : ChatFeed()
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             if self.host.isDemo { await feed.runDemo(agent: agent, cwd: cwd); return }
@@ -171,7 +176,10 @@ final class HostSession {
     }
 
     private func stopFeeds() {
-        for entry in feeds.values { entry.task.cancel() }
+        for (address, entry) in feeds {
+            entry.task.cancel()
+            pausedFeeds[address] = (entry.agent, entry.feed)
+        }
         feeds = [:]
     }
 

@@ -278,17 +278,23 @@ final class ChatFeed {
                 case "reset":
                     sawConversation = true
                     // The transcript's file name: the conversation's id, for `claude --resume`.
-                    conversationID = (event["session"] as? String).map {
+                    let id = (event["session"] as? String).map {
                         $0.hasSuffix(".jsonl") ? String($0.dropLast(6)) : $0
                     }
+                    // Read again into `building`; what's on screen (`items`, tool output, usage)
+                    // stays until the first ping, then swaps in. The same conversation read again
+                    // swaps in unchanged, so coming back to a chat doesn't flash.
+                    let rereading = phase == .live && id != nil && id == conversationID
+                    conversationID = id
                     caughtUp = false
                     building = []
                     index = [:]
-                    toolOutput = [:]
-                    subagentMap = [:]
                     revealStart = [:]
-                    caughtUp = false
-                    usage = nil
+                    if !rereading {
+                        toolOutput = [:]
+                        subagentMap = [:]
+                        usage = nil
+                    }
                     phase = .live
                 case "usage":
                     applyUsage(event)
