@@ -1060,10 +1060,74 @@ CLAUDE_MODELS = [
 CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 
 
+def claude_catalog_file():
+    """Claude Code's own model list, as its /model picker shows it: the newest catalog it cached
+    (~/.claude/cache/model-catalog), the CLI's ("cc") before the desktop app's ("ccd")."""
+    files = glob.glob(os.path.join(HOME, ".claude", "cache", "model-catalog", "*-cc.json")) \
+        or glob.glob(os.path.join(HOME, ".claude", "cache", "model-catalog", "*-ccd.json"))
+    return max(files, key=os.path.getmtime) if files else None
+
+
+def claude_catalog():
+    """The main models from Claude Code's cached catalog, with their effort levels and badges
+    ("Requires usage credits"), or [] to fall back on the built-in list."""
+    f = claude_catalog_file()
+    try:
+        with open(f) as fh:
+            models = json.load(fh)["catalog"]["config"]["models"]
+    except Exception:
+        return []
+    out = []
+    for m in models:
+        if not isinstance(m, dict) or not m.get("id") or m.get("section", "main") != "main":
+            continue
+        efforts = [e.get("id") for e in (m.get("thinking") or {}).get("effort_options") or []
+                   if isinstance(e, dict) and e.get("id")]
+        item = {"id": m["id"], "name": m.get("name") or m["id"], "description": m.get("description") or "",
+                "efforts": efforts or CLAUDE_EFFORTS}
+        badge = m.get("badge")
+        if isinstance(badge, dict) and badge.get("message"):
+            item["note"] = badge["message"]
+        default = (m.get("runtime") or {}).get("default_effort")
+        if default:
+            item["default_effort"] = default
+        out.append(item)
+    return out
+
+
+def models_source():
+    """The file the model list comes from, so it's sent again when that file changes."""
+    if AGENT == "claude":
+        return claude_catalog_file()
+    if AGENT == "codex":
+        return os.path.join(HOME, ".codex", "models_cache.json")
+    return None
+
+
+MODELS_SEEN = [None, 0, 0]  # file, its mtime, ticks since the last check
+
+
+def refresh_models(force=False):
+    """Sends the model list when its file is new or changed (the agent refreshed its catalog,
+    e.g. a new model came out), checking every ten seconds."""
+    MODELS_SEEN[2] += 1
+    if not force and MODELS_SEEN[2] < 10:
+        return
+    MODELS_SEEN[2] = 0
+    f = models_source()
+    try:
+        mtime = os.path.getmtime(f) if f else 0
+    except OSError:
+        mtime = 0
+    if force or (f, mtime) != tuple(MODELS_SEEN[:2]):
+        MODELS_SEEN[0], MODELS_SEEN[1] = f, mtime
+        emit({"t": "models", "items": list_models()})
+
+
 def list_models():
     """The models (and their effort levels) the agent can switch to in a running session."""
     if AGENT == "claude":
-        return [dict(m, efforts=CLAUDE_EFFORTS) for m in CLAUDE_MODELS]
+        return claude_catalog() or [dict(m, efforts=CLAUDE_EFFORTS) for m in CLAUDE_MODELS]
     if AGENT == "antigravity":
         # Its /model picker's list (Antigravity CLI 1.5); effort is a low/medium/high slider there.
         return [{"id": name, "name": name, "description": desc, "efforts": ["low", "medium", "high"]}
@@ -1112,6 +1176,7 @@ def follow_jsonl(source):
                         emit(ev)
             except Exception:
                 pass  # sub-agent status is best effort
+        refresh_models()
         emit({"t": "ping"})
         flush()
         time.sleep(1)
@@ -1169,6 +1234,7 @@ def follow_antigravity(source):
             shells, history = source.shell_commands(history)
             for ev in shells:
                 emit(ev)
+        refresh_models()
         emit({"t": "ping"})
         flush()
         time.sleep(1)
@@ -1177,7 +1243,7 @@ def follow_antigravity(source):
 def main():
     try:
         emit({"t": "commands", "items": list_commands()})
-        emit({"t": "models", "items": list_models()})
+        refresh_models(force=True)
         if AGENT == "claude":
             follow_jsonl(Claude())
         elif AGENT == "codex":

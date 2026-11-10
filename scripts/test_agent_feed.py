@@ -171,6 +171,28 @@ class ShellCommands(Base):
         self.assertEqual(ns["Antigravity"]().shell_commands(offset)[0], [])
 
 
+class ClaudeModels(Base):
+    def test_models_from_claude_code_catalog(self):
+        import json as j
+        d = os.path.join(self.home, ".claude", "cache", "model-catalog")
+        os.makedirs(d)
+        with open(os.path.join(d, "x-cc.json"), "w") as fh:
+            j.dump({"catalog": {"config": {"models": [
+                {"id": "claude-fable-5-2", "name": "Fable 5.2", "description": "Toughest", "section": "main",
+                 "badge": {"message": "Included until November 16"},
+                 "thinking": {"effort_options": [{"id": "low"}, {"id": "high"}]},
+                 "runtime": {"default_effort": "high"}},
+                {"id": "claude-opus-4-6", "name": "Opus 4.6", "section": "overflow"}]}}}, fh)
+        ns = load("claude", self.home)
+        self.assertEqual(ns["list_models"](), [{
+            "id": "claude-fable-5-2", "name": "Fable 5.2", "description": "Toughest", "efforts": ["low", "high"],
+            "note": "Included until November 16", "default_effort": "high"}])
+
+    def test_built_in_list_without_a_catalog(self):
+        ns = load("claude", self.home)
+        self.assertEqual(ns["list_models"]()[0]["id"], "claude-opus-5-5")
+
+
 class ToolOutput(Base):
     def test_claude_tool_result(self):
         ns = load("claude", self.home)
