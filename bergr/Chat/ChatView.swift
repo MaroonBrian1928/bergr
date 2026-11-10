@@ -136,7 +136,11 @@ struct ChatView: View {
                             // A row is hit as its box, not its text's outline: matching the outline
                             // on every pointer move made scrolling slow on the Mac.
                             .contentShape(.rect)
-                            .transition(transition(for: row))
+                            // Rows take their place at once (the list keeps its bottom still, and
+                            // animating positions fought that: rows overshot up and settled back
+                            // down); a new one fades and rises into place by drawing alone.
+                            .modifier(ArriveIn(active: isNew(row)))
+                            .transition(.identity)
                     }
                 }
                 // The read conversation arrives in one step: fade it in where it lands (no slide).
@@ -187,13 +191,15 @@ struct ChatView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                    .transition(.asymmetric(insertion: arrival, removal: .identity))
+                    .modifier(ArriveIn(active: true))
+                    .transition(.identity)
                 }
                 if search == nil, state == "working" {
                     WorkingRow(agent: agent, detail: terminal?.status?.msg ?? terminal?.status?.title, palette: palette,
                                since: workingSince)
-                        // It makes way for the reply without an animation of its own to fight it.
-                        .transition(.asymmetric(insertion: .opacity, removal: .identity))
+                        // Fades in by drawing alone, and makes way for the reply at once.
+                        .modifier(ArriveIn(active: true, rise: false))
+                        .transition(.identity)
                 }
                 if search != nil, shown.isEmpty, shownReplies.isEmpty {
                     Text("No matches")
@@ -208,11 +214,8 @@ struct ChatView: View {
             // Not a scroll target layout: with one, the scroll position followed the top row as
             // the list scrolled, and each change rebuilt the chat and redrew its text (slow on the
             // Mac). Showing earlier rows still scrolls to the old first row by its id.
-            .animation(motion, value: shown.count)
-            .animation(motion, value: feed.items.count)
-            .animation(motion, value: feed.subagents.count)
-            .animation(motion, value: pending)
-            .animation(motion, value: state)
+            // No layout animations on arrivals (rows, sent replies, the working line, sub-agents):
+            // see ArriveIn. Searching still animates, since nothing is arriving then.
             .animation(motion, value: search)
             .padding(.horizontal, 16)
             .padding(.top, 12)
@@ -490,21 +493,6 @@ struct ChatView: View {
         Button("Select Text", systemImage: "selection.pin.in.out") { selecting = SelectableMessage(text: text) }
     }
 
-    /// How a row arrives: your reply replacing its sending copy doesn't move; an agent's reply
-    /// fades in where it lands (a slide would fight the list keeping its bottom in place).
-    private func transition(for row: Row) -> AnyTransition {
-        guard case .item(let item) = row else { return arrival }
-        switch item.kind {
-        case .user(let text):
-            let said: Set<String> = [text.trimmingCharacters(in: .whitespacesAndNewlines)]
-            return pending.contains { $0.isIn(said) } ? .identity : arrival
-        case .assistant:
-            return .opacity
-        default:
-            return arrival
-        }
-    }
-
     // MARK: Rows
 
     /// Items as shown: a run of tool calls between two messages reads as one line.
@@ -560,6 +548,17 @@ struct ChatView: View {
     }
 
     /// The id of the tool run the agent is in right now (a `Row.id`), if any.
+    /// A row that joined the conversation just now (its first item arrived in the last moment).
+    private func isNew(_ row: Row) -> Bool {
+        let id: String
+        switch row {
+        case .item(let item): id = item.id
+        case .tools(let items): id = items.first?.id ?? ""
+        }
+        guard let at = feed.arrivedAt[id] else { return false }
+        return Date.now.timeIntervalSince(at) < 1.5
+    }
+
     /// Messages (yours, the agent's, images, answers), not tool steps: what "N new" counts.
     private var messageCount: Int {
         feed.items.count { item in
@@ -1210,16 +1209,31 @@ private struct ToolRun: View {
         steps.count == 1 && Self.kind(steps[0].name) == .command ? "apple.terminal" : "list.bullet"
     }
 
+    /// The height shown, which follows the content's with an animation: a run folding into its
+    /// summary line (as the reply arrives) glides shut instead of snapping, and the chat, which
+    /// keeps its bottom still, doesn't jerk everything above it.
+    @State private var height: CGFloat?
+
     var body: some View {
-        if running && !waiting {
-            live
-                .foregroundStyle(palette.secondary)
-                .padding(.vertical, -10)
-                .transition(.opacity)
-        } else {
-            summary
-                .transition(.opacity)
+        Group {
+            if running && !waiting {
+                live
+                    .foregroundStyle(palette.secondary)
+                    .padding(.vertical, -10)
+                    // Swapped, not cross-faded: both at once made the row taller, then it snapped.
+                    .transition(.asymmetric(insertion: .opacity, removal: .identity))
+            } else {
+                summary
+                    .transition(.asymmetric(insertion: .opacity, removal: .identity))
+            }
         }
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { new in
+            guard let old = height, abs(old - new) > 0.5 else { height = new; return }
+            withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { height = new }
+        }
+        .frame(height: height, alignment: .top)
+        .clipped()
     }
 
     /// The run the agent is in: its latest steps, one line each, the newest last with a shimmer,
@@ -1863,5 +1877,25 @@ enum RestartCommand {
     static func quote(_ s: String) -> String {
         if !s.isEmpty, s.allSatisfy({ $0.isLetter || $0.isNumber || "-_./=:@%+,".contains($0) }) { return s }
         return "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+}
+
+/// A row arriving: it is in its place from the first frame (nothing else moves for it), and
+/// fades in while rising a few points, drawn only, so the list's layout never animates.
+private struct ArriveIn: ViewModifier {
+    let active: Bool
+    var rise = true
+    @State private var landed = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        let waiting = active && !landed
+        content
+            .opacity(waiting ? 0 : 1)
+            .offset(y: waiting && rise && !reduceMotion ? 10 : 0)
+            .onAppear {
+                guard active, !landed else { return }
+                withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.35)) { landed = true }
+            }
     }
 }

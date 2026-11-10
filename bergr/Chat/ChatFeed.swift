@@ -161,6 +161,10 @@ final class ChatFeed {
     /// Assistant messages that arrived while the chat was open (not the backlog), by arrival time:
     /// their text reveals word by word.
     private(set) var revealStart: [String: Date] = [:]
+    /// Items that joined while the conversation was on screen (or since it was last shown, when
+    /// read again), and when: the chat fades those in. Set before they're shown, so the very
+    /// first frame of a new row already knows it is new.
+    private(set) var arrivedAt: [String: Date] = [:]
     /// The backlog is in: items that arrive from now on are live.
     private(set) var caughtUp = false
     private(set) var usage: Usage?
@@ -327,6 +331,7 @@ final class ChatFeed {
                         if !items.isEmpty {
                             let shown = Set(items.map(\.id))
                             for item in building where !shown.contains(item.id) {
+                                arrivedAt[item.id] = .now
                                 if case .assistant = item.kind { revealStart[item.id] = .now }
                             }
                         }
@@ -461,6 +466,10 @@ final class ChatFeed {
             if building[at].kind != kind { building[at].kind = kind }
         } else {
             index[id] = building.count
+            if caughtUp {
+                arrivedAt[id] = .now
+                if arrivedAt.count > 300 { arrivedAt = arrivedAt.filter { $0.value.timeIntervalSinceNow > -5 } }
+            }
             building.append(Item(id: id, kind: kind))
             if caughtUp, case .assistant = kind { revealStart[id] = .now }
         }
