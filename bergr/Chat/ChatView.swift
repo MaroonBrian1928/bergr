@@ -766,6 +766,7 @@ struct ChatView: View {
         let argv = terminal?.foreground.flatMap { ChatAgent.detect(name: $0.name, argv: $0.argv) == .claude ? $0.argv : nil }
             ?? ["claude"]
         let command = RestartCommand.make(argv: argv, conversation: id)
+        withAnimation(motion) { feed.restartedIntoNewest() }
         typeLine("/exit")
         // Unstructured: it outlives this chat, which goes away while Claude isn't running.
         Task { @MainActor in

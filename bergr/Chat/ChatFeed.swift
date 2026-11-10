@@ -184,6 +184,14 @@ final class ChatFeed {
     /// A newer Claude Code is installed on the machine than this conversation runs (`/update`
     /// restarts into it): the installed version, else nil.
     private(set) var newerAgent: String?
+    /// Restart was tapped: it starts the newest installed version, which the conversation only
+    /// records once something new is written to it (a resumed session writes nothing until then).
+    func restartedIntoNewest() {
+        if let newer = newerAgent { agentVersion = newer }
+        newerAgent = nil
+        modelsNeedingUpdate = []
+    }
+
     /// The models in the picker that need the newer version.
     private(set) var modelsNeedingUpdate: [String] = []
     /// The conversation being followed (Claude: its session id).
