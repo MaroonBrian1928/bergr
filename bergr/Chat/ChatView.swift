@@ -60,7 +60,7 @@ struct ChatView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private struct Pending: Identifiable, Equatable {
+    struct Pending: Identifiable, Equatable {
         let id = UUID()
         let text: String
         var at = Date.now
@@ -74,6 +74,16 @@ struct ChatView: View {
 
         /// Whether the conversation has this reply. With images it comes back with the image
         /// paths (or "[Image #1]") in front of the words, so the words only have to end it.
+        /// Whether the terminal's screen shows the reply: the start of its first line, enough to
+        /// tell it apart, on one row (a long reply wraps).
+        static func onScreen(_ text: String, lines: [String]) -> Bool {
+            let first = text.split(separator: "\n", omittingEmptySubsequences: true).first
+                .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+            guard !first.isEmpty else { return false }
+            let probe = String(first.prefix(24))
+            return lines.contains { $0.contains(probe) }
+        }
+
         func isIn(_ said: Set<String>) -> Bool {
             if said.contains(text) { return true }
             return images && !text.isEmpty && said.contains { $0.hasSuffix(text) }
@@ -1078,14 +1088,20 @@ struct ChatView: View {
         pending.removeAll { $0.isIn(said) || ($0.images && $0.at.timeIntervalSinceNow < -20) }
     }
 
-    /// Ten seconds without the reply in the conversation and without the agent working: it most
-    /// likely never arrived (a channel that died quietly), so the bubble offers Retry.
+    /// Ten seconds without the reply in the conversation, without the agent working, and without
+    /// the words on the terminal's screen (an agent shows a queued reply under its prompt): it most
+    /// likely never arrived (a channel that died quietly), so the bubble offers Retry. While the
+    /// agent works or the screen shows it, it keeps watching: the agent reads it after this step.
     private func watchDelivery(of id: UUID) {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(10))
-            guard let at = pending.firstIndex(where: { $0.id == id }), !pending[at].images,
-                  state != "working" else { return }
-            withAnimation(motion) { pending[at].failed = true }
+            while let at = pending.firstIndex(where: { $0.id == id }), !pending[at].images, !pending[at].failed {
+                if state != "working", !Pending.onScreen(pending[at].text, lines: model.textLines) {
+                    withAnimation(motion) { pending[at].failed = true }
+                    return
+                }
+                try? await Task.sleep(for: .seconds(5))
+            }
         }
     }
 
