@@ -396,3 +396,22 @@ class LiveActivityTests(unittest.TestCase):
         self.assertEqual(sent[0]["machine"], "H")
         self.assertEqual(len(sent[1]["rows"]), 3)   # full mode learnt: rows right away
         self.assertFalse(sent[1]["urgent"])
+
+
+class HideAfterTests(unittest.TestCase):
+    def test_old_finished_agents_dont_count(self):
+        now = 1_000_000.0
+        old = dict(term("t1", "done"), status_ms=int((now - 2 * 86400) * 1000))
+        fresh = dict(term("t2", "done"), status_ms=int((now - 60) * 1000))
+        stuck = dict(term("t3", "blocked"), status_ms=int((now - 9 * 86400) * 1000))
+        terms = {t["address"]: t for t in (old, fresh, stuck)}
+        self.assertEqual(notify.activity_summary(terms, hide_after=86400, now=now),
+                         {"needsYou": 1, "working": 0, "done": 1})
+        self.assertEqual(notify.activity_summary(terms, hide_after=0, now=now)["done"], 2)
+
+    def test_status_change_records_its_time(self):
+        before = {"t1": term("t1", "working")}
+        ev = json.dumps({"method": "event", "params": {"type": "status", "terminal": "t1",
+                                                       "data": {"status": {"state": "done"}}}})
+        after = notify.apply_event(before, ev)
+        self.assertGreater(after["t1"]["status_ms"], 0)

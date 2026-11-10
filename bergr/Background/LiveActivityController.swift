@@ -66,7 +66,8 @@ final class LiveActivityController {
                     if isNeeds { needs.append(row) } else { working.append(row) }
                 case .done, .idle:
                     // A finished turn keeps its agent on the Lock Screen: it's waiting for your next message.
-                    guard state == .done || ChatAgent.detect(terminal) != nil else { continue }
+                    // Not when nobody has touched it for longer than the setting (Hide finished agents after).
+                    guard state == .done || ChatAgent.detect(terminal) != nil, !QuietAgents.isQuiet(terminal) else { continue }
                     done += 1
                     let status = [terminal.status?.msg, terminal.status?.title]
                         .compactMap { $0 }.first { !$0.isEmpty } ?? "Ready"
@@ -285,7 +286,8 @@ final class LiveActivityController {
             for await data in activity.pushTokenUpdates {
                 let token = PushRegistration.hex(data)
                 guard let self, await self.post(path: "v1/activity", method: "POST",
-                                                 body: ["token": token, "mode": Self.fullContent ? "full" : "counts"])
+                                                 body: ["token": token, "mode": Self.fullContent ? "full" : "counts",
+                                                        "hide_after": String(QuietAgents.seconds)])
                 else { return }
                 self.registeredForPush = true
                 app.endBackgroundTask(background)

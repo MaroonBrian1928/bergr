@@ -217,7 +217,7 @@ test("counts mode sums machines and drops rows", async () => {
   const secret = await withActivity(env, "counts");
   await post(env, secret, { machine: "m1", needsYou: 1, working: 2, done: 0, rows: [{ title: "secret project" }] });
   const r = await post(env, secret, { machine: "m2", needsYou: 0, working: 1, done: 3 });
-  assert.deepEqual(await r.json(), { active: true, mode: "counts" });
+  assert.deepEqual(await r.json(), { active: true, mode: "counts", hide_after: 86400 });
   const last = calls.at(-1);
   assert.equal(last.url, `https://api.sandbox.push.apple.com/3/device/${LA_TOKEN}`);
   assert.equal(last.init.headers["apns-push-type"], "liveactivity");
@@ -267,4 +267,12 @@ test("activity endpoints need the device secret", async () => {
   const { env } = await makeEnv();
   const r = await handle(req("/v1/activity", "POST", { token: LA_TOKEN }, auth("nope")), env);
   assert.equal(r.status, 401);
+});
+
+test("the phone's hide-after setting is handed to the helpers", async () => {
+  const { env } = await makeEnv();
+  const { secret } = await (await reg(env)).json();
+  await handle(req("/v1/activity", "POST", { token: LA_TOKEN, mode: "counts", hide_after: "3600" }, auth(secret)), env);
+  const r = await post(env, secret, { machine: "m1", needsYou: 0, working: 1, done: 0 });
+  assert.equal((await r.json()).hide_after, 3600);
 });

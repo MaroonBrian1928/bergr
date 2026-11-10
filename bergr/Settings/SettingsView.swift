@@ -16,6 +16,7 @@ struct SettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var keepAlive = KeepAlive.shared
     @AppStorage(LiveActivityController.pushKey) private var liveActivityPush = false
+    @AppStorage(QuietAgents.key) private var hideAfter = QuietAgents.defaultSeconds
     @AppStorage(LiveActivityController.contentKey) private var liveActivityContent = "counts"
     @State private var push = PushRegistration.shared
     /// Adds the demo machine and shows it.
@@ -79,6 +80,22 @@ struct SettingsView: View {
                 }
             } footer: {
                 Text("SSH keys that sign you in to your machines. Private keys stay on this device.")
+            }
+
+            Section {
+                Picker(selection: $hideAfter) {
+                    ForEach(QuietAgents.choices, id: \.seconds) { Text($0.title).tag($0.seconds) }
+                } label: {
+                    Label {
+                        Text("Hide finished agents after")
+                    } icon: {
+                        SettingsIcon("clock.arrow.circlepath", color: .gray)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(minHeight: 44)
+            } footer: {
+                Text("Finished and idle agents untouched for longer don't count on the Lock Screen and widget, and fold away under Older in the list. Agents that need you or are working always show.")
             }
 
             // In the order they depend on each other: alerts (the helper on each machine), the

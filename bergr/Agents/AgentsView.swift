@@ -53,6 +53,7 @@ struct AgentsView: View {
     /// "machine" or "attention"; empty is the device's default (attention on a phone).
     @AppStorage("agents.grouping") private var groupingSetting = ""
     @State private var showAllIdle = false
+    @State private var showOlder = false
     private var byAttention: Bool {
         groupingSetting.isEmpty ? UIDevice.current.userInterfaceIdiom == .phone : groupingSetting == "attention"
     }
@@ -210,9 +211,12 @@ struct AgentsView: View {
         let all = entries
         let stamp: (Entry) -> UInt64 = { $0.terminal.statusMs ?? $0.terminal.createdMs }
         let needs = all.filter { [.needsYou, .error].contains($0.terminal.agentState) }.sorted { stamp($0) < stamp($1) }
-        let finished = all.filter { $0.terminal.agentState == .done }.sorted { stamp($0) > stamp($1) }
+        let now = Date.now
+        let quiet = all.filter { QuietAgents.isQuiet($0.terminal, now: now) }.sorted { stamp($0) > stamp($1) }
+        let recent = all.filter { !QuietAgents.isQuiet($0.terminal, now: now) }
+        let finished = recent.filter { $0.terminal.agentState == .done }.sorted { stamp($0) > stamp($1) }
         let working = all.filter { $0.terminal.agentState == .working }.sorted { stamp($0) < stamp($1) }
-        let idle = all.filter { $0.terminal.agentState == .idle || $0.terminal.agentState == nil }
+        let idle = recent.filter { $0.terminal.agentState == .idle || $0.terminal.agentState == nil }
             .sorted { ($0.terminal.isAgent ? 0 : 1, stamp($1)) < ($1.terminal.isAgent ? 0 : 1, stamp($0)) }
         let shownIdle = showAllIdle ? idle : Array(idle.prefix(10))
         attentionSection("Needs you", needs, counted: true)
@@ -227,6 +231,19 @@ struct AgentsView: View {
                         .selectionDisabled()
                 }
             } header: { AttentionHeader(title: "Idle", count: nil) }
+        }
+        // Finished and idle agents untouched for longer than the setting: out of the way, not gone.
+        if !quiet.isEmpty {
+            Section {
+                if showOlder {
+                    ForEach(quiet) { entryRow($0) }
+                }
+                Button(showOlder ? "Hide older" : "Show \(quiet.count) older") {
+                    withAnimation { showOlder.toggle() }
+                }
+                .font(.footnote.weight(.semibold))
+                .selectionDisabled()
+            } header: { AttentionHeader(title: "Older", count: nil) }
         }
         let down = unreachable
         if !down.isEmpty {

@@ -25,7 +25,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 7
+VERSION = 8
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 ALERT_STATES = ("blocked", "done")
 KINDS = ("permission", "question", "auth")
@@ -166,6 +166,9 @@ def apply_event(terms, line):
     term = dict(terms.get(address) or {"address": address})
     if kind == "status":
         term["status"] = data.get("status")
+        # When it last changed, as herdr-core's own records keep it (status_ms): the change
+        # events don't carry a time, so it's the time the change arrived.
+        term["status_ms"] = int(time.time() * 1000)
     elif kind == "turn":
         term["turn"] = data.get("turn")
     elif kind == "labels":
@@ -240,15 +243,21 @@ def alerts_for(prev_state, line):
     return {"last": last, "sent": sent, "terms": terms}, alerts
 
 
-def activity_summary(terms, rows=False, host_id="", machine=""):
+def activity_summary(terms, rows=False, host_id="", machine="", hide_after=0, now=None):
     """This machine's agents for the phone's Live Activity: how many need the user, work, are done,
-    and (with `rows`, when the phone chose full content) the top three, needs-you first."""
+    and (with `rows`, when the phone chose full content) the top three, needs-you first. Finished
+    agents unchanged for longer than `hide_after` seconds (the phone's setting; 0: never) don't count."""
+    now = time.time() if now is None else now
     needs, working, done = [], [], []
     for term in terms.values():
         status = term.get("status") if isinstance(term.get("status"), dict) else {}
         state = status.get("state")
         if state not in ("blocked", "working", "done"):
             continue
+        if state == "done" and hide_after > 0:
+            stamp = term.get("status_ms") or term.get("created_ms") or 0
+            if isinstance(stamp, (int, float)) and stamp > 0 and now - stamp / 1000 > hide_after:
+                continue
         if state == "blocked":
             needs.append(term)
         elif state == "working":
@@ -278,7 +287,7 @@ class ActivityPoster:
     MIN_GAP, ACTIVE_BEAT, IDLE_BEAT = 2, 300, 60
 
     def __init__(self):
-        self.devices = {}  # secret -> {"mode", "active", "last", "at"}
+        self.devices = {}  # secret -> {"mode", "active", "last", "at", "hide_after"}
 
     def due(self, secret, summary, now):
         d = self.devices.setdefault(secret, {"mode": "counts", "active": None, "last": None, "at": 0})
@@ -292,7 +301,8 @@ class ActivityPoster:
         secret = device["secret"]
         d = self.devices.setdefault(secret, {"mode": "counts", "active": None, "last": None, "at": 0})
         host_id = device.get("host_id") or host
-        summary = activity_summary(terms, rows=d["mode"] == "full", host_id=host_id, machine=host)
+        summary = activity_summary(terms, rows=d["mode"] == "full", host_id=host_id, machine=host,
+                                   hide_after=d.get("hide_after", 86400), now=now)
         if not self.due(secret, summary, now):
             return
         previous = d["last"] or {}
@@ -310,6 +320,10 @@ class ActivityPoster:
             log(f"live activity update failed: {e}")
             return
         d["active"] = bool(answer.get("active"))
+        if isinstance(answer.get("hide_after"), int):
+            if answer["hide_after"] != d.get("hide_after"):
+                d["at"] = 0  # A different setting: send the counts it gives right away.
+            d["hide_after"] = answer["hide_after"]
         mode = answer.get("mode") if answer.get("mode") in ("counts", "full") else "counts"
         if d["active"] and mode != d["mode"]:
             d["mode"] = mode

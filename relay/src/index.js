@@ -265,7 +265,10 @@ async function activityRegister(request, env) {
   if (body instanceof Response) return body;
   if (typeof body.token !== "string" || !TOKEN_RE.test(body.token)) return err(400, "invalid token");
   const mode = body.mode === "full" ? "full" : "counts";
-  await env.REGISTRATIONS.put(`la:${d.hash}`, JSON.stringify({ token: body.token, mode }), { expirationTtl: ACTIVITY_TTL });
+  // Finished agents untouched for longer than this (seconds; 0: never) don't count: the phone's
+  // setting, passed on to the helpers, which know when each agent last changed.
+  const hideAfter = Math.max(0, Math.min(parseInt(body.hide_after ?? "86400", 10) || 0, 30 * 86400));
+  await env.REGISTRATIONS.put(`la:${d.hash}`, JSON.stringify({ token: body.token, mode, hideAfter }), { expirationTtl: ACTIVITY_TTL });
   // A new activity starts from nothing: the machines' next posts fill it.
   await env.REGISTRATIONS.delete(`las:${d.hash}`);
   return json(200, { ok: true, mode });
@@ -365,7 +368,7 @@ async function activityState(request, env) {
     console.error("apns fetch failed", e && e.name);
     return err(502, "apns unreachable");
   }
-  if (res.status === 200) return json(200, { active: true, mode: la.mode });
+  if (res.status === 200) return json(200, { active: true, mode: la.mode, hide_after: la.hideAfter ?? 86400 });
   let reason = "unknown";
   try {
     reason = (await res.json()).reason || reason;
