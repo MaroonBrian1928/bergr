@@ -18,6 +18,11 @@ final class TerminalScreenModel {
     private(set) var phase: Phase = .attaching
     /// The latest screen; the view redraws when it changes.
     private(set) var frame: ScreenFrame = .empty
+    /// The screen's text, one string per row, and whether it shows a login prompt: worked out
+    /// once per frame and set only when they change, so the chat's answer bar and permissions
+    /// menu don't each rebuild them (or redraw) on every frame.
+    private(set) var textLines: [String] = []
+    private(set) var inLogin = false
     /// Soft-keyboard Ctrl: applies to the next key.
     var controlLatched = false
     /// Scrolled up into history (new output does not move the view).
@@ -364,5 +369,9 @@ final class TerminalScreenModel {
     private func renderNow() {
         guard let vt else { return }
         frame = vt.frame()
+        let lines = frame.textLines
+        if lines != textLines { textLines = lines }
+        let login = AnswerParser.inLogin(lines)
+        if login != inLogin { inLogin = login }
     }
 }
