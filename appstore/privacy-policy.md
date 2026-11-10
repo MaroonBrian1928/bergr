@@ -1,6 +1,6 @@
 # Bergr privacy policy
 
-Effective November 9, 2026.
+Effective November 10, 2026.
 
 Bergr is an app for watching and talking to the coding agents on your own computers. It has no
 account, no analytics, no advertising and no tracking.
@@ -14,27 +14,36 @@ them. It is not sent to the developer or to anyone else.
 Your SSH keys are made and kept on your device (in the Secure Enclave where possible) and never
 leave it. The machines you add and your settings are stored on your device.
 
-## Push alerts (optional)
+## Notifications and Live Activity through the helpers (optional)
 
-If you turn on push alerts, Bergr registers your device with Bergr's push relay so alerts can reach
-it when the app isn't open. The relay stores:
+Bergr can keep you informed while it isn't open in one of two ways, which you choose in Settings.
+
+**Helpers on your computers.** A small helper on each computer sends updates to your phone through
+Bergr's push relay. When you turn on notifications or the Live Activity this way, the relay stores:
 
 - your device's push token from Apple,
 - the app's identifier, and whether it's a development build,
 - when the registration was made.
 
-Alerts are encrypted on your computer with a key only your device has, and decrypted on your device:
-the relay passes them to Apple's push service without being able to read them. To limit abuse, the
-relay counts registrations per network address for up to two hours, using a one-way hash of the
-address rather than the address itself. Turning push alerts off, or removing a computer's helper,
-deletes the registration.
+Notifications are encrypted on your computer with a key only your device has, and decrypted on your
+device: the relay passes them to Apple's push service without being able to read them.
 
-The relay runs on Cloudflare Workers; alerts are delivered by Apple Push Notification service.
+The Live Activity is not encrypted. With "Numbers only", the relay receives and keeps, for each
+computer, how many agents need you, are working and are done. With "Numbers and names", it also
+receives each agent's name and short status, and Apple's push service and the relay can read them.
+The relay keeps only the latest update from each computer, drops a computer that stops sending
+updates, and deletes all of it when the Live Activity ends or you turn it off.
 
-## Purchases
+To limit abuse, the relay limits registrations per network address, using a one-way hash of the
+address rather than the address itself; Bergr doesn't store it. Turning both switches off, or
+removing a computer's helper, deletes the registration.
 
-Purchases are handled by Apple. Bergr receives only what Apple's StoreKit provides to confirm a
-purchase, never your payment details.
+The relay runs on Cloudflare Workers; updates are delivered by Apple Push Notification service.
+
+**Bergr stays running.** Bergr keeps its connections to your computers open in the background and
+shows notifications and the Live Activity itself; nothing goes through the relay. To stay running,
+Bergr asks for "Always" location access. It uses the least precise location iOS offers, only to keep
+running, and never stores or sends it.
 
 ## Children
 

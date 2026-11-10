@@ -27,6 +27,7 @@ struct ChatView: View {
     /// Each Send Now: a firmer tap than a send, felt as stopping the agent.
     @State private var pushes = 0
     @State private var showingUsage = false
+    @State private var choosingMode = false
     @State private var selecting: SelectableMessage?
     @State private var viewing: ViewedImage?
     /// The Claude Code version whose update banner was closed: it stays away until a newer one
@@ -360,15 +361,21 @@ struct ChatView: View {
                 searchFocused = true
             },
             usage: { showingUsage = true },
-            setMode: { mode in
-                Task {
-                    if let problem = await PermissionModes.set(mode, agent: agent, model: model, saved: feed.usage?.mode) {
-                        sendError = problem
-                    }
-                }
-            },
+            permissions: { choosingMode = true },
             info: { onInfo?() })
         .equatable()
+        .confirmationDialog("Permissions", isPresented: $choosingMode, titleVisibility: .visible) {
+            let current = PermissionModes.current(agent, in: model.textLines, saved: feed.usage?.mode)
+            ForEach(PermissionModes.modes(agent), id: \.self) { mode in
+                Button(mode == current ? "\(mode) ✓" : mode) {
+                    Task {
+                        if let problem = await PermissionModes.set(mode, agent: agent, model: model, saved: feed.usage?.mode) {
+                            sendError = problem
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private var contextItem: some ToolbarContent {
@@ -1890,7 +1897,7 @@ private struct MoreMenu: View, Equatable {
     let canSetMode: Bool
     let search: () -> Void
     let usage: () -> Void
-    let setMode: (String) -> Void
+    let permissions: () -> Void
     let info: () -> Void
 
     static func == (a: Self, b: Self) -> Bool {
@@ -1904,16 +1911,10 @@ private struct MoreMenu: View, Equatable {
             if hasUsage {
                 Button("Usage", systemImage: "gauge.with.dots.needle.50percent", action: usage)
             }
-            Menu {
-                ForEach(PermissionModes.modes(agent), id: \.self) { mode in
-                    Button { setMode(mode) } label: {
-                        if mode == currentMode { Label(mode, systemImage: "checkmark") } else { Text(mode) }
-                    }
-                }
-            } label: {
-                Label("Permissions" + (currentMode.map { " · \($0)" } ?? ""), systemImage: "lock.shield")
-            }
-            .disabled(!canSetMode)
+            // A dialog, not a submenu: a submenu closed whenever the toolbar updated, and that's
+            // every second while an agent works.
+            Button("Permissions" + (currentMode.map { " · \($0)" } ?? ""), systemImage: "lock.shield", action: permissions)
+                .disabled(!canSetMode)
             if hasInfo {
                 Button("Info", systemImage: "info.circle", action: info)
             }

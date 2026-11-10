@@ -19,8 +19,15 @@ You don't need a server to review it: Bergr has a built-in demo machine.
 
 Everything in the demo is simulated on the device; nothing connects to the internet.
 
-Push alerts need a real computer running herdr with Bergr's helper installed, so they can't be
-shown in the demo. They are optional, off by default, and end-to-end encrypted.
+Notifications and the Live Activity need a real computer running herdr, so they can't be shown in
+the demo. Both are optional and off by default.
+
+About location: Settings → When Bergr isn't open → "Updates come from" offers "Bergr stays running".
+Only when the user picks it, Bergr asks for "Always" location access and runs a low-accuracy location
+session, solely so iOS keeps the app running and its SSH connections to the user's computers open.
+That lets Bergr show an agent's question on the Live Activity with buttons to answer it. The location
+is never stored, shown or sent anywhere. Settings and the permission prompt both say this. The default,
+"Helpers on your computers", uses no location at all.
 
 The app names Claude, Codex and Antigravity only to say which agents it works with. It is not
 affiliated with Anthropic, OpenAI or Google (stated in Settings → About and in the description).
