@@ -450,7 +450,13 @@ struct ChatView: View {
 
     @ViewBuilder
     private func copyButton(_ text: String) -> some View {
+        // The copies together: the message, then each command in it, then Select Text.
         Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+        let commands = Commands.in(text)
+        ForEach(commands, id: \.self) { command in
+            Button(commands.count == 1 ? "Copy Command" : "Copy “\(Commands.label(command))”",
+                   systemImage: "terminal") { UIPasteboard.general.string = command }
+        }
         Button("Select Text", systemImage: "selection.pin.in.out") { selecting = SelectableMessage(text: text) }
     }
 
@@ -1637,5 +1643,45 @@ private extension AnyTransition {
         .asymmetric(
             insertion: .modifier(active: PhraseChange(shown: false, rise: 4), identity: PhraseChange(shown: true, rise: 0)),
             removal: .modifier(active: PhraseChange(shown: false, rise: -4), identity: PhraseChange(shown: true, rise: 0)))
+    }
+}
+
+/// The commands in a message, for "Copy Command": code blocks, inline code that has a space in it
+/// (`git push origin main`, not a lone `name`), or the message itself when it's a `!` command.
+enum Commands {
+    static func `in`(_ text: String) -> [String] {
+        var out: [String] = []
+        func add(_ s: String) {
+            let s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !s.isEmpty, !out.contains(s) { out.append(s) }
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("!"), !trimmed.contains("\n") { add(String(trimmed.dropFirst())) }
+        var rest = Substring(text)
+        // Fenced blocks first; what's outside them is searched for inline code.
+        var outside = ""
+        while let open = rest.range(of: "```") {
+            outside += rest[..<open.lowerBound]
+            let after = rest[open.upperBound...]
+            guard let close = after.range(of: "```") else { rest = after; break }
+            var body = after[..<close.lowerBound]
+            // Drop the language tag on the opening line (```bash).
+            if let newline = body.firstIndex(of: "\n"), !body[..<newline].contains(" ") {
+                body = body[body.index(after: newline)...]
+            }
+            add(String(body))
+            rest = after[close.upperBound...]
+        }
+        outside += rest
+        for match in outside.matches(of: /`([^`\n]+)`/) where match.output.1.contains(" ") {
+            add(String(match.output.1))
+        }
+        return Array(out.prefix(8))
+    }
+
+    /// The menu's name for one command: its first line, shortened.
+    static func label(_ command: String) -> String {
+        let line = command.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? command
+        return line.count > 40 ? line.prefix(39) + "…" : line
     }
 }
