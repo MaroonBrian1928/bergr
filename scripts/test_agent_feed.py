@@ -126,6 +126,17 @@ class QueuedMessages(Base):
         self.assertEqual(evs, [])
 
 
+class ShellCommands(Base):
+    def test_bang_command_and_output(self):
+        ns = load("claude", self.home)
+        c = ns["Claude"]()
+        evs = list(c.parse({"type": "user", "uuid": "b1", "message": {"content": "<bash-input>ls -a</bash-input>"}}))
+        self.assertEqual(evs, [{"t": "msg", "id": "b1.0", "role": "user", "text": "!ls -a"}])
+        evs = list(c.parse({"type": "user", "uuid": "b2", "message": {
+            "content": "<bash-stdout>a\nb</bash-stdout><bash-stderr></bash-stderr>"}}))
+        self.assertEqual(evs, [{"t": "msg", "id": "b2.0", "role": "assistant", "text": "```\na\nb\n```"}])
+
+
 class ToolOutput(Base):
     def test_claude_tool_result(self):
         ns = load("claude", self.home)

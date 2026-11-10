@@ -442,6 +442,10 @@ class Claude:
             if t == "text":
                 text = block.get("text") or ""
                 if kind == "user":
+                    shell = shell_text(text)
+                    if shell:
+                        yield {"t": "msg", "id": bid, "role": shell[0], "text": shell[1]}
+                        continue
                     text = user_text(text)
                     if text is None:
                         continue
@@ -505,6 +509,26 @@ class Claude:
                 tr.steps += 1
             elif b.get("type") == "text" and (b.get("text") or "").strip():
                 tr.summary = last_line(b["text"])
+
+
+def tag(s, name):
+    """The text inside <name>…</name>, or None."""
+    m = re.search(rf"<{name}>(.*?)</{name}>", s, re.S)
+    return m.group(1) if m else None
+
+
+def shell_text(text):
+    """A `!` shell command typed in Claude Code (recorded as <bash-input>) as the person typed it,
+    and its output (<bash-stdout>/<bash-stderr>) as a code block from the agent's side; else None."""
+    s = text.strip()
+    if s.startswith("<bash-input>"):
+        command = tag(s, "bash-input")
+        return ("user", "!" + command.strip()) if command and command.strip() else None
+    if s.startswith("<bash-stdout>") or s.startswith("<bash-stderr>"):
+        out = "\n".join(x for x in ((tag(s, "bash-stdout") or "").rstrip(), (tag(s, "bash-stderr") or "").rstrip()) if x)
+        out = out.replace("```", "`\u200b``")
+        return ("assistant", "```\n" + (out or "(no output)") + "\n```")
+    return None
 
 
 def user_text(text):

@@ -637,9 +637,22 @@ struct ChatView: View {
         return "Reply to \(agent.displayName)"
     }
 
+    /// The reply starts with `!`: the agents run it as a shell command.
+    private var shellMode: Bool { draft.hasPrefix("!") && attachments.isEmpty }
+
     private var inputBar: some View {
         let ready = (!draft.isBlank || !attachments.isEmpty) && canType
         return VStack(alignment: .leading, spacing: 0) {
+            if shellMode {
+                // Starting with `!` runs a shell command in the agent's terminal, not a message.
+                Label("Shell command", systemImage: "terminal")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.accent)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .accessibilityHint("Starts with an exclamation mark, so it runs as a shell command")
+            }
             AttachmentStrip(attachments: $attachments, palette: palette)
                 .padding(.horizontal, 12)
                 .padding(.top, attachments.isEmpty ? 0 : 10)
@@ -709,10 +722,17 @@ struct ChatView: View {
         }
         .foregroundStyle(palette.text)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        // In shell mode the box gets an accent outline, so a command isn't mistaken for a message.
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(palette.accent.opacity(shellMode ? 0.7 : 0), lineWidth: 1.5)
+                .allowsHitTesting(false)
+        }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
         .animation(motion, value: ready)
         .animation(motion, value: state)
+        .animation(motion, value: shellMode)
     }
 
     /// Types a line into the terminal and presses Return, the way a reply goes.
@@ -830,7 +850,13 @@ struct ChatView: View {
             }
             // Image paths go first, pasted as the terminal would get them; the agents attach them.
             let message = (paths + (text.isEmpty ? [] : [text])).joined(separator: " ")
-            if !paths.isEmpty || message.contains("\n") { model.paste(message) } else { model.type(message) }
+            if paths.isEmpty, !message.contains("\n"), message.hasPrefix("!"), message.count > 1 {
+                // A shell command: `!` on its own switches the agent's input to shell mode first
+                // (as typing it does), then the command.
+                model.type("!")
+                try? await Task.sleep(for: .milliseconds(120))
+                model.type(String(message.dropFirst()))
+            } else if !paths.isEmpty || message.contains("\n") { model.paste(message) } else { model.type(message) }
             // Return on its own, a moment later, so the agent sees it as "send" and not as part of the text.
             try? await Task.sleep(for: .milliseconds(150))
             model.press(.enter)
