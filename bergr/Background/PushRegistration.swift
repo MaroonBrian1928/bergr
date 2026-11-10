@@ -57,6 +57,8 @@ final class PushRegistration {
     var finishedMessage: String?
     /// What the last check found on each machine, for Settings.
     private(set) var helperState: [UUID: HelperState] = [:]
+    /// The helper version installed on each machine, as it last reported it.
+    private(set) var helperVersion: [UUID: Int] = [:]
     static let declinedKey = "bergr.push.declined"
 
     @ObservationIgnored private(set) weak var sessions: SessionStore?
@@ -348,6 +350,7 @@ final class PushRegistration {
         }
         let installed = status["installed"] as? Bool ?? false
         let version = status["version"] as? Int
+        helperVersion[id] = installed ? version : nil
         if installed, let version, version >= bundled {
             helperState[id] = .current
             return
@@ -376,6 +379,7 @@ final class PushRegistration {
         if result?["ok"] as? Bool == true {
             lastError = nil
             helperState[id] = .current
+            helperVersion[id] = Self.bundledVersion
             let updated = before == .outdated
             // A real alert from the machine, through the whole chain, proves it works.
             let sent = await Self.output("python3 -I ~/.local/bin/bergr-notify --test 2>&1", on: session)

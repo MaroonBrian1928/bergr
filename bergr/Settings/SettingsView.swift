@@ -24,16 +24,23 @@ struct SettingsView: View {
 
     private static let sourceCode = URL(string: "https://github.com/MaroonBrian1928/bergr")!
 
-    private static func helperText(_ state: PushRegistration.HelperState?) -> String {
+    /// A machine's helper line: its state, and which version it has (and which an update brings).
+    private static func helperText(_ state: PushRegistration.HelperState?, installed: Int?) -> String {
+        let bundled = PushRegistration.bundledVersion
         switch state {
-        case .checking: "checking…"
-        case .failed(let reason): "couldn't check: \(reason)"
-        case .unsupported(let reason): "push alerts aren't available — \(reason)"
-        case .current: "helper running"
-        case .installing: "installing…"
-        case .missing: "not installed"
-        case .outdated: "helper needs an update"
-        case nil: "waiting to check…"
+        case .checking: return "checking…"
+        case .failed(let reason): return "couldn't check: \(reason)"
+        case .unsupported(let reason): return "push alerts aren't available — \(reason)"
+        case .current: return installed.map { "helper \($0), up to date" } ?? "helper running"
+        case .installing: return bundled.map { "installing helper \($0)…" } ?? "installing…"
+        case .missing: return "not installed"
+        case .outdated:
+            switch (installed, bundled) {
+            case let (i?, b?): return "helper \(i), update to \(b) available"
+            case let (nil, b?): return "update to helper \(b) available"
+            default: return "helper needs an update"
+            }
+        case nil: return "waiting to check…"
         }
     }
 
@@ -113,7 +120,7 @@ struct SettingsView: View {
                     ForEach(sessions.ids.compactMap { sessions.existing($0) }.filter { $0.state == .connected }, id: \.host.id) { session in
                         let state = push.helperState[session.host.id]
                         HStack {
-                            Text("\(session.host.name): \(Self.helperText(state))")
+                            Text("\(session.host.name): \(Self.helperText(state, installed: push.helperVersion[session.host.id]))")
                                 .font(.subheadline).foregroundStyle(.secondary)
                             Spacer()
                             if state == .missing || state == .outdated {
