@@ -6,6 +6,9 @@ struct CopyCommandTests {
         let text = "Run `git -C ~/src/bergr push origin main` then:\n```bash\njust phone\njust test\n```\nSee `main`."
         #expect(Commands.in(text) == ["just phone\njust test", "git -C ~/src/bergr push origin main"])
         #expect(Commands.in("! ls -a") == ["ls -a"])
+        // A command written for shell mode, in a code block: without the `!`.
+        #expect(Commands.in("To push:\n```\n! git -C ~/src/bergr push origin main\n```")
+                == ["git -C ~/src/bergr push origin main"])
         #expect(Commands.in("No commands, just `name`.").isEmpty)
     }
 

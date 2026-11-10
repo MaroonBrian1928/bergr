@@ -1804,7 +1804,10 @@ enum Commands {
     static func `in`(_ text: String) -> [String] {
         var out: [String] = []
         func add(_ s: String) {
-            let s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            var s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Written for an agent's shell mode (`! git push`): the command is what follows the
+            // `!`. Run adds its own, and in a terminal `! cmd` means "negate cmd's result".
+            if s.hasPrefix("!"), !s.contains("\n") { s = s.dropFirst().trimmingCharacters(in: .whitespaces) }
             if !s.isEmpty, !out.contains(s) { out.append(s) }
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
