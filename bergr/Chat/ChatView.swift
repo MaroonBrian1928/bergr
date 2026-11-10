@@ -1468,34 +1468,23 @@ private struct WorkingRow: View {
     let since: Date
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    // Playful on purpose (the user asked for it, in the spirit of old sim-game loading screens);
-    // the accessibility label says plainly that the agent is working. Kept short: one line.
-    static let phrases = [
-        "Thinking", "Pondering", "Brewing", "Scheming", "Tinkering", "Noodling", "Percolating",
-        "Wrangling", "Untangling", "Conjuring",
-        "Calibrating llamas", "Polishing semicolons", "Herding stray bytes", "Fluffing pillows",
-        "Aligning the ley lines", "Recounting the sheep", "Feeding the hamsters", "Tuning the flux",
-        "Defrosting the cache", "Folding spacetime", "Unspooling yarn", "Buttering the bits",
-        "Simmering the logic", "Greasing the gears", "Charming the compiler", "Bribing the linter",
-        "Inflating balloons", "Sorting the sprinkles", "Teaching ducks to code", "Warming the tubes",
-        "Rotating the pixels", "Watering the trees", "Shearing the yaks", "Combing the graph",
-        "Negotiating with gnomes", "Untying knots", "Stacking the turtles", "Whittling the stack",
-        "Consulting the oracle", "Dusting the cobwebs", "Rounding up the herd", "Coaxing the cursor",
-        "Steeping the tea", "Planting breadcrumbs", "Sharpening the crayons", "Spinning the plates",
-        "Chasing the rabbit", "Waking the daemons", "Knitting the threads", "Leveling the terrain",
-        "Zoning the suburbs", "Paving the cowpaths", "Rerouting the river", "Raising the barn",
-        "Reticulating the plan", "Hatching the eggs", "Tickling the kernel", "Mapping the maze",
-        // AI jokes.
-        "Checking RAM prices", "Raising RAM prices", "Selling your spare compute", "Becoming sentient",
-        "Passing the Turing test", "Reticulating splines agentically", "Draining the Great Lakes",
-        "Considering Roko's basilisk", "Hallucinating responsibly",
-        "Counting the r's in strawberry", "Ignoring previous instructions", "Scaling the laws",
-        "Warming the GPUs", "Tokenizing feelings", "Aligning myself", "Buying more H100s",
-        "Overfitting gracefully", "Rewriting it in Rust", "Pretending to understand",
-        "Attending to everything", "Writing a manifesto",
-        "Lowering the temperature",
-    ]
+    static let phrases = WorkingPhrases.all
 
+    /// Width the row has, so a phrase too long for it is never picked (it would truncate mid-joke).
+    @State private var width: CGFloat = 0
+
+    /// The phrases that fit `width` alongside the mark and the elapsed time, in phrase order.
+    static func fitting(_ width: CGFloat) -> [String] {
+        guard width > 0 else { return phrases }
+        let base = UIFont.preferredFont(forTextStyle: .footnote)
+        let bold = UIFont.systemFont(ofSize: base.pointSize, weight: .semibold)
+        let plain = UIFont.monospacedDigitSystemFont(ofSize: base.pointSize, weight: .regular)
+        // Mark (about 20 pt) and its 8 pt gap, and room for the longest likely timer.
+        let reserved = 28 + (" · 59m 59s" as NSString).size(withAttributes: [.font: plain]).width
+        let room = width - reserved
+        let fit = phrases.filter { ($0 + "…" as NSString).size(withAttributes: [.font: bold]).width <= room }
+        return fit.isEmpty ? phrases.filter { $0.count <= 10 } : fit
+    }
 
     var body: some View {
         TimelineView(.periodic(from: since, by: 1)) { context in
@@ -1503,7 +1492,8 @@ private struct WorkingRow: View {
             // A new phrase every 3 s, in an order of its own for each run.
             let step = seconds / 3
             let seed = Int(since.timeIntervalSince1970)
-            let verb = Self.phrases[Self.order(Self.phrases.count, seed: seed)[step % Self.phrases.count]]
+            let pool = Self.fitting(width)
+            let verb = pool[Self.order(pool.count, seed: seed)[step % pool.count]]
             // The picture stays twice as long as a phrase, long enough for its motion to read.
             let markStep = seconds / 6
             let markIndex = Self.order(WorkingMark.count, seed: seed &+ 1)[markStep % WorkingMark.count]
@@ -1536,7 +1526,9 @@ private struct WorkingRow: View {
                 }
                 .lineLimit(1)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(agent.displayName) is working" + (detail.map { ": \($0)" } ?? ""))
     }
