@@ -24,7 +24,7 @@ get its conversation as a chat, with a real terminal underneath when you want it
   their logos and their sub-agents counted; machines linked to another machine's herdr-core show too
 - **A chat for each agent**: replies as they stream in, tool runs, plans, images and sub-agents;
   reply (or paste a screenshot), queue a reply while it works or send it now, slash commands and
-  skills from anywhere in a message, switch the model, effort and permission mode, and see how full
+  skills from anywhere in a message, `!` shell commands, switch the model, effort and permission mode, and see how full
   the context is and how much of your plan you've used
 - **Answer in one tap**: an agent's question or approval becomes buttons, in the chat, on the Lock
   Screen and in the Dynamic Island; every answer stays in the conversation
