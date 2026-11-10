@@ -1309,7 +1309,9 @@ private struct ToolRun: View {
             withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { height = new }
         }
         .frame(height: height, alignment: .top)
-        .clipped()
+        // The live run's -10 vertical padding lets its lines hang past the measured box; a plain
+        // clip cut the newest line's descenders, so the clip reaches that far too.
+        .mask(Rectangle().padding(.vertical, -10))
     }
 
     /// The run the agent is in: its latest steps, one line each, the newest last with a shimmer,
