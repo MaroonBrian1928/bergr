@@ -28,6 +28,7 @@ struct ChatView: View {
     @State private var pushes = 0
     @State private var showingUsage = false
     @State private var selecting: SelectableMessage?
+    @State private var viewing: ViewedImage?
     @State private var showingModels = false
     /// When this chat first saw the agent working, for a timer that doesn't restart on every
     /// redraw when herdr-core doesn't say when its status changed.
@@ -292,6 +293,9 @@ struct ChatView: View {
                        setUp: session.map { session in { try await session.setUpClaudeStatusLine() } })
         }
         .sheet(item: $selecting) { SelectTextSheet(text: $0.text) }
+        // Images open from here, not from their rows (see `showImage`).
+        .environment(\.showImage) { viewing = ViewedImage(image: $0) }
+        .fullScreenCover(item: $viewing) { ImageViewer(image: $0.image) }
     }
 
     @ToolbarContentBuilder

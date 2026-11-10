@@ -82,10 +82,24 @@ struct PlanCard: View {
 /// Decoding a JPEG is slow, and this view's body runs on every chat update: it shows a copy
 /// shrunk to its display size, made once off the main thread and cached, and decodes the full
 /// image only when opened.
+/// An image to show full screen.
+struct ViewedImage: Identifiable {
+    let id = UUID()
+    let image: UIImage
+}
+
+extension EnvironmentValues {
+    /// Opens an image full screen from the screen that set it (the chat), not from the image's
+    /// row: a row in the chat's lazy list can be rebuilt or dropped while its cover is up, which
+    /// left a black screen with nothing to close it.
+    @Entry var showImage: ((UIImage) -> Void)?
+}
+
 struct ImageBubble: View {
     let data: Data
     let fromUser: Bool
     let palette: ChatPalette
+    @Environment(\.showImage) private var showImage
     @State private var thumb: UIImage?
     @State private var full: UIImage?
     @State private var showing = false
@@ -94,8 +108,10 @@ struct ImageBubble: View {
         Group {
             if let size = ImageThumbs.pixelSize(data) {
                 Button {
-                    full = UIImage(data: data)
-                    showing = full != nil
+                    guard let image = UIImage(data: data) else { return }
+                    if let showImage { return showImage(image) }
+                    full = image
+                    showing = true
                 } label: {
                     // Its own size, at most 240 × 260 and in proportion, so it sits against its side
                     // instead of in the middle of a wider box.

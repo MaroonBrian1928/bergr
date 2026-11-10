@@ -173,7 +173,11 @@ struct TerminalScreenView: View {
             model.setWatching(true)
         }
         // On screen: its agent counts as read (herdr's shared `herdr.seen`).
-        .onAppear { session.startLooking(at: address) }
+        .onAppear {
+            session.startLooking(at: address)
+            // Back from something covering it (a full-screen image), which stopped it: attach again.
+            if model.started { model.reconnect() }
+        }
         .onDisappear {
             model.stop()
             session.stopLooking(at: address)
