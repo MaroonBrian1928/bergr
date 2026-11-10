@@ -15,6 +15,8 @@ struct SettingsView: View {
     @AppStorage(TerminalTheme.darkKey) private var darkTheme = TerminalTheme.defaultDark
     @Environment(\.colorScheme) private var colorScheme
     @State private var keepAlive = KeepAlive.shared
+    @AppStorage(LiveActivityController.pushKey) private var liveActivityPush = false
+    @AppStorage(LiveActivityController.contentKey) private var liveActivityContent = "counts"
     @State private var push = PushRegistration.shared
     /// Adds the demo machine and shows it.
     var addDemo: () -> Void = {}
@@ -80,6 +82,38 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle(isOn: $liveActivityPush) {
+                    Label {
+                        Text("Live Activity")
+                    } icon: {
+                        SettingsIcon("platter.filled.top.iphone", color: .green)
+                    }
+                }
+                .frame(minHeight: 44)
+                .disabled(!push.enabled)
+                if liveActivityPush {
+                    Picker(selection: $liveActivityContent) {
+                        Text("Counts only").tag("counts")
+                        Text("Names and status").tag("full")
+                    } label: {
+                        Label {
+                            Text("Shows")
+                        } icon: {
+                            SettingsIcon("eye.fill", color: .gray)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(minHeight: 44)
+                }
+            } footer: {
+                Text(liveActivityContent == "full"
+                     ? "Your machines update it through the push relay, so it works without staying connected and without location. With names and status, those pass through the relay and Apple unencrypted (push alerts stay encrypted)."
+                     : (push.enabled
+                        ? "Your machines update it through the push relay, so it works without staying connected and without location. It shows how many agents need you, are working and are done: no names or text leave your machines unencrypted."
+                        : "Turn on push alerts first: the Live Activity is updated through the same relay."))
+            }
+
+            Section {
                 Toggle(isOn: $keepAlive.enabled) {
                     Label {
                         Text("Keep connected in background")
@@ -91,7 +125,7 @@ struct SettingsView: View {
             } header: {
                 Text("Alerts")
             } footer: {
-                Text("Keeps your machines connected while Bergr is in the background, so it can notify you when an agent needs you or finishes. It does this the way SSH apps do, with a low-accuracy location session: iOS shows a blue location indicator while it runs, it uses extra battery, and it asks for notification and \"Always\" location permission. Your location is never stored or sent anywhere.")
+                Text("Keeps your machines connected while Bergr is in the background, so it can notify you when an agent needs you or finishes, and updates the Live Activity itself (with everything, and instantly). It does this the way SSH apps do, with a low-accuracy location session: iOS shows a blue location indicator while it runs, it uses extra battery, and it asks for notification and \"Always\" location permission. Your location is never stored or sent anywhere.")
             }
 
             Section {

@@ -140,9 +140,26 @@ final class LiveActivityController {
         }
     }
 
+    /// The Live Activity's settings for when Bergr isn't kept connected: updated by the machines
+    /// through the push relay instead (Settings → Live Activity), showing counts only unless full
+    /// content was chosen (that content passes through the relay and Apple readable).
+    nonisolated static let pushKey = "bergr.liveActivity.push"
+    nonisolated static let contentKey = "bergr.liveActivity.content"
+    nonisolated static var pushEnabled: Bool { UserDefaults.standard.bool(forKey: pushKey) }
+    nonisolated static var fullContent: Bool { UserDefaults.standard.string(forKey: contentKey) == "full" }
+
+    /// Kept connected, the app updates the activity itself; otherwise the relay does, if set up.
+    private var byPush: Bool {
+        !KeepAlive.shared.enabled && Self.pushEnabled && PushRegistration.shared.relaySecret != nil
+    }
+
     private func current() -> State? {
-        guard KeepAlive.shared.enabled else { return nil }
-        return Self.content(machines: machines(), screens: screens)
+        if KeepAlive.shared.enabled { return Self.content(machines: machines(), screens: screens) }
+        guard byPush, var state = Self.content(machines: machines()) else { return nil }
+        // What the machines will send: no names or questions unless full content was chosen.
+        state.prompt = nil
+        if !Self.fullContent { state.rows = [] }
+        return state
     }
 
     /// Writes the Home Screen widget's data and reloads it when it changed.
@@ -204,17 +221,24 @@ final class LiveActivityController {
         pending?.cancel()
         pending = nil
         if inBackground, KeepAlive.shared.enabled { prefetchScreens() }
+        // Updated by push: once started it belongs to the machines and the relay. The app lets go
+        // of its machines in the background (they'd look empty), so it neither updates nor ends
+        // the activity until it's back in the foreground.
+        if inBackground, activity != nil, tokenTask != nil { return }
         guard inBackground, let state = current() else {
             end()
             return
         }
         if activity == nil {
             do {
-                activity = try Activity.request(
+                let pushed = byPush
+                let started = try Activity.request(
                     attributes: BergrActivityAttributes(),
-                    content: ActivityContent(state: state, staleDate: nil), pushType: nil)
+                    content: ActivityContent(state: state, staleDate: nil), pushType: pushed ? .token : nil)
+                activity = started
                 lastSent = state
                 lastSentAt = Date()
+                if pushed { registerForPush(started) }
             } catch {
                 activity = nil
             }
@@ -241,5 +265,53 @@ final class LiveActivityController {
         self.activity = nil
         lastSent = nil
         Task { await activity.end(nil, dismissalPolicy: .immediate) }
+        if registeredForPush { unregisterFromPush() }
+    }
+
+    // MARK: Updated through the relay
+
+    private var tokenTask: Task<Void, Never>?
+    private var registeredForPush = false
+
+    /// Hands the activity's push token to the relay as soon as iOS gives it, with the time the
+    /// app gets to finish that in the background; the machines' helpers then keep it current.
+    private func registerForPush(_ activity: Activity<BergrActivityAttributes>) {
+        tokenTask?.cancel()
+        let app = UIApplication.shared
+        var background = UIBackgroundTaskIdentifier.invalid
+        background = app.beginBackgroundTask { app.endBackgroundTask(background) }
+        tokenTask = Task { [weak self] in
+            defer { app.endBackgroundTask(background) }
+            for await data in activity.pushTokenUpdates {
+                let token = PushRegistration.hex(data)
+                guard let self, await self.post(path: "v1/activity", method: "POST",
+                                                 body: ["token": token, "mode": Self.fullContent ? "full" : "counts"])
+                else { return }
+                self.registeredForPush = true
+                app.endBackgroundTask(background)
+                background = .invalid
+            }
+        }
+    }
+
+    private func unregisterFromPush() {
+        tokenTask?.cancel()
+        tokenTask = nil
+        registeredForPush = false
+        Task { [weak self] in _ = await self?.post(path: "v1/activity", method: "DELETE", body: nil) }
+    }
+
+    private func post(path: String, method: String, body: [String: String]?) async -> Bool {
+        guard let secret = PushRegistration.shared.relaySecret else { return false }
+        var request = URLRequest(url: PushRegistration.relayURL.appending(path: path))
+        request.httpMethod = method
+        request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        }
+        let status = (try? await URLSession.shared.data(for: request))
+            .flatMap { ($0.1 as? HTTPURLResponse)?.statusCode }
+        return status.map { (200..<300).contains($0) } ?? false
     }
 }

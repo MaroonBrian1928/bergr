@@ -25,7 +25,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 6
+VERSION = 7
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 ALERT_STATES = ("blocked", "done")
 KINDS = ("permission", "question", "auth")
@@ -240,6 +240,82 @@ def alerts_for(prev_state, line):
     return {"last": last, "sent": sent, "terms": terms}, alerts
 
 
+def activity_summary(terms, rows=False, host_id="", machine=""):
+    """This machine's agents for the phone's Live Activity: how many need the user, work, are done,
+    and (with `rows`, when the phone chose full content) the top three, needs-you first."""
+    needs, working, done = [], [], []
+    for term in terms.values():
+        status = term.get("status") if isinstance(term.get("status"), dict) else {}
+        state = status.get("state")
+        if state not in ("blocked", "working", "done"):
+            continue
+        if state == "blocked":
+            needs.append(term)
+        elif state == "working":
+            working.append(term)
+        else:
+            done.append(term)
+    out = {"needsYou": len(needs), "working": len(working), "done": len(done)}
+    if rows:
+        def row(term, needs_you):
+            status = term.get("status") or {}
+            app = status.get("app") or ""
+            kind = {"claude-code": "claude", "codex": "codex", "antigravity": "antigravity"}.get(app, "shell")
+            name = _text(term.get("name")) or _text(term.get("title")) or term.get("address", "")
+            said = _text(status.get("msg")) or _text(status.get("title")) or ("Needs you" if needs_you else "Working")
+            return {"kind": kind, "title": name[:60], "status": said[:80], "machine": machine[:40],
+                    "needsYou": needs_you, "host": host_id[:64], "address": term.get("address", "")[:64]}
+        out["rows"] = ([row(t, True) for t in needs] + [row(t, False) for t in working])[:3]
+    return out
+
+
+class ActivityPoster:
+    """Posts this machine's summary to the relay for the phone's Live Activity: when it changes
+    (at most every 2 s; urgent when someone newly needs the user), every 5 minutes while the
+    phone has an activity (so the relay keeps counting this machine), and about once a minute
+    while it has none (to notice one starting). Names and statuses only in the phone's "full"
+    mode, which the relay reports back."""
+    MIN_GAP, ACTIVE_BEAT, IDLE_BEAT = 2, 300, 60
+
+    def __init__(self):
+        self.devices = {}  # secret -> {"mode", "active", "last", "at"}
+
+    def due(self, secret, summary, now):
+        d = self.devices.setdefault(secret, {"mode": "counts", "active": None, "last": None, "at": 0})
+        if now - d["at"] < self.MIN_GAP:
+            return False
+        if summary != d["last"]:
+            return True
+        return now - d["at"] >= (self.ACTIVE_BEAT if d["active"] else self.IDLE_BEAT)
+
+    def post(self, device, terms, host, now):
+        secret = device["secret"]
+        d = self.devices.setdefault(secret, {"mode": "counts", "active": None, "last": None, "at": 0})
+        host_id = device.get("host_id") or host
+        summary = activity_summary(terms, rows=d["mode"] == "full", host_id=host_id, machine=host)
+        if not self.due(secret, summary, now):
+            return
+        previous = d["last"] or {}
+        urgent = summary["needsYou"] > previous.get("needsYou", 0)
+        d["at"], d["last"] = now, summary
+        url = device["relay"].rstrip("/") + "/v1/activity/state"
+        body = dict(summary, machine=host_id[:100], urgent=urgent)
+        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers={
+            "authorization": "Bearer " + secret, "content-type": "application/json",
+            "user-agent": f"bergr-notify/{VERSION}"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                answer = json.loads(resp.read() or b"{}")
+        except Exception as e:
+            log(f"live activity update failed: {e}")
+            return
+        d["active"] = bool(answer.get("active"))
+        mode = answer.get("mode") if answer.get("mode") in ("counts", "full") else "counts"
+        if d["active"] and mode != d["mode"]:
+            d["mode"] = mode
+            d["at"] = 0  # The mode changed (full content now): send the rows right away.
+
+
 # ---- I/O
 
 class ConfigWatcher:
@@ -412,6 +488,7 @@ def run():
     jwt_cache = JwtCache()
     host = socket.gethostname()
     state = initial_state()
+    poster = ActivityPoster()
     while True:
         try:
             proc = subprocess.Popen(["hc", "events", "--json"], stdout=subprocess.PIPE,
@@ -429,10 +506,14 @@ def run():
                     except Exception as e:
                         log(f"could not process event line: {e}")
                         continue
-                    if not alerts:
-                        continue
                     cfg = watcher.get()
                     if cfg is None:
+                        continue
+                    # Every line (a change, or the 15 s heartbeat): the Live Activity may be due.
+                    for device in cfg.get("devices") or []:
+                        if isinstance(device, dict) and device.get("relay") and device.get("secret"):
+                            poster.post(device, state.get("terms", {}), host, time.time())
+                    if not alerts:
                         continue
                     for a in alerts:
                         log(f"alert for {a['address']}: {a['title']}")

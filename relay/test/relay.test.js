@@ -190,3 +190,81 @@ test("encrypted push rejects oversize or non-base64 e", async () => {
   assert.equal((await send(5)).status, 400);
   assert.equal(calls.length, 1);
 });
+
+// ---- Live Activity
+
+const LA_TOKEN = "cd".repeat(40);
+const auth = (secret) => ({ authorization: `Bearer ${secret}` });
+async function withActivity(env, mode = "counts") {
+  const { secret } = await (await reg(env)).json();
+  const r = await handle(req("/v1/activity", "POST", { token: LA_TOKEN, mode }, auth(secret)), env);
+  assert.equal(r.status, 200);
+  return secret;
+}
+const post = (env, secret, body) => handle(req("/v1/activity/state", "POST", body, auth(secret)), env);
+const sentState = (call) => JSON.parse(call.init.body).aps["content-state"];
+
+test("activity state without an activity is inactive and sends nothing", async () => {
+  const { env } = await makeEnv();
+  const { secret } = await (await reg(env)).json();
+  const r = await post(env, secret, { machine: "m1", needsYou: 1, working: 0, done: 0 });
+  assert.deepEqual(await r.json(), { active: false });
+  assert.equal(calls.length, 0);
+});
+
+test("counts mode sums machines and drops rows", async () => {
+  const { env } = await makeEnv();
+  const secret = await withActivity(env, "counts");
+  await post(env, secret, { machine: "m1", needsYou: 1, working: 2, done: 0, rows: [{ title: "secret project" }] });
+  const r = await post(env, secret, { machine: "m2", needsYou: 0, working: 1, done: 3 });
+  assert.deepEqual(await r.json(), { active: true, mode: "counts" });
+  const last = calls.at(-1);
+  assert.equal(last.url, `https://api.sandbox.push.apple.com/3/device/${LA_TOKEN}`);
+  assert.equal(last.init.headers["apns-push-type"], "liveactivity");
+  assert.equal(last.init.headers["apns-topic"], "app.bergr.push-type.liveactivity");
+  assert.deepEqual(sentState(last), { needsYou: 1, working: 3, done: 3, rows: [] });
+  assert.ok(!env.REGISTRATIONS.m.get([...env.REGISTRATIONS.m.keys()].find((k) => k.startsWith("las:"))).includes("secret project"));
+});
+
+test("full mode keeps rows, needs-you first, at most 3", async () => {
+  const { env } = await makeEnv();
+  const secret = await withActivity(env, "full");
+  const row = (title, needsYou) => ({ kind: "claude", title, status: "s", machine: "m", needsYou, host: "h", address: "t1" });
+  await post(env, secret, { machine: "m1", needsYou: 0, working: 2, done: 0, rows: [row("a", false), row("b", false)] });
+  await post(env, secret, { machine: "m2", needsYou: 1, working: 1, done: 0, rows: [row("c", true), row("d", false)] });
+  const state = sentState(calls.at(-1));
+  assert.equal(state.rows.length, 3);
+  assert.equal(state.rows[0].title, "c");
+  assert.equal(state.needsYou, 1);
+});
+
+test("stale machines drop out of the sum", async () => {
+  const { mergeActivity } = await import("../src/index.js");
+  const now = 10_000_000;
+  const merged = mergeActivity({ a: { at: now, needsYou: 1, working: 0, done: 0 }, b: { at: now - 16 * 60 * 1000, needsYou: 5, working: 5, done: 5 } }, "counts", now);
+  assert.deepEqual(merged, { needsYou: 1, working: 0, done: 0, rows: [] });
+});
+
+test("an ended activity (410) is forgotten", async () => {
+  const { env } = await makeEnv();
+  const secret = await withActivity(env);
+  apnsResponse = () => new Response(JSON.stringify({ reason: "Unregistered" }), { status: 410 });
+  const r = await post(env, secret, { machine: "m1", needsYou: 0, working: 1, done: 0 });
+  assert.deepEqual(await r.json(), { active: false });
+  assert.equal(await env.REGISTRATIONS.get([...env.REGISTRATIONS.m.keys()].find((k) => k.startsWith("la:")) ?? "none"), null);
+});
+
+test("urgent posts go at priority 10, others at 5", async () => {
+  const { env } = await makeEnv();
+  const secret = await withActivity(env);
+  await post(env, secret, { machine: "m1", needsYou: 1, working: 0, done: 0, urgent: true });
+  assert.equal(calls.at(-1).init.headers["apns-priority"], "10");
+  await post(env, secret, { machine: "m1", needsYou: 0, working: 1, done: 0 });
+  assert.equal(calls.at(-1).init.headers["apns-priority"], "5");
+});
+
+test("activity endpoints need the device secret", async () => {
+  const { env } = await makeEnv();
+  const r = await handle(req("/v1/activity", "POST", { token: LA_TOKEN }, auth("nope")), env);
+  assert.equal(r.status, 401);
+});

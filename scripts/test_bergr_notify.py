@@ -340,3 +340,59 @@ class RelayTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveActivityTests(unittest.TestCase):
+    def terms(self):
+        return {t["address"]: t for t in [term("t1", "blocked"), term("t2", "working"), term("t3", "working"),
+                                         term("t4", "done"), term("t5", "idle")]}
+
+    def test_counts_without_names(self):
+        s = notify.activity_summary(self.terms())
+        self.assertEqual(s, {"needsYou": 1, "working": 2, "done": 1})
+
+    def test_rows_only_when_asked_needs_first(self):
+        s = notify.activity_summary(self.terms(), rows=True, host_id="H", machine="box")
+        self.assertEqual([r["address"] for r in s["rows"]], ["t1", "t2", "t3"])
+        self.assertTrue(s["rows"][0]["needsYou"])
+        self.assertEqual(s["rows"][0]["kind"], "claude")
+        self.assertEqual((s["rows"][0]["host"], s["rows"][0]["machine"]), ("H", "box"))
+
+    def test_when_a_post_is_due(self):
+        p = notify.ActivityPoster()
+        summary = {"needsYou": 0, "working": 1, "done": 0}
+        self.assertTrue(p.due("s", summary, 1000))
+        p.devices["s"].update(last=summary, at=1000, active=True)
+        self.assertFalse(p.due("s", summary, 1001))            # within 2 s
+        self.assertFalse(p.due("s", summary, 1100))            # unchanged, active: every 5 min
+        self.assertTrue(p.due("s", dict(summary, working=2), 1003))  # changed
+        self.assertTrue(p.due("s", summary, 1301))
+        p.devices["s"].update(active=False, at=1000)
+        self.assertTrue(p.due("s", summary, 1061))             # no activity: about once a minute
+
+    def test_post_sends_counts_and_learns_full_mode(self):
+        p = notify.ActivityPoster()
+        sent = []
+
+        class Resp:
+            def __init__(self, body): self.body = body
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return json.dumps(self.body).encode()
+
+        def fake(req, timeout=0):
+            sent.append(json.loads(req.data))
+            return Resp({"active": True, "mode": "full"})
+        real = notify.urllib.request.urlopen
+        notify.urllib.request.urlopen = fake
+        try:
+            device = {"relay": "https://r", "secret": "s", "host_id": "H"}
+            p.post(device, self.terms(), "box", 1000)
+            p.post(device, self.terms(), "box", 1003)
+        finally:
+            notify.urllib.request.urlopen = real
+        self.assertNotIn("rows", sent[0])
+        self.assertTrue(sent[0]["urgent"])
+        self.assertEqual(sent[0]["machine"], "H")
+        self.assertEqual(len(sent[1]["rows"]), 3)   # full mode learnt: rows right away
+        self.assertFalse(sent[1]["urgent"])

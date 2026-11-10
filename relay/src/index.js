@@ -234,6 +234,152 @@ async function push(request, env) {
   return err(502, reason);
 }
 
+// ---- Live Activity: updated by push (no location keep-alive on the phone).
+//
+// The phone registers its activity's push token with its device secret and says what the
+// activity may show: "counts" (how many agents need you, work, are done: no names or text) or
+// "full" (also the top agents' names and statuses). Each machine's helper posts its own summary;
+// the relay keeps one per machine (stale after 15 minutes: a machine gone quiet drops out), adds
+// them up, and pushes the sum to the activity. In "counts" mode helpers are told so and send no
+// names, and anything they send anyway is dropped here.
+
+const ACTIVITY_TTL = 12 * 3600; // Live Activities end after 8 h (12 h on the Lock Screen)
+const MACHINE_STALE_MS = 15 * 60 * 1000;
+const STATE_LIMIT_PER_HOUR = 720;
+const ROW_MAX = 3;
+const KINDS = new Set(["claude", "codex", "antigravity", "shell"]);
+
+async function device(request, env) {
+  const secret = bearer(request);
+  if (!secret) return err(401, "unauthorized");
+  const hash = await sha256Hex(secret);
+  const regText = await env.REGISTRATIONS.get(`reg:${hash}`);
+  if (!regText) return err(401, "unauthorized");
+  return { hash, reg: JSON.parse(regText) };
+}
+
+async function activityRegister(request, env) {
+  const d = await device(request, env);
+  if (d instanceof Response) return d;
+  const body = await readJson(request);
+  if (body instanceof Response) return body;
+  if (typeof body.token !== "string" || !TOKEN_RE.test(body.token)) return err(400, "invalid token");
+  const mode = body.mode === "full" ? "full" : "counts";
+  await env.REGISTRATIONS.put(`la:${d.hash}`, JSON.stringify({ token: body.token, mode }), { expirationTtl: ACTIVITY_TTL });
+  // A new activity starts from nothing: the machines' next posts fill it.
+  await env.REGISTRATIONS.delete(`las:${d.hash}`);
+  return json(200, { ok: true, mode });
+}
+
+async function activityUnregister(request, env) {
+  const d = await device(request, env);
+  if (d instanceof Response) return d;
+  await env.REGISTRATIONS.delete(`la:${d.hash}`);
+  await env.REGISTRATIONS.delete(`las:${d.hash}`);
+  return json(204);
+}
+
+const count = (v) => (Number.isInteger(v) && v >= 0 && v < 10000 ? v : 0);
+const text = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
+
+function cleanRows(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows.slice(0, ROW_MAX).filter((r) => r && typeof r === "object").map((r) => ({
+    kind: KINDS.has(r.kind) ? r.kind : "shell",
+    title: text(r.title, 60),
+    status: text(r.status, 80),
+    machine: text(r.machine, 40),
+    needsYou: r.needsYou === true,
+    host: text(r.host, 64),
+    address: text(r.address, 64),
+  }));
+}
+
+/// The sum over the machines that posted lately: counts added, rows needs-you first.
+export function mergeActivity(machines, mode, now = Date.now()) {
+  let needsYou = 0, working = 0, done = 0;
+  let rows = [];
+  for (const m of Object.values(machines)) {
+    if (!m || now - m.at > MACHINE_STALE_MS) continue;
+    needsYou += m.needsYou; working += m.working; done += m.done;
+    if (mode === "full") rows = rows.concat(m.rows || []);
+  }
+  rows.sort((a, b) => Number(b.needsYou) - Number(a.needsYou));
+  return { needsYou, working, done, rows: rows.slice(0, ROW_MAX) };
+}
+
+async function activityState(request, env) {
+  const declared = parseInt(request.headers.get("content-length") || "0", 10);
+  if (declared > MAX_BODY) return err(413, "body too large");
+  const d = await device(request, env);
+  if (d instanceof Response) return d;
+  const body = await readJson(request);
+  if (body instanceof Response) return body;
+  const laText = await env.REGISTRATIONS.get(`la:${d.hash}`);
+  // No activity on the phone: nothing to do, and the helper can stop posting until there is one.
+  if (!laText) return json(200, { active: false });
+  const la = JSON.parse(laText);
+  const machine = text(body.machine, 100);
+  if (!machine) return err(400, "invalid machine");
+  if (!(await countHit(env.REGISTRATIONS, `rls:${d.hash}:${hourBucket()}`, STATE_LIMIT_PER_HOUR))) {
+    return err(429, "rate limited");
+  }
+  const now = Date.now();
+  const all = JSON.parse((await env.REGISTRATIONS.get(`las:${d.hash}`)) || "{}");
+  all[machine] = {
+    at: now,
+    needsYou: count(body.needsYou), working: count(body.working), done: count(body.done),
+    rows: la.mode === "full" ? cleanRows(body.rows) : [],
+  };
+  for (const [k, v] of Object.entries(all)) if (now - v.at > MACHINE_STALE_MS) delete all[k];
+  await env.REGISTRATIONS.put(`las:${d.hash}`, JSON.stringify(all), { expirationTtl: ACTIVITY_TTL });
+  const state = mergeActivity(all, la.mode, now);
+
+  let jwt;
+  try {
+    jwt = await apnsJwt(env, d.reg.sandbox);
+  } catch (e) {
+    console.error("jwt error", e && e.name);
+    jwt = null;
+  }
+  if (!jwt) return err(503, `no key for ${d.reg.sandbox ? "sandbox" : "production"}`);
+  const host = d.reg.sandbox ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
+  const seconds = Math.floor(now / 1000);
+  let res;
+  try {
+    res = await fetch(`${host}/3/device/${la.token}`, {
+      method: "POST",
+      headers: {
+        authorization: `bearer ${jwt}`,
+        "apns-topic": `${d.reg.bundle_id}.push-type.liveactivity`,
+        "apns-push-type": "liveactivity",
+        // Someone newly needed: right away. Otherwise the low priority Apple doesn't budget.
+        "apns-priority": body.urgent === true ? "10" : "5",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        aps: { timestamp: seconds, event: "update", "content-state": state, "stale-date": seconds + 3600 },
+      }),
+    });
+  } catch (e) {
+    console.error("apns fetch failed", e && e.name);
+    return err(502, "apns unreachable");
+  }
+  if (res.status === 200) return json(200, { active: true, mode: la.mode });
+  let reason = "unknown";
+  try {
+    reason = (await res.json()).reason || reason;
+  } catch {}
+  if ((res.status === 400 && reason === "BadDeviceToken") || res.status === 410) {
+    // The activity ended on the phone.
+    await env.REGISTRATIONS.delete(`la:${d.hash}`);
+    await env.REGISTRATIONS.delete(`las:${d.hash}`);
+    return json(200, { active: false });
+  }
+  console.error("apns error", res.status, reason);
+  return err(502, reason);
+}
+
 export async function handle(request, env) {
   const { pathname } = new URL(request.url);
   const m = request.method;
@@ -241,6 +387,9 @@ export async function handle(request, env) {
     if (pathname === "/v1/register" && m === "POST") return await register(request, env);
     if (pathname === "/v1/register" && m === "DELETE") return await unregister(request, env);
     if (pathname === "/v1/push" && m === "POST") return await push(request, env);
+    if (pathname === "/v1/activity" && m === "POST") return await activityRegister(request, env);
+    if (pathname === "/v1/activity" && m === "DELETE") return await activityUnregister(request, env);
+    if (pathname === "/v1/activity/state" && m === "POST") return await activityState(request, env);
   } catch (e) {
     console.error("internal error", e && e.name);
     return err(500, "internal error");
