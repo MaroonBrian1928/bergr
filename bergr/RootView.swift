@@ -16,6 +16,7 @@ struct RootView: View {
     /// On a phone (one column at a time): which column shows. Opening an agent moves to its chat.
     @State private var compactColumn = NavigationSplitViewColumn.sidebar
     @State private var showingSettings = false
+    @State private var showingNewSession = false
     /// A second conversation shown beside the open one (iPad, the unfolded Duo).
     @State private var beside: Pane?
     struct Pane: Hashable { let host: Host.ID; let address: String }
@@ -100,7 +101,11 @@ struct RootView: View {
                         Label("Machines", systemImage: "server.rack")
                     }
                     Button("Settings", systemImage: "gearshape") { showingSettings = true }
+                    Button("New Session", systemImage: "plus") { showingNewSession = true }
                 }
+            }
+            .sheet(isPresented: $showingNewSession) {
+                NewSessionView(sessions: sessions) { host, address in open(host: host, address: address) }
             }
             .sheet(isPresented: $showingSettings) {
                 SettingsSheet(addDemo: {}, sessions: sessions) { showingSettings = false }

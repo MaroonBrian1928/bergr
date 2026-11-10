@@ -16,7 +16,7 @@ struct SidebarView: View {
 
     var body: some View {
         if let host = hosts.hosts.first(where: { $0.id == selectedHost }) {
-            TerminalListView(session: sessions.session(for: host), selection: $selectedTerminal)
+            TerminalListView(session: sessions.session(for: host), selection: $selectedTerminal, sessions: sessions)
                 .id(host.id)
                 // iOS only shows a title menu (name + chevron) on an inline title.
                 .navigationBarTitleDisplayMode(.inline)

@@ -8,6 +8,9 @@ struct TerminalListView: View {
     @Environment(KeyLibrary.self) private var keys
     let session: HostSession
     @Binding var selection: String?
+    /// For New Session (which can start on any machine); nil hides it.
+    var sessions: SessionStore?
+    @State private var newSession = false
     @AppStorage("terminals.view") private var mode = Mode.agents
     /// The rows each view had on screen, so switching back scrolls to where it was.
     @State private var visibleRows: [Mode: Set<String>] = [:]
@@ -37,8 +40,16 @@ struct TerminalListView: View {
             .navigationTitle(session.host.name)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("New Terminal", systemImage: "plus") {
-                        newTerminal = NewTerminalContext(folder: nil)
+                    Menu("New", systemImage: "plus") {
+                        if sessions != nil, session.canRunCommands {
+                            Button("New Agent Session", systemImage: "sparkles") { newSession = true }
+                        }
+                        Button("New Terminal", systemImage: "terminal") {
+                            newTerminal = NewTerminalContext(folder: nil)
+                        }
+                    } primaryAction: {
+                        if sessions != nil, session.canRunCommands { newSession = true }
+                        else { newTerminal = NewTerminalContext(folder: nil) }
                     }
                     .disabled(session.state != .connected)
                 }
@@ -47,6 +58,13 @@ struct TerminalListView: View {
             .onChange(of: selection, initial: true) { _, address in
                 held = session.terminal(address).flatMap { terminal in
                     terminal.agentState.map { (terminal.address, $0) }
+                }
+            }
+            .sheet(isPresented: $newSession) {
+                if let sessions {
+                    NewSessionView(sessions: sessions, preferredHost: session.host.id) { _, address in
+                        selection = address
+                    }
                 }
             }
             .sheet(item: $newTerminal) { context in
