@@ -58,6 +58,7 @@ struct ChatView: View {
     /// The search field's text; while it has any, only the matching rows show.
     @State private var query = ""
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(KeyLibrary.self) private var keys
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     struct Pending: Identifiable, Equatable {
@@ -1105,18 +1106,32 @@ struct ChatView: View {
         }
     }
 
-    /// Reconnects to the terminal and sends the reply again.
+    /// Reconnects from scratch, as reopening the app does, and sends the reply again. Reopening
+    /// only the terminal's channel isn't enough: a line that died quietly keeps the old connection
+    /// looking fine, and the new channel hangs on it.
     private func retry(_ reply: Pending) {
         guard let at = pending.firstIndex(where: { $0.id == reply.id }) else { return }
         pending[at].failed = false
         pending[at].at = .now
-        model.reconnect()
         Task { @MainActor in
+            if let session {
+                model.stop()
+                session.retry(keys: keys)
+                let end = ContinuousClock.now + .seconds(20)
+                while ContinuousClock.now < end, session.state != .connected {
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+                model.reconnect()
+                let live = ContinuousClock.now + .seconds(5)
+                while ContinuousClock.now < live, model.phase != .live {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+            }
             model.type(reply.text)
             try? await Task.sleep(for: .milliseconds(150))
             model.press(.enter)
+            watchDelivery(of: reply.id)
         }
-        watchDelivery(of: reply.id)
     }
 }
 
