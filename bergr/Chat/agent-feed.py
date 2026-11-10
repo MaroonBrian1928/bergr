@@ -473,6 +473,7 @@ class Claude:
                     if isinstance(src, dict) and src.get("type") == "base64":
                         ev = image_event(f"{bid}.{j}", "assistant", src.get("media_type"), src.get("data"))
                         if ev:
+                            ev["fromTool"] = True
                             yield ev
             elif t == "tool_use" and block.get("name") == "TodoWrite" \
                     and isinstance((block.get("input") or {}).get("todos"), list):
@@ -1214,8 +1215,21 @@ def list_models():
     return []
 
 
+BACKLOG_TOOL_IMAGES = 6  # images tools brought back, sent from a conversation's history
+
+
+def backlog(events):
+    """A conversation's history as it opens, trimmed: one version event (the last; the earlier
+    ones would flash the update prompt), and only the latest images tools brought back (a long
+    conversation can hold hundreds of screenshots, megabytes the chat would wait for)."""
+    versions = [i for i, ev in enumerate(events) if ev.get("t") == "version"]
+    tool_images = [i for i, ev in enumerate(events) if ev.get("fromTool")]
+    drop = set(versions[:-1]) | set(tool_images[:-BACKLOG_TOOL_IMAGES])
+    return [ev for i, ev in enumerate(events) if i not in drop]
+
+
 def follow_jsonl(source):
-    path, tail, tick, sub_at = None, None, 0, 0
+    path, tail, tick, sub_at, opening = None, None, 0, 0, False
     while True:
         # Looking for the session costs a process scan; new sessions are rare.
         now = source.locate() if tick % 5 == 0 else path
@@ -1226,10 +1240,14 @@ def follow_jsonl(source):
             tail.start_backlog(BACKLOG * 3)
             emit({"t": "reset", "agent": AGENT, "session": os.path.basename(now)})
             MODELS_SEEN[2] = 300  # A new conversation: look at the model list again.
+            opening = True
         if tail:
-            for d in tail.lines():
-                for ev in source.parse(d) or ():
-                    emit(ev)
+            events = [ev for d in tail.lines() for ev in (source.parse(d) or ())]
+            if opening:
+                events, opening = backlog(events), False
+            for ev in events:
+                ev.pop("fromTool", None)
+                emit(ev)
         if path and hasattr(source, "subagents") and time.time() - sub_at >= 2:
             sub_at = time.time()
             try:

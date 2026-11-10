@@ -134,7 +134,19 @@ class ToolResultImages(Base):
                 {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}]}]}}))
         images = [e for e in evs if e["t"] == "image"]
         self.assertEqual(images, [{"t": "image", "id": "r1.0.0", "role": "assistant", "mime": "image/png",
-                                   "data": "iVBORw0KGgo="}])
+                                   "data": "iVBORw0KGgo=", "fromTool": True}])
+
+
+class Backlog(Base):
+    def test_history_keeps_last_version_and_latest_tool_images(self):
+        ns = load("claude", self.home)
+        evs = [{"t": "version", "running": "1", "installed": "3"}]
+        evs += [{"t": "image", "id": f"i{n}", "fromTool": True} for n in range(10)]
+        evs += [{"t": "version", "running": "3", "installed": None}, {"t": "msg", "id": "m"}]
+        out = ns["backlog"](evs)
+        self.assertEqual([e for e in out if e["t"] == "version"], [{"t": "version", "running": "3", "installed": None}])
+        self.assertEqual([e["id"] for e in out if e["t"] == "image"], [f"i{n}" for n in range(4, 10)])
+        self.assertEqual(out[-1], {"t": "msg", "id": "m"})
 
 
 class PastedMessages(Base):
