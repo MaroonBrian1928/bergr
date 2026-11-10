@@ -37,14 +37,36 @@ python3 -I -c 'import time; print(time.time())' >"$out/marks/t0"
 mkdir -p "$out/shots"
 TEST_RUNNER_BERGR_VIDEO="$PWD/$out/marks" TEST_RUNNER_BERGR_SHOTS="$PWD/$out/shots" TEST_RUNNER_BERGR_SHOT_FONT="$font" \
     "${xcodebuild[@]}" test-without-building | xcbeautify --quiet || { kill -INT $recorder; exit 1; }
+python3 -I -c 'import time; print(time.time())' >"$out/marks/t1"
 kill -INT $recorder
 wait $recorder || true
 xcrun simctl status_bar "$device" clear
 
 read -r from length < <(python3 -I -c '
 import sys
-t0, start, end = (float(open(p).read()) for p in sys.argv[1:])
+t0, start, end = (float(open(p).read()) for p in sys.argv[1:4])
 print(f"{max(start - t0, 0):.2f} {end - start:.2f}")' "$out/marks/t0" "$out/marks/start" "$out/marks/end")
+
+# The app is gone a few seconds before the test's end mark, and the recording ends on the home
+# screen. Cut where that last screen begins: frames are compared, four a second, with the very
+# last frame, and the cut ends half a second before the first one of the final run that matches it.
+thumbs="$out/thumbs"
+rm -rf "$thumbs" && mkdir -p "$thumbs"
+ffmpeg -v error -i "$out/raw.mov" -vf "fps=4,scale=32:-1" "$thumbs/%05d.png"
+last=$(ls "$thumbs" | tail -1)
+home=""
+for f in $(ls "$thumbs" | sort -r); do
+    diff=$( (magick compare -metric RMSE "$thumbs/$f" "$thumbs/$last" null: 2>&1 || true) | sed -E 's/.*\(([0-9.e-]+)\).*/\1/')
+    python3 -I -c "import sys; sys.exit(0 if float(sys.argv[1]) < 0.02 else 1)" "$diff" || break
+    home=$f
+done
+rm -rf "$thumbs"
+if [ -n "$home" ]; then
+    length=$(python3 -I -c '
+import sys
+frm, length, n = float(sys.argv[1]), float(sys.argv[2]), int(sys.argv[3])
+print(f"{max(min(length, (n - 1) / 4 - frm - 0.5), 1):.2f}")' "$from" "$length" "$((10#${home%.png}))")
+fi
 
 # Frame: the recording at 720 px wide with rounded corners, on charcoal with a margin.
 read -r W H < <(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$out/raw.mov" | tr , ' ')
@@ -60,8 +82,11 @@ else
         "format=gray,geq=lum='if(lte(hypot(max(0\,max($radius-X\,X-(W-1-$radius)))\,max(0\,max($radius-Y\,Y-(H-1-$radius))))\,$radius)\,255\,0)'" \
         "$out/mask.png"
 fi
-ffmpeg -v error -y -ss "$from" -t "$length" -i "$out/raw.mov" -loop 1 -i "$out/mask.png" -filter_complex "
-    [0:v]fps=30,scale=${w}:${h},format=rgba[video];
+# The cut is made on the decoded frames' own times (trim), not by seeking the input: the
+# simulator records a variable frame rate, and an input seek landed seconds off, so the video
+# ended on the home screen.
+ffmpeg -v error -y -i "$out/raw.mov" -loop 1 -i "$out/mask.png" -filter_complex "
+    [0:v]trim=start=${from}:duration=${length},setpts=PTS-STARTPTS,fps=30,scale=${w}:${h},format=rgba[video];
     [1:v]format=gray[mask];
     [video][mask]alphamerge=shortest=1[rounded];
     color=c=0x303438:s=$((w + 2 * pad))x$((h + 2 * pad)):r=30[bg];

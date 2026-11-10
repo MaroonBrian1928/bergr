@@ -66,9 +66,9 @@ final class DemoTourTests: XCTestCase {
         guard let marks = environment["BERGR_VIDEO"] else { throw XCTSkip("BERGR_VIDEO is not set") }
         let app = XCUIApplication()
         let fontSize = environment["BERGR_SHOT_FONT"] ?? "15"
-        // The demo machine with its fake agent conversation (Debug builds), nothing else.
+        // The demo machine, whose agents open as chats, and nothing else.
         app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-terminal.fontSize", fontSize,
-                                "-bergr.demo", "YES", "-bergr.demoChat", "YES"]
+                                "-bergr.demo", "YES"]
         app.launch()
 
         // Every agent at a glance; the one that needs you sits on top.
@@ -79,9 +79,9 @@ final class DemoTourTests: XCTestCase {
         shot(app, "readme-1-agents")
 
         // An agent's conversation: ask, and watch it work and answer.
-        let running = app.staticTexts["Running tests"].firstMatch
-        XCTAssertTrue(running.waitForExistence(timeout: 5))
-        running.tap()
+        let agent = app.staticTexts["Adding a dark mode toggle"].firstMatch
+        XCTAssertTrue(agent.waitForExistence(timeout: 5))
+        agent.tap()
         // The reply box: a text view or field, whichever SwiftUI made of it.
         let view = app.textViews.matching(NSPredicate(format: "identifier != 'terminal-screen'")).firstMatch
         let field = view.waitForExistence(timeout: 10) ? view : app.textFields.firstMatch
@@ -95,7 +95,8 @@ final class DemoTourTests: XCTestCase {
             pause(0.06)
         }
         pause(0.5)
-        app.buttons["Send"].firstMatch.tap()
+        // The reply bar's button (a hidden ⌘↩ shortcut button is also called Send).
+        app.buttons["send-button"].tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'roll'")).firstMatch
             .waitForExistence(timeout: 20), "the agent answers")
         pause(3)

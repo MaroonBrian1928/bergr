@@ -725,6 +725,7 @@ struct ChatView: View {
                 .buttonStyle(PressStyle())
                 .disabled(!ready && !stops)
                 .accessibilityLabel(stops ? "Interrupt \(agent.displayName)" : "Send")
+                .accessibilityIdentifier("send-button")
                 .sensoryFeedback(.impact(weight: .light), trigger: sent)
                 .sensoryFeedback(.impact(weight: .heavy), trigger: pushes)
                 // While the agent works, a tap queues the reply (the agent reads it after its

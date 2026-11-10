@@ -466,6 +466,14 @@ class Claude:
                     yield ev
             elif t == "tool_result":
                 yield from toolout(block.get("tool_use_id"), result_text(block.get("content")))
+                # An image a tool brought back (Read of a screenshot, a browser capture): shown
+                # inline after its tool row, on the agent's side, like an image it sent.
+                for j, part in enumerate(block.get("content") if isinstance(block.get("content"), list) else []):
+                    src = part.get("source") if isinstance(part, dict) and part.get("type") == "image" else None
+                    if isinstance(src, dict) and src.get("type") == "base64":
+                        ev = image_event(f"{bid}.{j}", "assistant", src.get("media_type"), src.get("data"))
+                        if ev:
+                            yield ev
             elif t == "tool_use" and block.get("name") == "TodoWrite" \
                     and isinstance((block.get("input") or {}).get("todos"), list):
                 yield plan_event([(x.get("content"), x.get("status")) for x in block["input"]["todos"]

@@ -126,6 +126,17 @@ class QueuedMessages(Base):
         self.assertEqual(evs, [])
 
 
+class ToolResultImages(Base):
+    def test_image_a_tool_read_shows_inline(self):
+        ns = load("claude", self.home)
+        evs = list(ns["Claude"]().parse({"type": "user", "uuid": "r1", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "toolu_9", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}]}]}}))
+        images = [e for e in evs if e["t"] == "image"]
+        self.assertEqual(images, [{"t": "image", "id": "r1.0.0", "role": "assistant", "mime": "image/png",
+                                   "data": "iVBORw0KGgo="}])
+
+
 class PastedMessages(Base):
     def test_pasted_reply_is_shown_unwrapped(self):
         ns = load("claude", self.home)
