@@ -47,6 +47,8 @@ struct ChatView: View {
     private static let rowPage = 150
     /// Scrolled well up from the latest message: a button brings it back.
     @State private var awayFromLatest = false
+    /// Messages in the chat when you scrolled away from the latest: the ones after it are new.
+    @State private var seenMessages = 0
     /// The search field at the top shows while searching; closing it clears the search.
     @State private var searching = false
     @FocusState private var searchFocused: Bool
@@ -235,24 +237,38 @@ struct ChatView: View {
         } action: { _, below in
             // Shows well above the bottom, hides only near it again: no flicker at the edge.
             let away = awayFromLatest ? below > 150 : below > 600
-            if away != awayFromLatest { withAnimation(motion) { awayFromLatest = away } }
+            if away != awayFromLatest {
+                if away { seenMessages = messageCount }
+                withAnimation(motion) { awayFromLatest = away }
+            }
         }
         // Over the conversation, not in the bar below it: showing it mustn't move the list (which
         // would change the distance to the bottom and hide it again, over and over).
         .overlay(alignment: .bottomTrailing) {
             if awayFromLatest {
+                let unseen = max(messageCount - seenMessages, 0)
                 Button {
                     withAnimation(motion) { position.scrollTo(edge: .bottom) }
                 } label: {
-                    Image(systemName: "arrow.down")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(palette.text)
-                        .frame(width: 40, height: 40)
-                        .glassEffect(.regular, in: Circle())
-                        .frame(width: 44, height: 44)
-                        .contentShape(Circle())
+                    HStack(spacing: 6) {
+                        if unseen > 0 {
+                            Text("\(unseen) new")
+                                .font(.subheadline.weight(.semibold))
+                                .contentTransition(.numericText())
+                                .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .trailing)))
+                        }
+                        Image(systemName: "arrow.down")
+                            .font(.body.weight(.semibold))
+                    }
+                    .foregroundStyle(palette.text)
+                    .padding(.horizontal, unseen > 0 ? 14 : 0)
+                    .frame(minWidth: 40, minHeight: 40)
+                    .glassEffect(.regular, in: Capsule())
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Capsule())
+                    .animation(motion, value: unseen)
                 }
-                .accessibilityLabel("Jump to latest")
+                .accessibilityLabel(unseen > 0 ? "\(unseen) new message\(unseen == 1 ? "" : "s"), jump to latest" : "Jump to latest")
                 .padding(.trailing, 16)
                 .padding(.bottom, 8)
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
@@ -544,6 +560,16 @@ struct ChatView: View {
     }
 
     /// The id of the tool run the agent is in right now (a `Row.id`), if any.
+    /// Messages (yours, the agent's, images, answers), not tool steps: what "N new" counts.
+    private var messageCount: Int {
+        feed.items.count { item in
+            switch item.kind {
+            case .tool: false
+            default: true
+            }
+        }
+    }
+
     private var liveRunID: String? { LiveRun.id(items: feed.items, working: state == "working") }
 
     private var rows: [Row] {
@@ -1119,6 +1145,8 @@ private struct ToolRun: View {
     /// The agent stopped on this run to ask: it hasn't happened yet, so it doesn't say "Ran".
     var waiting = false
     @State private var open = false
+    /// The tallest the live run's output box has been (lines): it doesn't shrink mid-run.
+    @State private var outputLines = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .footnote) private var outputLine = 16.0
 
@@ -1177,59 +1205,77 @@ private struct ToolRun: View {
         }
     }
 
-    /// The run the agent is in: each step on its own line as it starts, the newest last with a
-    /// shimmer; its output grows below it while it runs. It folds into the summary line after.
+    /// The run the agent is in: its latest steps, one line each, the newest last with a shimmer,
+    /// and one output box below them. Built so the run only ever grows, never shrinks, while the
+    /// agent works: the chat keeps its bottom still, so every shrink and regrowth here moved all
+    /// the text above it up and down. So at most `recent` steps are listed (earlier ones count on
+    /// one line), and the output box stays put between steps, showing the last output until the
+    /// new step prints, at the tallest height it reached in this run.
+    private static let recent = 3
+
     private var live: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(steps.enumerated()), id: \.element.id) { i, step in
-                let newest = i == steps.count - 1
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        Group {
-                            if newest {
-                                Image(systemName: "ellipsis")
-                                    .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
-                            } else {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                        .font(.footnote)
-                        .frame(width: 18)
+        let shown = Array(steps.suffix(Self.recent))
+        let earlier = steps.count - shown.count
+        let newestOutput = steps.last?.output
+        let lastOutput = newestOutput ?? steps.dropLast().last(where: { $0.output != nil })?.output
+        return VStack(alignment: .leading, spacing: 0) {
+            if earlier > 0 {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark").font(.footnote).frame(width: 18)
+                    Text("\(earlier) earlier step\(earlier == 1 ? "" : "s")").font(.footnote)
+                    Spacer(minLength: 0)
+                }
+                .frame(minHeight: 28, alignment: .leading)
+                .contentTransition(.numericText())
+            }
+            ForEach(shown, id: \.id) { step in
+                let newest = step.id == steps.last?.id
+                HStack(spacing: 8) {
+                    Group {
                         if newest {
-                            Text(Self.title([step]))
-                                .font(.footnote.weight(.medium))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .shimmer(palette: palette)
+                            Image(systemName: "ellipsis")
+                                .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
                         } else {
-                            Text(Self.title([step]))
-                                .font(.footnote)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                            Image(systemName: "checkmark")
                         }
-                        Spacer(minLength: 0)
                     }
-                    if newest, let output = step.output {
-                        outputBlock(output)
-                            .padding(.leading, 26)
-                            // Fades in; when the next step starts it goes at once, so it never
-                            // overlaps the new step's line while fading out.
-                            .transition(.asymmetric(insertion: .opacity, removal: .identity))
-                    }
+                    .font(.footnote)
+                    .frame(width: 18)
+                    Text(Self.title([step]))
+                        .font(newest ? .footnote.weight(.medium) : .footnote)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .shimmer(palette: palette, active: newest)
+                    Spacer(minLength: 0)
                 }
                 .frame(minHeight: 28, alignment: .leading)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel((newest ? "Running: " : "") + Self.title([step]))
                 .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 8)))
             }
+            if let lastOutput {
+                outputBlock(lastOutput, minLines: outputLines)
+                    .opacity(newestOutput == nil ? 0.5 : 1)
+                    .padding(.leading, 26)
+                    .padding(.top, 2)
+                    .transition(.opacity)
+            }
+        }
+        .onChange(of: lastOutput.map(Self.lineCount) ?? 0, initial: true) { _, n in
+            outputLines = max(outputLines, min(n, 8))
         }
         .animation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.35), value: steps.map(\.id))
-        .animation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.35), value: steps.last?.output)
+        .animation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.35), value: outputLines)
+    }
+
+    private static func lineCount(_ text: String) -> Int {
+        text.split(separator: "\n", omittingEmptySubsequences: false).count
     }
 
     /// A tool's output: monospaced, at most 8 lines tall, scrolling for more, sticking to the end.
-    private func outputBlock(_ output: String) -> some View {
-        let lines = output.split(separator: "\n", omittingEmptySubsequences: false).count
+    /// `minLines`: at least this tall (a live run's box doesn't shrink between steps).
+    private func outputBlock(_ output: String, minLines: Int = 0) -> some View {
+        let lines = max(Self.lineCount(output), minLines)
         return ScrollView(.vertical) {
             Text(output)
                 .font(.footnote.monospaced())
@@ -1431,6 +1477,10 @@ private struct Shimmer: ViewModifier {
 
 private extension View {
     func shimmer(palette: ChatPalette) -> some View { modifier(Shimmer(palette: palette)) }
+    /// A shimmer only while `active` (the newest step of a live run).
+    @ViewBuilder func shimmer(palette: ChatPalette, active: Bool) -> some View {
+        if active { modifier(Shimmer(palette: palette)) } else { self }
+    }
 }
 
 /// An answer you gave: what was asked, and what you chose.
