@@ -38,7 +38,8 @@ final class TerminalScreenModel {
     /// When the current channel attached: a reconnect right after it is the same comeback.
     private var attachedAt: Date?
     private var pump: Task<Void, Never>?
-    private var renderScheduled = false
+    /// The frame waiting to be rendered, if one is scheduled.
+    private var renderTask: Task<Void, Never>?
     /// What this view would like (fits its bounds); sent whenever we act.
     private var preferredSize: (cols: Int, rows: Int)?
     private var session: HostSession?
@@ -355,13 +356,30 @@ final class TerminalScreenModel {
 
     // MARK: Rendering
 
+    /// The shortest wait between rendered frames: quick while the terminal is on screen, slower
+    /// while the chat covers it (nobody sees the frames then; the chat only needs them now and then).
+    static func minInterval(drawing: Bool) -> Duration {
+        drawing ? .milliseconds(8) : .milliseconds(100)
+    }
+
+    /// Whether the terminal canvas is on screen (not covered by the chat). Showing it again
+    /// renders the pending frame at once.
+    var drawing = true {
+        didSet {
+            guard drawing, !oldValue, renderTask != nil else { return }
+            renderTask?.cancel()
+            renderTask = nil
+            renderNow()
+        }
+    }
+
     /// Coalesces bursts of output into one frame.
     private func scheduleRender() {
-        guard !renderScheduled else { return }
-        renderScheduled = true
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(8))
-            renderScheduled = false
+        guard renderTask == nil else { return }
+        let interval = Self.minInterval(drawing: drawing)
+        renderTask = Task { @MainActor in
+            do { try await Task.sleep(for: interval) } catch { return }
+            renderTask = nil
             renderNow()
         }
     }

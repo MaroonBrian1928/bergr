@@ -62,8 +62,8 @@ struct TerminalScreenView: View {
         let agent = chatAgent(terminal)
         let chat = agent != nil && chatPreferred
         ZStack(alignment: .top) {
-            // Before the first frame, the theme's background (the frame's afterwards: programs may change it).
-            Color(uiColor: UIColor(model.frame.cols == 0 ? theme.backgroundRGB : model.frame.background)).ignoresSafeArea()
+            // Reads the frame in its own view, so the redraws don't rebuild the rest of this body.
+            ScreenBackground(model: model, theme: theme)
             if terminal?.isLive ?? false || model.phase == .live {
                 TerminalCanvas(
                     model: model, fontSize: $fontSize, fontFamily: fontFamily, dark: theme.dark,
@@ -93,12 +93,8 @@ struct TerminalScreenView: View {
             } else {
                 overlay(terminal)
             }
-            if !chat, let terminal, terminal.isLive, terminal.status?.state == "blocked", model.phase == .live,
-               AnswerParser.isAsking(model.frame.textLines) {
-                // Only when something on screen can be answered: otherwise Yes/No would type
-                // letters, and the bar would cover the input (e.g. pasting a login code).
-                NeedsYouBar(status: terminal.status, model: model, dark: theme.dark)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
+            if !chat, let terminal, terminal.isLive, terminal.status?.state == "blocked", model.phase == .live {
+                AnswerBar(terminal: terminal, model: model, dark: theme.dark)
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -113,6 +109,7 @@ struct TerminalScreenView: View {
         // The title bar sits on the terminal's background: match its brightness, not the app's.
         .toolbarColorScheme(chat ? colorScheme : theme.dark ? .dark : .light, for: .navigationBar)
         .onChange(of: theme, initial: true) { _, theme in model.theme = theme }
+        .onChange(of: chat, initial: true) { _, isChat in model.drawing = !isChat }
         // Back from the background (or a dropped line): the line is new, and the terminal's
         // channel went with the old one. Attach again, or a reply typed in the chat goes nowhere
         // until the terminal itself is opened.
@@ -262,6 +259,33 @@ struct TerminalScreenView: View {
             Banner(text: reason, systemImage: "stop.circle")
         case .failed(let message):
             Banner(text: message, systemImage: "exclamationmark.triangle")
+        }
+    }
+}
+
+/// The screen's background: before the first frame, the theme's (the frame's afterwards: programs
+/// may change it). The only reader of the frame's colors in the screen's body.
+private struct ScreenBackground: View {
+    let model: TerminalScreenModel
+    let theme: TerminalTheme
+
+    var body: some View {
+        Color(uiColor: UIColor(model.frame.cols == 0 ? theme.backgroundRGB : model.frame.background)).ignoresSafeArea()
+    }
+}
+
+/// The answer bar, shown only when something on screen can be answered: otherwise Yes/No would
+/// type letters, and the bar would cover the input (e.g. pasting a login code). Reads the frame
+/// itself, so the redraws don't rebuild the screen's body.
+private struct AnswerBar: View {
+    let terminal: Terminal
+    let model: TerminalScreenModel
+    let dark: Bool
+
+    var body: some View {
+        if AnswerParser.isAsking(model.textLines) {
+            NeedsYouBar(status: terminal.status, model: model, dark: dark)
+                .frame(maxHeight: .infinity, alignment: .bottom)
         }
     }
 }
