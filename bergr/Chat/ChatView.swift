@@ -29,8 +29,9 @@ struct ChatView: View {
     @State private var showingUsage = false
     @State private var selecting: SelectableMessage?
     @State private var viewing: ViewedImage?
-    /// The update banner was closed (until the chat opens again).
-    @State private var updateDismissed = false
+    /// The Claude Code version whose update banner was closed: it stays away until a newer one
+    /// is installed.
+    @AppStorage("chat.dismissedClaudeUpdate") private var dismissedUpdate = ""
     @State private var showingModels = false
     /// When this chat first saw the agent working, for a timer that doesn't restart on every
     /// redraw when herdr-core doesn't say when its status changed.
@@ -397,12 +398,12 @@ struct ChatView: View {
         VStack(spacing: 8) {
             CommandSuggestions(commands: feed.commands, draft: $draft, palette: palette)
                 .padding(.horizontal, 12)
-            if agent == .claude, let newer = feed.newerAgent, !updateDismissed {
+            if agent == .claude, let newer = feed.newerAgent, newer != dismissedUpdate {
                 UpdateBanner(running: feed.agentVersion, installed: newer, needs: feed.modelsNeedingUpdate, palette: palette,
                              canUpdate: canType && state != "working") {
                     restartAgent()
                 } dismiss: {
-                    updateDismissed = true
+                    dismissedUpdate = newer
                 }
                 .padding(.horizontal, 12)
                 .transition(arrival)
@@ -765,7 +766,6 @@ struct ChatView: View {
         let argv = terminal?.foreground.flatMap { ChatAgent.detect(name: $0.name, argv: $0.argv) == .claude ? $0.argv : nil }
             ?? ["claude"]
         let command = RestartCommand.make(argv: argv, conversation: id)
-        updateDismissed = true
         typeLine("/exit")
         // Unstructured: it outlives this chat, which goes away while Claude isn't running.
         Task { @MainActor in

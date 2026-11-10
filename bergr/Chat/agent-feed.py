@@ -1124,10 +1124,8 @@ def claude_installed():
 
 
 def claude_version_event():
-    """Says when this conversation's Claude Code is too old for a model in its picker (the
-    catalog names each model's minimum version) and a new enough one is installed: restarting
-    into it makes that model usable. Not for every newer version: Claude Code updates often and
-    fetches the next one as it starts, so that would always be showing."""
+    """Says when a newer Claude Code is installed than this conversation runs (restarting moves it
+    there), and which models in its picker need that (the catalog names each model's minimum)."""
     CLAUDE_VERSION[1] = claude_installed()
     running, installed = CLAUDE_VERSION
     needs = []
@@ -1142,7 +1140,8 @@ def claude_version_event():
             if m.get("section", "main") == "main" and least \
                     and version_key(running) < version_key(least) <= version_key(installed):
                 needs.append(m.get("name") or m.get("id"))
-    yield {"t": "version", "running": running, "installed": installed if needs else None, "needs": needs}
+    newer = bool(running and installed and version_key(installed) > version_key(running))
+    yield {"t": "version", "running": running, "installed": installed if newer else None, "needs": needs}
 
 
 MODELS_SEEN = [None, 0, 0]  # file, its mtime, ticks since the last check

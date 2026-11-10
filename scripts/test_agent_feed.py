@@ -215,9 +215,13 @@ class ClaudeVersion(Base):
         self.assertEqual(self.version("2.1.310"),
                          {"t": "version", "running": "2.1.310", "installed": "2.1.322", "needs": ["New"]})
 
-    def test_no_banner_for_a_newer_version_no_model_needs(self):
+    def test_newer_version_no_model_needs(self):
         self.assertEqual(self.version("2.1.321"),
-                         {"t": "version", "running": "2.1.321", "installed": None, "needs": []})
+                         {"t": "version", "running": "2.1.321", "installed": "2.1.322", "needs": []})
+
+    def test_up_to_date(self):
+        self.assertEqual(self.version("2.1.322"),
+                         {"t": "version", "running": "2.1.322", "installed": None, "needs": []})
 
 
 class ToolOutput(Base):
