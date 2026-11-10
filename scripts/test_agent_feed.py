@@ -193,6 +193,21 @@ class ClaudeModels(Base):
         self.assertEqual(ns["list_models"]()[0]["id"], "claude-opus-5-5")
 
 
+class ClaudeVersion(Base):
+    def test_newer_installed_version_is_reported(self):
+        for v in ("2.1.319", "2.1.321", "2.1.40"):
+            os.makedirs(os.path.join(self.home, ".local", "share", "claude", "versions", v))
+        ns = load("claude", self.home)
+        evs = list(ns["Claude"]().parse({"type": "user", "version": "2.1.319", "uuid": "v1", "message": {"content": "hi"}}))
+        self.assertEqual(evs[0], {"t": "version", "running": "2.1.319", "installed": "2.1.321"})
+
+    def test_up_to_date_reports_nothing_newer(self):
+        os.makedirs(os.path.join(self.home, ".local", "share", "claude", "versions", "2.1.321"))
+        ns = load("claude", self.home)
+        evs = list(ns["Claude"]().parse({"type": "user", "version": "2.1.321", "uuid": "v2", "message": {"content": "hi"}}))
+        self.assertEqual(evs[0], {"t": "version", "running": "2.1.321", "installed": None})
+
+
 class ToolOutput(Base):
     def test_claude_tool_result(self):
         ns = load("claude", self.home)

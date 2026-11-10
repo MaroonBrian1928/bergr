@@ -181,6 +181,11 @@ final class ChatFeed {
     }
 
     private(set) var models: [ModelOption] = []
+    /// A newer Claude Code is installed on the machine than this conversation runs (`/update`
+    /// restarts into it): the installed version, else nil.
+    private(set) var newerAgent: String?
+    /// The Claude Code version this conversation runs.
+    private(set) var agentVersion: String?
     /// The effort last chosen here, for agents that don't record it (Claude).
     var chosenEffort: String?
     private(set) var phase: Phase = .loading
@@ -276,6 +281,9 @@ final class ChatFeed {
                                            note: $0["note"] as? String, efforts: $0["efforts"] as? [String] ?? [],
                                            defaultEffort: $0["default_effort"] as? String)
                     }
+                case "version":
+                    agentVersion = event["running"] as? String
+                    newerAgent = event["installed"] as? String
                 case "commands":
                     commands = (event["items"] as? [[String: Any]] ?? []).compactMap {
                         guard let name = $0["name"] as? String else { return nil }

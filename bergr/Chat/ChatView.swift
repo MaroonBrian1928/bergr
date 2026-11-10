@@ -29,6 +29,8 @@ struct ChatView: View {
     @State private var showingUsage = false
     @State private var selecting: SelectableMessage?
     @State private var viewing: ViewedImage?
+    /// The update banner was closed (until the chat opens again).
+    @State private var updateDismissed = false
     @State private var showingModels = false
     /// When this chat first saw the agent working, for a timer that doesn't restart on every
     /// redraw when herdr-core doesn't say when its status changed.
@@ -395,6 +397,18 @@ struct ChatView: View {
         VStack(spacing: 8) {
             CommandSuggestions(commands: feed.commands, draft: $draft, palette: palette)
                 .padding(.horizontal, 12)
+            if agent == .claude, let newer = feed.newerAgent, !updateDismissed {
+                UpdateBanner(running: feed.agentVersion, installed: newer, palette: palette,
+                             canUpdate: canType && state != "working") {
+                    // Claude Code's own command: installs, then restarts into the new version
+                    // with this conversation.
+                    typeLine("/update")
+                } dismiss: {
+                    updateDismissed = true
+                }
+                .padding(.horizontal, 12)
+                .transition(arrival)
+            }
             if let sendError {
                 Label(sendError, systemImage: "exclamationmark.triangle")
                     .font(.footnote)
@@ -1683,5 +1697,48 @@ enum Commands {
     static func label(_ command: String) -> String {
         let line = command.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? command
         return line.count > 40 ? line.prefix(39) + "…" : line
+    }
+}
+
+/// A newer Claude Code is on the machine than this conversation runs: one tap restarts into it.
+private struct UpdateBanner: View {
+    let running: String?
+    let installed: String
+    let palette: ChatPalette
+    let canUpdate: Bool
+    let update: () -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.down.circle")
+                .foregroundStyle(palette.accent)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Claude Code \(installed) is installed")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(palette.text)
+                Text(canUpdate ? "This chat runs \(running ?? "an older version"). Restarting keeps the conversation."
+                               : "Update once Claude finishes this step.")
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+            }
+            Spacer(minLength: 0)
+            Button("Update", action: update)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(palette.onAccent)
+                .buttonStyle(.borderedProminent)
+                .tint(palette.accent)
+                .disabled(!canUpdate)
+            Button("Not now", systemImage: "xmark", action: dismiss)
+                .labelStyle(.iconOnly)
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 6)
+        .padding(.vertical, 8)
+        .background(palette.bubble, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }

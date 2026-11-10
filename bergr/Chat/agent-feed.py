@@ -385,6 +385,10 @@ class Claude:
 
     def parse(self, d):
         kind = d.get("type")
+        # The Claude Code version this conversation runs (each line records it).
+        if isinstance(d.get("version"), str) and d["version"] != CLAUDE_VERSION[0]:
+            CLAUDE_VERSION[0] = d["version"]
+            yield from claude_version_event()
         # Compaction: the divider becomes a tool row, and the summary that follows is its output.
         if kind == "system" and d.get("subtype") == "compact_boundary":
             m = d.get("compactMetadata") or {}
@@ -1104,6 +1108,30 @@ def models_source():
     return None
 
 
+CLAUDE_VERSION = [None, None]  # running (from the conversation), installed (newest on disk)
+
+
+def version_key(v):
+    return tuple(int(x) if x.isdigit() else 0 for x in re.split(r"[.\-]", v or ""))
+
+
+def claude_installed():
+    """The newest Claude Code installed here (the native installer keeps each under
+    ~/.local/share/claude/versions/<version>), or None."""
+    names = [os.path.basename(f) for f in glob.glob(os.path.join(HOME, ".local", "share", "claude", "versions", "*"))
+             if re.fullmatch(r"\d+\.\d+\.\d+", os.path.basename(f))]
+    return max(names, key=version_key) if names else None
+
+
+def claude_version_event():
+    """Says when a newer Claude Code is installed than this conversation runs: `/update` restarts
+    it into the new one, keeping the conversation."""
+    CLAUDE_VERSION[1] = claude_installed()
+    running, installed = CLAUDE_VERSION
+    newer = bool(running and installed and version_key(installed) > version_key(running))
+    yield {"t": "version", "running": running, "installed": installed if newer else None}
+
+
 MODELS_SEEN = [None, 0, 0]  # file, its mtime, ticks since the last check
 
 
@@ -1120,6 +1148,9 @@ def refresh_models(force=False):
         mtime = os.path.getmtime(f) if f else 0
     except OSError:
         mtime = 0
+    if AGENT == "claude" and CLAUDE_VERSION[0] and claude_installed() != CLAUDE_VERSION[1]:
+        for ev in claude_version_event():
+            emit(ev)
     if force or (f, mtime) != tuple(MODELS_SEEN[:2]):
         MODELS_SEEN[0], MODELS_SEEN[1] = f, mtime
         emit({"t": "models", "items": list_models()})
