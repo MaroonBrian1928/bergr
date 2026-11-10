@@ -87,6 +87,8 @@ struct ChatView: View {
 
         func isIn(_ said: Set<String>) -> Bool {
             if said.contains(text) { return true }
+            // Sent twice in one message (a retry after the first copy reached the prompt).
+            if text.count >= 12, said.contains(where: { $0.contains(text) }) { return true }
             return images && !text.isEmpty && said.contains { $0.hasSuffix(text) }
         }
     }
@@ -1127,8 +1129,12 @@ struct ChatView: View {
                     try? await Task.sleep(for: .milliseconds(100))
                 }
             }
-            model.type(reply.text)
-            try? await Task.sleep(for: .milliseconds(150))
+            // The words may already be in the prompt, typed before the line died with Enter lost:
+            // typing them again would send them twice in one message. Submit what's there.
+            if !Pending.onScreen(reply.text, lines: model.textLines) {
+                model.type(reply.text)
+                try? await Task.sleep(for: .milliseconds(150))
+            }
             model.press(.enter)
             watchDelivery(of: reply.id)
         }

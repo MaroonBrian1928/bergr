@@ -17,3 +17,15 @@ struct PendingReplyTests {
         #expect(!ChatView.Pending.onScreen("  \n", lines: ["anything"]))
     }
 }
+
+struct PendingMatchTests {
+    @Test func doubledMessageStillClearsTheBubble() {
+        let text = "Is it because we don't have the project set"
+        let reply = ChatView.Pending(text: text, images: false)
+        #expect(reply.isIn([text + "\n" + text]))
+    }
+
+    @Test func shortRepliesNeedAnExactMatch() {
+        #expect(!ChatView.Pending(text: "yes", images: false).isIn(["yes please do the other thing"]))
+    }
+}
