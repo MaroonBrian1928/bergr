@@ -1,8 +1,8 @@
-#if DEBUG
 import HerdrKit
 import SwiftUI
 import UIKit
 
+#if DEBUG
 /// The chat with sample content and no machine behind it (`-bergr.chatPreview YES`).
 struct ChatPreviewScreen: View {
     @State private var feed = ChatFeed()
@@ -55,7 +55,10 @@ struct ChatPreviewScreen: View {
         }
     }
 }
+#endif
 
+// The sample and demo conversations ship: the built-in demo machine (Try the Demo) shows
+// its agents as chats, so the app can be tried, and reviewed, without a server.
 extension ChatFeed {
     /// A sample conversation: Claude's is a website change, Codex's a database upgrade, so two
     /// panes side by side show two different agents.
@@ -92,6 +95,31 @@ extension ChatFeed {
             Item(id: "q1", kind: .question(title: "How should I fix the muted labels?",
                                            options: ["Lighten them to pass 4.5:1", "Make them regular text", "Leave them"])),
         ])
+    }
+
+    private func loadMigrationSample() {
+        let events: [[String: Any]] = [
+            ["t": "msg", "id": "u1", "role": "user", "text": "Orders need a discount code. Add it to the database and the API."],
+            ["t": "tool", "id": "t1", "name": "Read", "summary": "db/schema.sql"],
+            ["t": "tool", "id": "t2", "name": "Write", "summary": "db/migrations/0042_order_discount_code.sql"],
+            ["t": "toolout", "id": "t2", "text": "ALTER TABLE orders ADD COLUMN discount_code text;\nCREATE INDEX orders_discount_code ON orders (discount_code);"],
+            ["t": "tool", "id": "t3", "name": "Edit", "summary": "src/routes/orders.ts"],
+            ["t": "tool", "id": "t4", "name": "Bash", "summary": "npm test"],
+            ["t": "toolout", "id": "t4", "text": "Tests  64 passed (64)"],
+            ["t": "msg", "id": "a1", "role": "assistant", "text": """
+            The API accepts a `discount_code` now and the tests pass. The migration adds one nullable \
+            column and an index, so it's quick and safe on a live table:
+
+            ```sql
+            ALTER TABLE orders ADD COLUMN discount_code text;
+            CREATE INDEX orders_discount_code ON orders (discount_code);
+            ```
+
+            Shall I run it against the staging database?
+            """],
+            ["t": "tool", "id": "t5", "name": "Bash", "summary": "npm run migrate"],
+        ]
+        loadEvents(events + [["t": "usage", "model": "claude-opus-5-5", "used": 38_904, "limit": 200_000]])
     }
 
     private func loadCodexSample() {
@@ -148,14 +176,13 @@ extension ChatFeed {
         return image.pngData() ?? Data()
     }
 }
-#endif
 
-#if DEBUG
 /// A fake agent for the demo machine (`-bergr.demo YES -bergr.demoChat YES`): the real chat,
 /// over a real (demo) terminal, with a conversation that answers what is sent to it.
 extension ChatFeed {
-    func runDemo(agent: ChatAgent = .claude) async {
-        loadSample(agent)
+    func runDemo(agent: ChatAgent = .claude, cwd: String = "") async {
+        // The shop API's agent is the one waiting to run a migration: its own conversation.
+        if agent == .claude, cwd.hasSuffix("shop-api") { loadMigrationSample() } else { loadSample(agent) }
         if agent == .claude {
             applyDemo(["t": "usage", "model": "claude-opus-5-5", "used": 70_512, "limit": 200_000])
         }
@@ -216,4 +243,3 @@ extension ChatFeed {
         }
     }
 }
-#endif

@@ -126,6 +126,20 @@ class QueuedMessages(Base):
         self.assertEqual(evs, [])
 
 
+class PastedMessages(Base):
+    def test_pasted_reply_is_shown_unwrapped(self):
+        ns = load("claude", self.home)
+        evs = list(ns["Claude"]().parse({"type": "user", "uuid": "p1", "message": {
+            "content": '\n\n<pasted_content id="81b7">\nFirst line\n\n1. Second\n</pasted_content id="81b7">\n'}}))
+        self.assertEqual(evs, [{"t": "msg", "id": "p1.0", "role": "user", "text": "First line\n\n1. Second"}])
+
+    def test_text_around_a_paste_is_kept(self):
+        ns = load("claude", self.home)
+        evs = list(ns["Claude"]().parse({"type": "user", "uuid": "p2", "message": {
+            "content": 'Look at this:\n\n<pasted_content id="1">\nerror X\n</pasted_content id="1">\n'}}))
+        self.assertEqual(evs[0]["text"], "Look at this:\n\nerror X")
+
+
 class ShellCommands(Base):
     def test_bang_command_and_output(self):
         ns = load("claude", self.home)

@@ -116,3 +116,16 @@ private actor Screen {
     #expect(after.cols == before.cols && after.rows == before.rows)
     #expect(!(await screen.text.contains("/Users/demo/projects/shop-api\r\n")))
 }
+
+/// The demo (and so the App Store screenshots and App Review) never shows another company's logo:
+/// the app picks a terminal's logo from its program, and no demo terminal runs a real agent's.
+@Test func demoRunsNoBrandedAgents() {
+    let brands = ["claude", "codex", "agy", "antigravity", "gemini"]
+    for terminal in DemoScript.terminals() {
+        var names = [terminal.title, terminal.name, terminal.status?.app, terminal.foreground?.name].compactMap { $0 }
+        names += terminal.argv + (terminal.foreground?.argv ?? [])
+        for name in names {
+            #expect(!brands.contains { name.lowercased().contains($0) }, "\(terminal.address): \(name)")
+        }
+    }
+}

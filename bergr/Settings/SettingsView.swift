@@ -187,7 +187,7 @@ struct SettingsView: View {
                 Text("The terminal uses the light or dark theme to match the appearance. Pinch a terminal to change the size there too.")
             }
 
-            Section("About") {
+            Section {
                 LabeledContent("Version", value: Self.version)
                     .frame(minHeight: 44)
                 Link(destination: Self.sourceCode) {
@@ -208,6 +208,10 @@ struct SettingsView: View {
                     }
                     .frame(minHeight: 44)
                 }
+            } header: {
+                Text("About")
+            } footer: {
+                Text(Self.trademarks)
             }
         }
         .bergrTint()
@@ -215,6 +219,11 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $editing) { HostEditor(host: $0) }
     }
+
+    /// Bergr names the agents it works with; it isn't theirs.
+    static let trademarks = "Claude and Claude Code are trademarks of Anthropic, PBC. Codex is a trademark of "
+        + "OpenAI. Antigravity and Gemini are trademarks of Google LLC. Bergr is an independent app, not affiliated "
+        + "with or endorsed by Anthropic, OpenAI or Google."
 
     static var version: String {
         let info = Bundle.main.infoDictionary

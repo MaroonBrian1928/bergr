@@ -323,7 +323,6 @@ final class ChatFeed {
         }
     }
 
-    #if DEBUG
     /// The demo agent is answering: the chat shows it working.
     var demoWorking = false
 
@@ -363,7 +362,6 @@ final class ChatFeed {
         items = building
         phase = .live
     }
-    #endif
 
     /// Upserts a sub-agent's status (by id) in the side map.
     func applySubagent(_ event: [String: Any]) {

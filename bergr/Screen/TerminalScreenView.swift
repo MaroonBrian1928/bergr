@@ -28,13 +28,11 @@ struct TerminalScreenView: View {
     /// The agent whose conversation can show as a chat. Not for terminals on machines herdr-core
     /// added (`machine/t7`): their files are on another computer.
     private func chatAgent(_ terminal: Terminal?) -> ChatAgent? {
-        #if DEBUG
-        // `-bergr.demoChat YES`: the demo machine's terminals open as fake chats: the infra agent
-        // (the Postgres upgrade) as Codex, the rest as Claude.
-        if session.host.isDemo, UserDefaults.standard.bool(forKey: "bergr.demoChat"), terminal != nil {
-            return terminal?.cwd.hasSuffix("infra") == true ? .codex : .claude
+        // The demo machine's agents open as chats with sample conversations: the infra agent (the
+        // Postgres upgrade) as Codex, the rest as Claude. Its plain terminals (tests, a shell) don't.
+        if session.host.isDemo, let terminal, terminal.foreground?.name == "agent" || terminal.argv.first == "agent" {
+            return terminal.cwd.hasSuffix("infra") ? .codex : .claude
         }
-        #endif
         // Not tied to the line being up: while it reconnects (back from the background) the chat
         // stays and waits, instead of the terminal flashing up until the line is back.
         guard let terminal, !session.host.isDemo, !address.contains("/") else { return nil }

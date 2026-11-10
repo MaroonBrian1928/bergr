@@ -157,9 +157,7 @@ final class HostSession {
         let feed = ChatFeed()
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
-            #if DEBUG
-            if self.host.isDemo { await feed.runDemo(agent: agent); return }
-            #endif
+            if self.host.isDemo { await feed.runDemo(agent: agent, cwd: cwd); return }
             await feed.run(session: self, agent: agent, pid: pid, cwd: cwd, sessionHint: sessionHint)
         }
         feeds[address] = (agent, feed, task, .now)

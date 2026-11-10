@@ -34,7 +34,7 @@ case "$device_type" in
 esac
 TEST_RUNNER_BERGR_SHOTS="$PWD/$raw" TEST_RUNNER_BERGR_SHOT_FONT="$font" xcodebuild -project bergr.xcodeproj -scheme bergr -derivedDataPath .build/xcode \
     ${BERGR_TEAM:+DEVELOPMENT_TEAM=$BERGR_TEAM} BERGR_BUNDLE_ID_PREFIX="${BERGR_BUNDLE_ID_PREFIX:-com.pavelzw}" \
-    -destination "id=$device" -only-testing:bergrUITests/DemoTourTests test | xcbeautify --quiet
+    -destination "id=$device" -only-testing:bergrUITests/DemoTourTests/testDemoTour test | xcbeautify --quiet
 
 # Frame: caption on Bergr's charcoal, the screenshot below with rounded corners. The output has
 # the capture's size (what App Store Connect expects for that device); the layout was designed

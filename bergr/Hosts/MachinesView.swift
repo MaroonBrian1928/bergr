@@ -30,6 +30,7 @@ struct MachinesView: View {
                     } else {
                         Button("Add Machine") { editing = newHost() }.buttonStyle(.borderedProminent)
                     }
+                    Button("Try the Demo") { _ = hosts.addDemo() }
                 }
                 .listRowBackground(Color.clear)
             }

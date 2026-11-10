@@ -77,8 +77,9 @@ struct ChatView: View {
 
     private var palette: ChatPalette { .of(colorScheme) }
     private var state: String? {
+        if feed.demoWorking { return "working" }
         #if DEBUG
-        if previewWorking || feed.demoWorking { return "working" }
+        if previewWorking { return "working" }
         #endif
         return terminal?.status?.state
     }
@@ -858,9 +859,7 @@ struct ChatView: View {
         attachments = []
         sendError = nil
         sent += 1
-        #if DEBUG
         if session?.host.isDemo == true { feed.demoUserSaid(text) }
-        #endif
         var reply = Pending(text: text.isEmpty ? "\(images.count) image\(images.count == 1 ? "" : "s")" : text,
                             images: !images.isEmpty)
         if state == "working" {

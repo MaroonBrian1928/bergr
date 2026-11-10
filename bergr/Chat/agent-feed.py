@@ -557,8 +557,15 @@ def shell_text(text):
     return None
 
 
+PASTED = re.compile(r'</?pasted_content(?:\s+id="[^"]*")?>\n?')
+
+
 def user_text(text):
     """What the person typed, or None for what the agent injected."""
+    # Pasted text (a multi-line reply from Bergr is pasted): Claude Code wraps it in
+    # <pasted_content> tags; the message is what's inside them, with anything typed around it.
+    if "<pasted_content" in text:
+        text = PASTED.sub("", text).strip("\n")
     s = text.strip()
     if s.startswith("<command-name>"):
         name = s.split("<command-name>", 1)[1].split("</command-name>", 1)[0]

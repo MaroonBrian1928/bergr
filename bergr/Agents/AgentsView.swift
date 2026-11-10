@@ -166,8 +166,15 @@ struct AgentsView: View {
         .navigationTitle("Agents")
         .overlay {
             if hosts.hosts.isEmpty {
-                ContentUnavailableView("No machines", systemImage: "server.rack",
-                                       description: Text("Add a machine to see its agents."))
+                ContentUnavailableView {
+                    Label("No machines", systemImage: "server.rack")
+                } description: {
+                    Text("Add a machine that runs herdr to see its agents, or try Bergr first with a built-in demo machine.")
+                } actions: {
+                    // No server needed: a simulated machine with agents to chat with and answer.
+                    Button("Try the Demo") { _ = hosts.addDemo() }
+                        .buttonStyle(.borderedProminent)
+                }
             }
         }
         .task { connectAll() }
