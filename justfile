@@ -122,6 +122,9 @@ archive upload="false":
         auth=(-authenticationKeyPath "$key" -authenticationKeyID "$key_id" -authenticationKeyIssuerID "$issuer_id")
     fi
     rm -rf .build/Bergr.xcarchive .build/export
+    # BERGR_ARCHIVE_WITH_ACCOUNT=1 signs and uploads with the Apple account in Xcode's settings
+    # instead (when the API key can't create the release profiles).
+    if [ -n "${BERGR_ARCHIVE_WITH_ACCOUNT:-}" ]; then auth=(); fi
     {{xcodebuild}} -configuration Release -destination "generic/platform=iOS" \
         -archivePath .build/Bergr.xcarchive ${auth[@]+"${auth[@]}"} archive | xcbeautify --quiet
     options=.build/ExportOptions.plist
