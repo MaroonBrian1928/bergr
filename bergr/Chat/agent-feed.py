@@ -1109,9 +1109,10 @@ MODELS_SEEN = [None, 0, 0]  # file, its mtime, ticks since the last check
 
 def refresh_models(force=False):
     """Sends the model list when its file is new or changed (the agent refreshed its catalog,
-    e.g. a new model came out), checking every ten seconds."""
+    e.g. a new model came out): when a conversation starts, else every five minutes (the loops
+    tick once a second; a check only reads the file's date)."""
     MODELS_SEEN[2] += 1
-    if not force and MODELS_SEEN[2] < 10:
+    if not force and MODELS_SEEN[2] < 300:
         return
     MODELS_SEEN[2] = 0
     f = models_source()
@@ -1163,6 +1164,7 @@ def follow_jsonl(source):
             SUBS.clear()
             tail.start_backlog(BACKLOG * 3)
             emit({"t": "reset", "agent": AGENT, "session": os.path.basename(now)})
+            MODELS_SEEN[2] = 300  # A new conversation: look at the model list again.
         if tail:
             for d in tail.lines():
                 for ev in source.parse(d) or ():
@@ -1216,6 +1218,7 @@ def follow_antigravity(source):
         if now and now != path:
             path, since, history = now, 0, 0
             emit({"t": "reset", "agent": AGENT, "session": os.path.basename(now)})
+            MODELS_SEEN[2] = 300  # A new conversation: look at the model list again.
             # A reset clears what the app knows: send the model and mode again.
             source.status = antigravity_model()
             if source.status:
