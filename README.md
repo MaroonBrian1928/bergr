@@ -4,11 +4,11 @@
 
 <p align="center">
   Your coding agents, in your pocket.<br>
-  An iPhone client for <a href="https://github.com/herdrdev/herdr">herdr</a>: chat with them, answer them, and keep an eye on them from anywhere.
+  An iPhone, iPad and Mac client for <a href="https://github.com/herdrdev/herdr">herdr</a>: chat with them, answer them, and keep an eye on them from anywhere.
 </p>
 
 <p align="center">
-  <a href="#building">Build it yourself</a>
+  <a href="https://bergr.dev">bergr.dev</a> · <a href="#building">Build it yourself</a>
 </p>
 
 <p align="center">
@@ -24,8 +24,13 @@ get its conversation as a chat, with a real terminal underneath when you want it
   their logos and their sub-agents counted; machines linked to another machine's herdr-core show too
 - **A chat for each agent**: replies as they stream in, tool runs, plans, images and sub-agents;
   reply (or paste a screenshot), queue a reply while it works or send it now, slash commands and
-  skills from anywhere in a message, `!` shell commands, switch the model, effort and permission mode, and see how full
-  the context is and how much of your plan you've used
+  skills from anywhere in a message, `!` shell commands, switch the model, effort and permission
+  mode (from the agent's own model list, so new models show up by themselves), and see how full the
+  context is and how much of your plan you've used
+- **Copy what you need**: long-press a message to copy it, select part of it, or copy a command in
+  it
+- **Claude Code updates in place**: when a machine has a newer Claude Code than a conversation
+  runs, the chat offers to restart into it, keeping the conversation
 - **Answer in one tap**: an agent's question or approval becomes buttons, in the chat, on the Lock
   Screen and in the Dynamic Island; every answer stays in the conversation
 - **Stays with you in the background**: a Live Activity, a Home Screen widget, and optional push
@@ -40,6 +45,9 @@ On the iPad and the unfolded iPhone Duo, the agents sit next to the conversation
 conversation can open beside the first. It works on every iPhone and iPad with iOS 26 or later, and
 on Apple silicon Macs as an iPad app.
 
+No server yet? **Try the Demo** on the first screen opens a built-in machine with agents to chat
+with and answer, all simulated on the device.
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/ipad-dark.png">
@@ -50,7 +58,7 @@ on Apple silicon Macs as an iPad app.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-dark.png">
-    <img src="assets/screenshot-light.png" width="760" alt="Three Bergr screens: the Agents list with a migration waiting for an answer, an agent's conversation with its reply, and the blocked agent with Yes, No, Return and Esc buttons">
+    <img src="assets/screenshot-light.png" width="760" alt="Three Bergr screens: the Agents list sorted by what needs you, an agent's conversation asking how to fix low-contrast labels, and an agent asking to run a database migration with Yes, No, Return and Esc buttons">
   </picture>
 </p>
 
@@ -86,6 +94,8 @@ the relay in [`relay/`](relay) (a Cloudflare Worker) and Apple only pass an opaq
 
 Building it yourself, push alerts need your own relay and APNs key: deploy `relay/` as its
 README describes, and point the app at it with the `bergr.push.relay` user default.
+
+What the relay stores, and nothing else: [bergr.dev/privacy](https://bergr.dev/privacy.html).
 
 ## License
 

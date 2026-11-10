@@ -78,8 +78,8 @@ The first release of Bergr.
 ## URLs
 
 - Support URL: https://github.com/MaroonBrian1928/bergr/issues
-- Marketing URL: https://<the bergr site>/
-- Privacy Policy URL: https://<the bergr site>/privacy.html (from the bergr-site repo; the same text as appstore/privacy-policy.md)
+- Marketing URL: https://bergr.dev/
+- Privacy Policy URL: https://bergr.dev/privacy.html
 
 ## Category
 
