@@ -320,7 +320,19 @@ final class ChatFeed {
                 case "subagent":
                     applySubagent(event)
                 case "ping":
-                    if !caughtUp { caughtUp = true; items = building }
+                    if !caughtUp {
+                        // Read again after coming back: what's new since the chat was last on
+                        // screen arrives like live messages (the agent's replies write
+                        // themselves out; the list animates them in), what's unchanged stays still.
+                        if !items.isEmpty {
+                            let shown = Set(items.map(\.id))
+                            for item in building where !shown.contains(item.id) {
+                                if case .assistant = item.kind { revealStart[item.id] = .now }
+                            }
+                        }
+                        caughtUp = true
+                        items = building
+                    }
                     pings += 1
                     if !sawConversation && pings >= 2 { phase = .noConversation }
                 case "error":
