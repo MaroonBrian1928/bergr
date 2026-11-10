@@ -1387,6 +1387,8 @@ private struct ToolRun: View {
     /// A tool's output: monospaced, at most 8 lines tall, scrolling for more, sticking to the end.
     /// `minLines`: at least this tall (a live run's box doesn't shrink between steps).
     private func outputBlock(_ output: String, minLines: Int = 0) -> some View {
+        // Blank lines at the start of the output only push it down the box.
+        let output = String(output.drop { $0 == "\n" || $0 == "\r" })
         let lines = max(Self.lineCount(output), minLines)
         return ScrollView(.vertical) {
             Text(output)
@@ -1395,7 +1397,12 @@ private struct ToolRun: View {
                 .textSelection(.enabled)
                 .padding(8)
         }
-        .defaultScrollAnchor(.bottom)
+        // Output shorter than the box (which keeps the tallest height it reached in this run)
+        // sits at the top, not at the bottom under empty space; longer output still follows
+        // its end.
+        .defaultScrollAnchor(.top, for: .alignment)
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .frame(height: CGFloat(min(lines, 8)) * outputLine + 16)
         .background(palette.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
