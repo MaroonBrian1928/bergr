@@ -22,6 +22,13 @@ struct NewSessionTests {
         #expect(NewSession.parseLocated("Welcome!\nagy\tagy\nvim\t/usr/bin/vim\n").isEmpty)
     }
 
+    @Test func keepsThePathTheAgentsWereFoundOnWithoutRepeats() {
+        let output = "hi\nPATH\t/a/bin:/usr/bin::/a/bin:/b\nclaude\t/a/bin/claude\n"
+        #expect(NewSession.parsePath(output) == "/a/bin:/usr/bin:/b")
+        #expect(NewSession.parseLocated(output).map(\.agent) == [.claude])
+        #expect(NewSession.parsePath("claude\t/x\n") == nil)
+    }
+
     @Test func recentFoldersAreAgentFoldersNewestFirstWithoutRepeats() throws {
         let folders = NewSession.recentFolders([
             try terminal("t1", cwd: "/Users/me/src/old", ms: 1),

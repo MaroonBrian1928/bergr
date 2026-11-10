@@ -12,10 +12,29 @@ enum NewSession {
         }
     }
 
-    /// Asks the user's login shell (so ~/.local/bin and the like are on PATH, as in their
-    /// terminal) where each agent's CLI is. One line per agent found: `name<TAB>/path`.
-    static let locateCommand =
-        #"exec "${SHELL:-/bin/sh}" -lc 'for c in claude codex agy; do p=$(command -v "$c" 2>/dev/null) && printf "%s\t%s\n" "$c" "$p"; done'"#
+    /// Finds each agent's CLI as the user's terminal would. A login shell alone isn't enough:
+    /// on Linux PATH is usually set in .zshrc or .bashrc, which only an interactive shell reads.
+    /// So it asks an interactive login shell for its PATH (marked, since an interactive shell may
+    /// print a greeting), adds the usual install folders (npm, bun, volta, nvm, Homebrew), then
+    /// looks. Prints `PATH<TAB>…` and one `name<TAB>/path` line per agent found.
+    static let locateCommand = #"""
+    sh -c 'p=$("${SHELL:-/bin/sh}" -lic "printf \"\n__BERGR_PATH__%s\n\" \"\$PATH\"" </dev/null 2>/dev/null | sed -n "s/^__BERGR_PATH__//p" | tail -n 1)
+    n=$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | tail -n 1)
+    PATH="$p:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.volta/bin:$n:/opt/homebrew/bin:/usr/local/bin:$PATH"
+    printf "PATH\t%s\n" "$PATH"
+    for c in claude codex agy; do f=$(command -v "$c" 2>/dev/null) && printf "%s\t%s\n" "$c" "$f"; done'
+    """#
+
+    /// The PATH `locateCommand` used, so an agent started from a script (`#!/usr/bin/env node`)
+    /// finds its runtime too, wherever herdr-core itself was started from.
+    static func parsePath(_ output: String) -> String? {
+        for line in output.split(whereSeparator: \.isNewline) where line.hasPrefix("PATH\t") {
+            let path = line.dropFirst(5).split(separator: ":").filter { !$0.isEmpty }
+            var seen = Set<Substring>()
+            return path.filter { seen.insert($0).inserted }.joined(separator: ":")
+        }
+        return nil
+    }
 
     /// The agents found by `locateCommand`, with their full paths, in a fixed order.
     static func parseLocated(_ output: String) -> [(agent: ChatAgent, path: String)] {
@@ -71,6 +90,7 @@ struct NewSessionView: View {
 
     @State private var hostID: Host.ID?
     @State private var located: [Host.ID: [(agent: ChatAgent, path: String)]] = [:]
+    @State private var searchPath: [Host.ID: String] = [:]
     @State private var locateFailed: [Host.ID: String] = [:]
     @State private var agent: ChatAgent?
     @State private var folder = ""
@@ -220,6 +240,7 @@ struct NewSessionView: View {
         do {
             let output = try await session.commandOutput(NewSession.locateCommand)
             let found = NewSession.parseLocated(output)
+            searchPath[hostID] = NewSession.parsePath(output)
             located[hostID] = found
             if agent == nil || !found.contains(where: { $0.agent == agent }) { agent = found.first?.agent }
         } catch {
@@ -234,6 +255,7 @@ struct NewSessionView: View {
         defer { starting = false }
         error = nil
         var request = RunRequest(argv: NewSession.argv(path: path, message: message))
+        if let path = searchPath[hostID] { request.env?["PATH"] = path }
         let folder = folder.trimmingCharacters(in: .whitespaces)
         if folder.hasPrefix("~"), let home = session.homeFolder {
             request.cwd = home + folder.dropFirst()
