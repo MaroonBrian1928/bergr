@@ -15,8 +15,13 @@ enum QuietAgents {
         UserDefaults.standard.object(forKey: key) as? Int ?? defaultSeconds
     }
 
-    /// Done or idle, with its last status change (or its start) longer ago than `after` seconds.
-    nonisolated static func isQuiet(_ terminal: Terminal, now: Date = .now, after: Int = seconds) -> Bool {
+    /// Done or idle, with its last status change (or its start) longer ago than the setting.
+    nonisolated static func isQuiet(_ terminal: Terminal, now: Date = .now) -> Bool {
+        isQuiet(terminal, now: now, after: seconds)
+    }
+
+    /// As above, with the hide-after seconds given: a list reads the setting once, not per terminal.
+    nonisolated static func isQuiet(_ terminal: Terminal, now: Date, after: Int) -> Bool {
         guard after > 0 else { return false }
         switch terminal.agentState {
         case .done, .idle, nil: break

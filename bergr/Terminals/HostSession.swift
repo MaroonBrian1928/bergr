@@ -307,9 +307,21 @@ final class HostSession {
         }
     }
 
+    /// The snapshot after one message, or nil when it changes nothing the screens show. Every
+    /// write to the observed `snapshot` redraws each reader of `terminals`, so only a change is
+    /// written. An event that leaves the terminals as they were keeps its `seq` out of the
+    /// observed value: the stream is in order, and a `missed` always replaces the snapshot.
+    static func snapshot(after message: EventMessage, from current: TerminalSnapshot) -> TerminalSnapshot? {
+        if case .heartbeat = message { return nil }
+        var next = current
+        next.apply(message)
+        if case .missed = message { return next }
+        return next.terminals == current.terminals ? nil : next
+    }
+
     private func apply(_ message: EventMessage) async {
         lastHeard = .now
-        snapshot?.apply(message)
+        if let current = snapshot, let next = Self.snapshot(after: message, from: current) { snapshot = next }
         markLookedAt()
         guard let client else { return }
         switch message {

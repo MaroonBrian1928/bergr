@@ -67,8 +67,10 @@ struct AgentsView: View {
     }
 
     var body: some View {
+        // Worked out once per body, and read by the sections, the animation and the attention lists.
+        let lists = machineLists
         List(selection: $picked) {
-            if byAttention { attentionSections } else { machineSections }
+            if byAttention { attentionSections(lists) } else { machineSections(lists) }
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -88,17 +90,31 @@ struct AgentsView: View {
                 .accessibilityLabel("Agents, grouped by \(byAttention ? "attention" : "machine")")
             }
         }
-        .modifier(AgentsListBehavior(view: self))
+        .modifier(AgentsListBehavior(view: self, orderKey: lists.flatMap { $0.ordered.map(\.address) }))
+    }
+
+    /// Every machine's terminals, live and in the agents list's order, split into this core's
+    /// own and the linked machines' (`laptop/t3`). Worked out once per body.
+    private var machineLists: [MachineLists] {
+        hosts.hosts.map { host in
+            let session = sessions.session(for: host)
+            let live = session.terminals.filter(\.isLive)
+            let ordered = AgentsOrdering.ordered(live)
+            return MachineLists(
+                host: host, session: session, ordered: ordered,
+                own: ordered.filter { !$0.address.contains("/") },
+                linked: linkedGroups(ordered, host: host, session: session),
+                liveOwn: live.filter { !$0.address.contains("/") },
+                liveLinked: linkedGroups(live, host: host, session: session))
+        }
     }
 
     @ViewBuilder
-    private var machineSections: some View {
-            ForEach(hosts.hosts) { host in
-                let session = sessions.session(for: host)
-                let all = AgentsOrdering.ordered(session.terminals.filter(\.isLive))
-                // This core's own terminals; ones it reaches on its linked machines (`laptop/t3`)
-                // get a section of their own below.
-                let terminals = all.filter { !$0.address.contains("/") }
+    private func machineSections(_ lists: [MachineLists]) -> some View {
+            ForEach(lists) { list in
+                let host = list.host
+                let session = list.session
+                let terminals = list.own
                 Section {
                     // Why a machine can't connect, in full, with a way to try again; the other
                     // machines carry on.
@@ -126,7 +142,7 @@ struct AgentsView: View {
                     ForEach(terminals) { terminal in row(terminal, host: host, session: session) }
                     // Linked machines go in the same section, under a heading row each: as section
                     // headers they pinned to the top and piled up over the list when scrolling.
-                    ForEach(linkedGroups(all, host: host, session: session), id: \.name) { group in
+                    ForEach(list.linked, id: \.name) { group in
                         LinkedMachineHeader(name: group.name, via: host.name, state: group.state,
                                             count: group.terminals.count)
                             .padding(.top, 10)
@@ -140,14 +156,11 @@ struct AgentsView: View {
             }
     }
 
-    fileprivate func applyBehavior<V: View>(_ list: V) -> some View {
+    fileprivate func applyBehavior<V: View>(_ list: V, orderKey: [String]) -> some View {
         list
         .listStyle(.plain)
         // Rows glide to their new place when an agent's state re-sorts them; Reduce Motion fades.
-        .animation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.35),
-                   value: hosts.hosts.flatMap { host in
-                       AgentsOrdering.ordered(sessions.session(for: host).terminals.filter(\.isLive)).map(\.address)
-                   })
+        .animation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.35), value: orderKey)
         .sensoryFeedback(.selection, trigger: picked) { _, new in new != nil }
         // Pull down to reconnect every machine.
         .refreshable {
@@ -193,27 +206,27 @@ struct AgentsView: View {
     }
 
     /// Every live terminal on every machine once, with the machine it runs on.
-    private var entries: [Entry] {
-        hosts.hosts.flatMap { host -> [Entry] in
-            let session = sessions.session(for: host)
-            let all = session.terminals.filter(\.isLive)
-            let own = all.filter { !$0.address.contains("/") }
-                .map { Entry(host: host, session: session, terminal: $0, machine: host.name) }
-            let linked = linkedGroups(all, host: host, session: session).flatMap { group in
-                group.terminals.map { Entry(host: host, session: session, terminal: $0, machine: group.name) }
+    private func attentionEntries(_ lists: [MachineLists]) -> [Entry] {
+        lists.flatMap { list -> [Entry] in
+            let own = list.liveOwn.map { Entry(host: list.host, session: list.session, terminal: $0, machine: list.host.name) }
+            let linked = list.liveLinked.flatMap { group in
+                group.terminals.map { Entry(host: list.host, session: list.session, terminal: $0, machine: group.name) }
             }
             return own + linked
         }
     }
 
     @ViewBuilder
-    private var attentionSections: some View {
-        let all = entries
+    private func attentionSections(_ lists: [MachineLists]) -> some View {
+        let all = attentionEntries(lists)
         let stamp: (Entry) -> UInt64 = { $0.terminal.statusMs ?? $0.terminal.createdMs }
         let needs = all.filter { [.needsYou, .error].contains($0.terminal.agentState) }.sorted { stamp($0) < stamp($1) }
         let now = Date.now
-        let quiet = all.filter { QuietAgents.isQuiet($0.terminal, now: now) }.sorted { stamp($0) > stamp($1) }
-        let recent = all.filter { !QuietAgents.isQuiet($0.terminal, now: now) }
+        // The setting is read once for the whole list, not per terminal.
+        let hideAfter = QuietAgents.seconds
+        let quiet = all.filter { QuietAgents.isQuiet($0.terminal, now: now, after: hideAfter) }
+            .sorted { stamp($0) > stamp($1) }
+        let recent = all.filter { !QuietAgents.isQuiet($0.terminal, now: now, after: hideAfter) }
         let finished = recent.filter { $0.terminal.agentState == .done }.sorted { stamp($0) > stamp($1) }
         let working = all.filter { $0.terminal.agentState == .working }.sorted { stamp($0) < stamp($1) }
         let idle = recent.filter { $0.terminal.agentState == .idle || $0.terminal.agentState == nil }
@@ -287,20 +300,19 @@ struct AgentsView: View {
 
     @ViewBuilder
     private func row(_ terminal: Terminal, host: Host, session: HostSession, machine: String? = nil) -> some View {
-                        AgentRow(terminal: terminal, subagents: session.runningSubagents(address: terminal.address),
-                                 machine: machine)
-                            .tag("\(host.id.uuidString)|\(terminal.address)")
-                            .contextMenu {
-                                Button("Open", systemImage: "arrow.forward.circle") { open(host.id, terminal.address) }
-                                if let openBeside {
-                                    Button("Open Beside", systemImage: "rectangle.split.2x1") {
-                                        openBeside(host.id, terminal.address)
-                                    }
-                                }
-                                Button("Copy Address", systemImage: "doc.on.doc") {
-                                    UIPasteboard.general.string = terminal.address
-                                }
-                            }
+        SubagentRow(terminal: terminal, session: session, machine: machine)
+            .tag("\(host.id.uuidString)|\(terminal.address)")
+            .contextMenu {
+                Button("Open", systemImage: "arrow.forward.circle") { open(host.id, terminal.address) }
+                if let openBeside {
+                    Button("Open Beside", systemImage: "rectangle.split.2x1") {
+                        openBeside(host.id, terminal.address)
+                    }
+                }
+                Button("Copy Address", systemImage: "doc.on.doc") {
+                    UIPasteboard.general.string = terminal.address
+                }
+            }
     }
 
     struct LinkedGroup { let name: String; let state: String?; let terminals: [Terminal] }
@@ -325,6 +337,33 @@ struct AgentsView: View {
             let session = sessions.session(for: host)
             if !session.isActive { session.start(keys: keys) }
         }
+    }
+}
+
+/// One machine's live terminals, as the lists need them (see `AgentsView.machineLists`).
+private struct MachineLists: Identifiable {
+    let host: Host
+    let session: HostSession
+    /// All live terminals, in the agents list's order.
+    let ordered: [Terminal]
+    /// This core's own terminals and the linked machines' groups, in that order.
+    let own: [Terminal]
+    let linked: [AgentsView.LinkedGroup]
+    /// The same as the session has them: the attention lists sort their own.
+    let liveOwn: [Terminal]
+    let liveLinked: [AgentsView.LinkedGroup]
+    var id: Host.ID { host.id }
+}
+
+/// An agent's row. Its sub-agent count is read here, so a chat feed's changes redraw only this row
+/// and not the whole list.
+private struct SubagentRow: View {
+    let terminal: Terminal
+    let session: HostSession
+    let machine: String?
+
+    var body: some View {
+        AgentRow(terminal: terminal, subagents: session.runningSubagents(address: terminal.address), machine: machine)
     }
 }
 
@@ -412,5 +451,7 @@ private struct AttentionHeader: View {
 /// The list's behavior, the same whichever way it's grouped.
 private struct AgentsListBehavior: ViewModifier {
     let view: AgentsView
-    func body(content: Content) -> some View { view.applyBehavior(content) }
+    /// The addresses in list order: a change re-sorts the rows, which then glide.
+    let orderKey: [String]
+    func body(content: Content) -> some View { view.applyBehavior(content, orderKey: orderKey) }
 }

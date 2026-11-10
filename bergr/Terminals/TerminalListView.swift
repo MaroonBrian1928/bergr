@@ -229,17 +229,26 @@ struct TerminalListView: View {
     /// scrolls to the row that was at the top. (Keeping both lists alive would keep the position
     /// for free, but a hidden List stays in the accessibility tree; and `ScrollPosition` doesn't
     /// move a List.)
+    /// The terminals as the two views list them, worked out once per body.
+    private struct Rows {
+        let groups: [AgentGroup]
+        let sections: [TerminalSection]
+        let finished: [Terminal]
+    }
+
     private var terminalList: some View {
-        ScrollViewReader { proxy in
-            list(mode)
+        let rows = Rows(groups: agentGroups, sections: spaceSections, finished: finished)
+        return ScrollViewReader { proxy in
+            list(mode, rows)
                 .id(mode)
                 .opacity(concealed ? 0 : 1)
                 .onChange(of: mode) { _, mode in
                     restoring = mode
                     let seen = visibleRows[mode] ?? []
-                    let top = rowOrder(mode).first { seen.contains($0) }
+                    let order = rowOrder(mode, rows)
+                    let top = order.first { seen.contains($0) }
                     // At the top already: nothing to hide.
-                    concealed = top != nil && top != rowOrder(mode).first
+                    concealed = top != nil && top != order.first
                     Task { @MainActor in
                         // The new list lays out its rows first.
                         try? await Task.sleep(for: .milliseconds(30))
@@ -265,10 +274,10 @@ struct TerminalListView: View {
     }
 
     /// The rows of a view, top to bottom.
-    private func rowOrder(_ shown: Mode) -> [String] {
-        if shown == .agents { return agentGroups.flatMap { $0.rows.map(\.terminal.address) } }
+    private func rowOrder(_ shown: Mode, _ rows: Rows) -> [String] {
+        if shown == .agents { return rows.groups.flatMap { $0.rows.map(\.terminal.address) } }
         let open = expanded("finished", initially: false).wrappedValue
-        return spaceSections.flatMap { $0.rows.map(\.terminal.address) } + (open ? finished.map(\.address) : [])
+        return rows.sections.flatMap { $0.rows.map(\.terminal.address) } + (open ? rows.finished.map(\.address) : [])
     }
 
     private func tracking(_ address: String, in shown: Mode) -> RowVisibility {
@@ -279,22 +288,22 @@ struct TerminalListView: View {
         }
     }
 
-    private func list(_ shown: Mode) -> some View {
-        List(selection: $selection) {
+    private func list(_ shown: Mode, _ rows: Rows) -> some View {
+        let finishedOpen = expanded("finished", initially: false)
+        return List(selection: $selection) {
             // Keep the last list visible while reconnecting, with a banner on top.
             if session.state != .connected {
                 ConnectionBanner(state: session.state, session: session)
             }
             switch shown {
             case .agents:
-                let groups = agentGroups
-                if groups.isEmpty {
+                if rows.groups.isEmpty {
                     ContentUnavailableView(
                         "No agents", systemImage: "sparkles",
                         description: Text("Agents show up here once they report their status to herdr. Start one with New Terminal."))
                 }
                 // Each header has its status's dot: the headers are the legend.
-                ForEach(groups) { group in
+                ForEach(rows.groups) { group in
                     Section(isExpanded: expanded("status:\(group.state.rawValue)", initially: group.state != .idle)) {
                         ForEach(group.rows) { row in
                             rowView(TerminalRow(
@@ -307,12 +316,12 @@ struct TerminalListView: View {
                     }
                 }
             case .terminals:
-                if spaceSections.isEmpty {
+                if rows.sections.isEmpty {
                     ContentUnavailableView(
                         "No live terminals", systemImage: "terminal",
                         description: Text("Tap New Terminal to start one, or run `hc run --bg` on the machine."))
                 }
-                ForEach(spaceSections) { section in
+                ForEach(rows.sections) { section in
                     Section(isExpanded: expanded(section.id)) {
                         ForEach(section.rows) { row in
                             rowView(TerminalRow(
@@ -333,9 +342,9 @@ struct TerminalListView: View {
                     }
                 }
                 // Out of the way, but at hand to see how something ended or to remove it.
-                if !finished.isEmpty {
-                    Section(isExpanded: expanded("finished", initially: false)) {
-                        ForEach(finished) { terminal in
+                if !rows.finished.isEmpty {
+                    Section(isExpanded: finishedOpen) {
+                        ForEach(rows.finished) { terminal in
                             rowView(TerminalRow(terminal: terminal, style: .terminal))
                                 .modifier(tracking(terminal.address, in: shown))
                         }
@@ -345,8 +354,8 @@ struct TerminalListView: View {
                             Spacer()
                             // Only while open: next to the rows it removes, not in the way of
                             // the tap that opens the section.
-                            if expanded("finished", initially: false).wrappedValue {
-                                Button("Remove All") { confirmClear = finished }
+                            if finishedOpen.wrappedValue {
+                                Button("Remove All") { confirmClear = rows.finished }
                                     .buttonStyle(.borderless)
                                     .foregroundStyle(.tint)
                                     .disabled(session.state != .connected)
@@ -364,7 +373,7 @@ struct TerminalListView: View {
                                             : "Their screens and exit codes are gone for good.")
                                     }
                             }
-                            Text("\(finished.count)").foregroundStyle(.secondary)
+                            Text("\(rows.finished.count)").foregroundStyle(.secondary)
                         }
                     }
                 }
