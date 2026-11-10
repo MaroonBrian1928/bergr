@@ -81,53 +81,8 @@ struct SettingsView: View {
                 Text("SSH keys that sign you in to your machines. Private keys stay on this device.")
             }
 
-            Section {
-                Toggle(isOn: $liveActivityPush) {
-                    Label {
-                        Text("Live Activity")
-                    } icon: {
-                        SettingsIcon("platter.filled.top.iphone", color: .green)
-                    }
-                }
-                .frame(minHeight: 44)
-                .disabled(!push.enabled)
-                if liveActivityPush {
-                    Picker(selection: $liveActivityContent) {
-                        Text("Counts only").tag("counts")
-                        Text("Names and status").tag("full")
-                    } label: {
-                        Label {
-                            Text("Shows")
-                        } icon: {
-                            SettingsIcon("eye.fill", color: .gray)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .frame(minHeight: 44)
-                }
-            } footer: {
-                Text(liveActivityContent == "full"
-                     ? "Your machines update it through the push relay, so it works without staying connected and without location. With names and status, those pass through the relay and Apple unencrypted (push alerts stay encrypted)."
-                     : (push.enabled
-                        ? "Your machines update it through the push relay, so it works without staying connected and without location. It shows how many agents need you, are working and are done: no names or text leave your machines unencrypted."
-                        : "Turn on push alerts first: the Live Activity is updated through the same relay."))
-            }
-
-            Section {
-                Toggle(isOn: $keepAlive.enabled) {
-                    Label {
-                        Text("Keep connected in background")
-                    } icon: {
-                        SettingsIcon("bell.badge.fill", color: .red)
-                    }
-                }
-                .frame(minHeight: 44)
-            } header: {
-                Text("Alerts")
-            } footer: {
-                Text("Keeps your machines connected while Bergr is in the background, so it can notify you when an agent needs you or finishes, and updates the Live Activity itself (with everything, and instantly). It does this the way SSH apps do, with a low-accuracy location session: iOS shows a blue location indicator while it runs, it uses extra battery, and it asks for notification and \"Always\" location permission. Your location is never stored or sent anywhere.")
-            }
-
+            // In the order they depend on each other: alerts (the helper on each machine), the
+            // Live Activity (sent the same way), and staying connected (the other way to get both).
             Section {
                 Toggle(isOn: $push.enabled) {
                     Label {
@@ -154,11 +109,58 @@ struct SettingsView: View {
                         }
                     }
                 }
+            } header: {
+                Text("When Bergr is closed")
             } footer: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Sends alerts through Apple even when Bergr isn't running. Bergr installs a small helper (bergr-notify) on each machine to send them.")
+                    Text("Get an alert when an agent needs you or finishes. A small helper on each machine sends them, encrypted so only this device can read them.")
                     if let error = push.lastError { Text(error).foregroundStyle(.red) }
                 }
+            }
+
+            Section {
+                Toggle(isOn: $liveActivityPush) {
+                    Label {
+                        Text("Live Activity")
+                    } icon: {
+                        SettingsIcon("platter.filled.top.iphone", color: .green)
+                    }
+                }
+                .frame(minHeight: 44)
+                .disabled(!push.enabled)
+                if liveActivityPush, push.enabled {
+                    Picker(selection: $liveActivityContent) {
+                        Text("Counts").tag("counts")
+                        Text("Counts and agent names").tag("full")
+                    } label: {
+                        Label {
+                            Text("Show")
+                        } icon: {
+                            SettingsIcon("list.bullet", color: .gray)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(minHeight: 44)
+                }
+            } footer: {
+                Text(!push.enabled
+                     ? "Turn on push alerts to use this: the same helpers keep it up to date."
+                     : liveActivityContent == "full"
+                        ? "Agent names and status aren't encrypted: Apple and Bergr's push service can read them on the way to your Lock Screen."
+                        : "How many agents need you, are working and are done, on your Lock Screen. Only the numbers leave your machines.")
+            }
+
+            Section {
+                Toggle(isOn: $keepAlive.enabled) {
+                    Label {
+                        Text("Keep connected in background")
+                    } icon: {
+                        SettingsIcon("bell.badge.fill", color: .red)
+                    }
+                }
+                .frame(minHeight: 44)
+            } footer: {
+                Text("Bergr stays connected and sends alerts and Live Activity updates itself, instantly and without the helpers. It uses more battery, and \"Always\" location access to keep running; your location is never stored or sent.")
             }
 
             Section {
