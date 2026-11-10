@@ -28,7 +28,7 @@ struct SettingsView: View {
         Binding(get: { keepAlive.enabled }, set: { keepAlive.enabled = $0; Delivery.apply() })
     }
 
-    /// A Notifications or Lock Screen box switch: stores it, then registers the helpers to match.
+    /// A Notifications or Live Activity switch: stores it, then registers the helpers to match.
     private func deliverySwitch(_ value: Binding<Bool>) -> Binding<Bool> {
         Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0; Delivery.apply() })
     }
@@ -152,7 +152,7 @@ struct SettingsView: View {
                 .frame(minHeight: 44)
                 Toggle(isOn: deliverySwitch($liveActivityPush)) {
                     Label {
-                        Text("Lock Screen box")
+                        Text("Live Activity")
                     } icon: {
                         SettingsIcon("platter.filled.top.iphone", color: .green)
                     }
@@ -183,7 +183,7 @@ struct SettingsView: View {
                 }
             } footer: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Notifications: when an agent needs you or finishes. Lock Screen box: how many agents need you, are working or are done.")
+                    Text("Notifications: when an agent needs you or finishes. Live Activity: how many agents need you, are working or are done.")
                     if liveActivityPush, !keepAlive.enabled, liveActivityContent == "full" {
                         Text("Names and status can be read by Apple and Bergr's push service on the way.")
                     }

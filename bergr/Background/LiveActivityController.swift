@@ -187,7 +187,7 @@ final class LiveActivityController {
     }
 
     private func current() -> State? {
-        // Settings → Lock Screen box, whichever way updates come.
+        // Settings → Live Activity, whichever way updates come.
         guard Self.pushEnabled else { return nil }
         if KeepAlive.shared.enabled { return Self.content(machines: machines(), screens: screens) }
         guard byPush, var state = Self.content(machines: machines()) else { return nil }

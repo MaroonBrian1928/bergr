@@ -513,7 +513,7 @@ def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None):
     sent = 0
     devices = [d for d in cfg.get("devices") or [] if isinstance(d, dict)]
     # Devices registered through a relay carry its address and a secret; the relay holds the key.
-    # A device with "alerts": false wants only the Lock Screen box kept current, not notifications.
+    # A device with "alerts": false wants only the Live Activity kept current, not notifications.
     for device in [d for d in devices if d.get("relay") and d.get("secret") and d.get("alerts", True) is not False]:
         try:
             # The app's own id for this machine when it gave one, so a tap opens the right one.

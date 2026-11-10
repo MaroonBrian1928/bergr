@@ -2,10 +2,10 @@ import Foundation
 
 /// How Bergr keeps you informed while it isn't open, as Settings shows it: where updates come
 /// from (the helper on each machine, or Bergr itself kept running), and two independent switches
-/// for what you get (notifications, the Lock Screen box).
+/// for what you get (notifications, the Live Activity).
 ///
-/// Stored in the keys the app already used: "Bergr stays running" is `KeepAlive.enabled`, the Lock
-/// Screen box is `LiveActivityController.pushKey`. Notifications got a key of their own. The helper
+/// Stored in the keys the app already used: "Bergr stays running" is `KeepAlive.enabled`, the Live
+/// Activity is `LiveActivityController.pushKey`. Notifications got a key of their own. The helper
 /// registration (`PushRegistration.enabled`) follows from these via `apply()`.
 @MainActor
 enum Delivery {
@@ -18,7 +18,7 @@ enum Delivery {
         set { UserDefaults.standard.set(newValue, forKey: notificationsKey); apply() }
     }
 
-    /// The Lock Screen box (Live Activity), from either source.
+    /// The Live Activity, from either source.
     static var lockScreen: Bool {
         get { UserDefaults.standard.bool(forKey: LiveActivityController.pushKey) }
         set { UserDefaults.standard.set(newValue, forKey: LiveActivityController.pushKey); apply() }
@@ -39,8 +39,8 @@ enum Delivery {
     }
 
     /// Once: carries the old switches over. Before, "Keep connected" always gave notifications and
-    /// the Lock Screen box; otherwise "Push alerts" gave notifications, and the Live Activity switch
-    /// (which needed push alerts) the box.
+    /// the Live Activity; otherwise "Push alerts" gave notifications, and the Live Activity switch
+    /// (which needed push alerts) the Live Activity.
     static func migrate(_ defaults: UserDefaults = .standard) {
         guard !defaults.bool(forKey: migratedKey) else { return }
         defaults.set(true, forKey: migratedKey)

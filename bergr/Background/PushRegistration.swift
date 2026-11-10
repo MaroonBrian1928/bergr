@@ -22,7 +22,7 @@ final class PushRegistration {
         }
     }
     /// Whether the helpers send this phone notifications (Settings → Notifications). Off, they
-    /// still keep the Lock Screen box current. Mirrors `Delivery.notifications`.
+    /// still keep the Live Activity current. Mirrors `Delivery.notifications`.
     private(set) var alerts = UserDefaults.standard.object(forKey: Delivery.notificationsKey) as? Bool ?? true
     func alertsChanged() { if alerts != Delivery.notifications { alerts = Delivery.notifications } }
     /// Lowercase hex APNs token, once iOS has issued one.
@@ -432,7 +432,7 @@ final class PushRegistration {
         // Bergr's id for this machine, sent back with each alert so a tap opens this machine.
         if let host { device["host_id"] = host.uuidString }
         if let key { device["key"] = key.base64EncodedString() }
-        // Off: the helper keeps the Lock Screen box current but sends no notifications (v10 on).
+        // Off: the helper keeps the Live Activity current but sends no notifications (v10 on).
         if !alerts { device["alerts"] = false }
         let object: [String: Any] = ["op": enabled ? "add" : "remove", "device": device]
         return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
