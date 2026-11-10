@@ -21,6 +21,8 @@ struct TerminalScreenView: View {
     @AppStorage(TerminalTheme.darkKey) private var darkTheme = TerminalTheme.defaultDark
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var wasInBackground = false
 
     /// The agent whose conversation can show as a chat. Not for terminals on machines herdr-core
     /// added (`machine/t7`): their files are on another computer.
@@ -115,8 +117,18 @@ struct TerminalScreenView: View {
         // Back from the background (or a dropped line): the line is new, and the terminal's
         // channel went with the old one. Attach again, or a reply typed in the chat goes nowhere
         // until the terminal itself is opened.
+        // (The same model attaches again: a new one would wait for the terminal to report its
+        // size, which a hidden terminal behind the chat never does.)
         .onChange(of: session.state == .connected) { _, connected in
             if connected, model.started { model.reconnect() }
+        }
+        // Kept connected in the background, the line may never visibly drop while the channel
+        // died with the app suspended (back from a notification): attach again anyway.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { wasInBackground = true }
+            guard phase == .active, wasInBackground else { return }
+            wasInBackground = false
+            if session.state == .connected, model.started { model.reconnect() }
         }
         .toolbar {
             if pane == nil {
@@ -152,14 +164,6 @@ struct TerminalScreenView: View {
         }
         .onChange(of: terminal.map { [$0.cols, $0.rows] }) { _, size in
             if let size { model.remoteSizeChanged(cols: size[0], rows: size[1]) }
-        }
-        .onChange(of: session.state) { _, state in
-            // The line dropped and came back: attach again.
-            if state == .connected, case .failed = model.phase {
-                model.stop()
-                // With the current theme: onChange(of: theme) won't fire again for the new model.
-                model = TerminalScreenModel(theme: theme)
-            }
         }
         // "Watch" from the list while this terminal is already open.
         .onChange(of: session.watchNext) { _, next in
