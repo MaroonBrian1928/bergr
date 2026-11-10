@@ -203,6 +203,21 @@ extension MarkdownBlock {
     /// Words in the block as rendered (markdown marks removed); a table or rule counts as one.
     var wordCount: Int {
         guard let text = revealText else { return 1 }
+        var isCode = false
+        if case .code = self { isCode = true }
+        // Code counts raw words, prose counts rendered ones, so the kind is part of the key.
+        let key = ((isCode ? "c" : "p") + text) as NSString
+        if let hit = Self.wordCounts.object(forKey: key) { return hit.intValue }
+        let count = wordCountUncached
+        Self.wordCounts.setObject(NSNumber(value: count), forKey: key)
+        return count
+    }
+
+    private static let wordCounts = NSCache<NSString, NSNumber>()
+
+    /// The count worked out from scratch.
+    var wordCountUncached: Int {
+        guard let text = revealText else { return 1 }
         if case .code = self { return text.split(whereSeparator: \.isWhitespace).count }
         return String(AttributedString.markdownPlain(text).characters).split(whereSeparator: \.isWhitespace).count
     }

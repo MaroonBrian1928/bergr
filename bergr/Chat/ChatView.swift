@@ -40,7 +40,7 @@ struct ChatView: View {
     @State private var position = ScrollPosition(edge: .bottom)
     /// While the list moves, its rows don't answer the pointer: on the Mac every pointer move over
     /// moving content was checked against every message (a quarter of the time spent scrolling).
-    @State private var scrolling = false
+    @State private var scroll = ScrollState()
     /// How many rows to draw. The list isn't lazy, so a long conversation drawn whole is slow to
     /// open and to scroll; the latest rows show, earlier ones a tap away. Search looks at all.
     @State private var rowLimit = Self.rowPage
@@ -108,7 +108,9 @@ struct ChatView: View {
     }
 
     var body: some View {
-        let all = shownRows
+        let allRows = rows
+        let all = shownRows(allRows)
+        let tools = ToolContext(liveRunID: liveRunID, agents: feed.subagents, lastRowID: allRows.last?.id)
         let hidden = search == nil ? max(0, all.count - rowLimit) : 0
         let shown = hidden > 0 ? Array(all.suffix(rowLimit)) : all
         let shownReplies = shownPending
@@ -134,7 +136,7 @@ struct ChatView: View {
                 }
                 Group {
                     ForEach(shown) { row in
-                        rowView(row)
+                        rowView(row, tools: tools)
                             // A row is hit as its box, not its text's outline: matching the outline
                             // on every pointer move made scrolling slow on the Mac.
                             .contentShape(.rect)
@@ -215,7 +217,7 @@ struct ChatView: View {
                         .transition(.opacity)
                 }
             }
-            .allowsHitTesting(!scrolling)
+            .modifier(IdleHitTesting(state: scroll))
             // Not a scroll target layout: with one, the scroll position followed the top row as
             // the list scrolled, and each change rebuilt the chat and redrew its text (slow on the
             // Mac). Showing earlier rows still scrolls to the old first row by its id.
@@ -232,7 +234,7 @@ struct ChatView: View {
         }
         .scrollPosition($position)
         .onScrollPhaseChange { _, phase in
-            if scrolling != phase.isScrolling { scrolling = phase.isScrolling }
+            if scroll.scrolling != phase.isScrolling { scroll.scrolling = phase.isScrolling }
         }
         .defaultScrollAnchor(.bottom)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
@@ -492,7 +494,7 @@ struct ChatView: View {
     private func copyButton(_ text: String) -> some View {
         // The copies together: the message, then each command in it, then Select Text.
         Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
-        commandButtons(Commands.in(text))
+        commandButtons(Commands.cachedIn(text))
         Button("Select Text", systemImage: "selection.pin.in.out") { selecting = SelectableMessage(text: text) }
     }
 
@@ -560,7 +562,7 @@ struct ChatView: View {
     }
 
     /// Rows that contain the search text: a message, a plan with a matching step, or tool steps that match.
-    private var shownRows: [Row] {
+    private func shownRows(_ rows: [Row]) -> [Row] {
         guard let search else { return rows }
         return rows.compactMap { row in
             switch row {
@@ -653,13 +655,27 @@ struct ChatView: View {
         return feed.subagents.filter { ($0.parent.map { !tools.contains($0) } ?? true) && $0.state == .running }
     }
 
+    /// What every tool row needs, worked out once per body rather than per row.
+    private struct ToolContext {
+        let liveRunID: String?
+        let agents: [ChatFeed.SubagentInfo]
+        let lastRowID: String?
+        let started: Set<String>
+        init(liveRunID: String?, agents: [ChatFeed.SubagentInfo], lastRowID: String?) {
+            self.liveRunID = liveRunID
+            self.agents = agents
+            self.lastRowID = lastRowID
+            started = Set(agents.compactMap(\.parent))
+        }
+    }
+
     @ViewBuilder
-    private func rowView(_ row: Row) -> some View {
+    private func rowView(_ row: Row, tools: ToolContext) -> some View {
         switch row {
         case .tools(let items):
             // The tool call that started a sub-agent is replaced by the sub-agent's row.
-            let agents = feed.subagents
-            let started = Set(agents.compactMap(\.parent))
+            let agents = tools.agents
+            let started = tools.started
             let steps = items.compactMap { item -> ToolRun.Step? in
                 if case .tool(let name, let summary) = item.kind, !started.contains(item.id) {
                     ToolRun.Step(id: item.id, name: name, summary: summary, output: feed.toolOutput[item.id])
@@ -668,11 +684,11 @@ struct ChatView: View {
             let mine = agents.filter { a in a.parent.map { p in items.contains { $0.id == p } } ?? false }
             VStack(alignment: .leading, spacing: 0) {
                 if !steps.isEmpty {
-                    let commands = Commands.ran(steps.map { ($0.name, $0.summary) })
-                    ToolRun(steps: steps, palette: palette, running: row.id == liveRunID,
-                            waiting: state == "blocked" && row.id == rows.last?.id)
+                    ToolRun(steps: steps, palette: palette, running: row.id == tools.liveRunID,
+                            waiting: state == "blocked" && row.id == tools.lastRowID)
                         // The commands the agent ran: copy one, or run it again.
                         .contextMenu {
+                            let commands = Commands.cachedRan(steps.map { ($0.name, $0.summary) })
                             if !commands.isEmpty { commandButtons(commands) }
                         }
                 }
@@ -1292,9 +1308,11 @@ private struct ToolRun: View {
     /// summary line (as the reply arrives) glides shut instead of snapping, and the chat, which
     /// keeps its bottom still, doesn't jerk everything above it.
     @State private var height: CGFloat?
+    /// The glide and mask apply while the run is live and shortly after (so folding shut still plays).
+    @State private var gliding = false
 
     var body: some View {
-        Group {
+        let content = Group {
             if running && !waiting {
                 live
                     .foregroundStyle(palette.secondary)
@@ -1307,14 +1325,28 @@ private struct ToolRun: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { new in
-            guard let old = height, abs(old - new) > 0.5 else { height = new; return }
-            withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { height = new }
+        return Group {
+            if gliding || running {
+                content
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { new in
+                        guard let old = height, abs(old - new) > 0.5 else { height = new; return }
+                        withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { height = new }
+                    }
+                    .frame(height: height, alignment: .top)
+                    // The live run's -10 vertical padding lets its lines hang past the measured box; a plain
+                    // clip cut the newest line's descenders, so the clip reaches that far too.
+                    .mask(Rectangle().padding(.vertical, -10))
+            } else {
+                content
+            }
         }
-        .frame(height: height, alignment: .top)
-        // The live run's -10 vertical padding lets its lines hang past the measured box; a plain
-        // clip cut the newest line's descenders, so the clip reaches that far too.
-        .mask(Rectangle().padding(.vertical, -10))
+        .task(id: running) {
+            if running { gliding = true; return }
+            guard gliding else { return }
+            try? await Task.sleep(for: .seconds(0.5))
+            gliding = false
+            height = nil
+        }
     }
 
     /// The run the agent is in: its latest steps, one line each, the newest last with a shimmer,
@@ -1471,9 +1503,23 @@ private struct ToolRun: View {
     }
 }
 
+/// The phrases that fit a width, with their shuffled order and the mark's, for one run (seed).
+struct WorkingPool: Equatable {
+    var phrases: [String] = []
+    var order: [Int] = []
+    var markOrder: [Int] = []
+
+    init() {}
+    init(width: CGFloat, seed: Int) {
+        phrases = WorkingRow.fitting(width)
+        order = WorkingRow.order(phrases.count, seed: seed)
+        markOrder = WorkingRow.order(WorkingMark.count, seed: seed &+ 1)
+    }
+}
+
 /// The agent is busy: a turning spark, a playful verb that changes every few seconds under a
 /// shimmer, how long it has been at it, and its own status text. Reduce Motion keeps it still.
-private struct WorkingRow: View {
+struct WorkingRow: View {
     let agent: ChatAgent
     let detail: String?
     let palette: ChatPalette
@@ -1484,6 +1530,10 @@ private struct WorkingRow: View {
 
     /// Width the row has, so a phrase too long for it is never picked (it would truncate mid-joke).
     @State private var width: CGFloat = 0
+    /// The phrases fitting `width` and their order for this run: worked out when the width, the
+    /// text size or the run changes, not on every tick.
+    @State private var pool = WorkingPool()
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     /// The phrases that fit `width` alongside the mark and the elapsed time, in phrase order.
     static func fitting(_ width: CGFloat) -> [String] {
@@ -1504,12 +1554,14 @@ private struct WorkingRow: View {
             // A new phrase every 3 s, in an order of its own for each run.
             let step = seconds / 3
             let seed = Int(since.timeIntervalSince1970)
-            let pool = Self.fitting(width)
-            let verb = pool[Self.order(pool.count, seed: seed)[step % pool.count]]
+            let phrases = pool.phrases.isEmpty ? Self.fitting(width) : pool.phrases
+            let verb = pool.phrases.isEmpty
+                ? phrases[Self.order(phrases.count, seed: seed)[step % phrases.count]]
+                : phrases[pool.order[step % phrases.count]]
             // The picture stays twice as long as a phrase, long enough for its motion to read.
             let markStep = seconds / 6
-            let markIndex = Self.order(WorkingMark.count, seed: seed &+ 1)[markStep % WorkingMark.count]
-            let markOrder = Self.order(WorkingMark.count, seed: seed &+ 1)
+            let markOrder = pool.markOrder.isEmpty ? Self.order(WorkingMark.count, seed: seed &+ 1) : pool.markOrder
+            let markIndex = markOrder[markStep % WorkingMark.count]
             let previousMark = markStep > 0 ? markOrder[(markStep - 1) % WorkingMark.count] : nil
             VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
@@ -1547,9 +1599,15 @@ private struct WorkingRow: View {
             }
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0; refreshPool() }
+        .onChange(of: typeSize) { refreshPool() }
+        .onChange(of: since) { refreshPool() }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(agent.displayName) is working" + (detail.map { ": \($0)" } ?? ""))
+    }
+
+    private func refreshPool() {
+        pool = WorkingPool(width: width, seed: Int(since.timeIntervalSince1970))
     }
 
     /// A shuffled order of 0..<count, the same for one run (one `since`) and different for the next.
@@ -1561,6 +1619,17 @@ private struct WorkingRow: View {
     static func elapsed(_ seconds: Int) -> String {
         seconds < 60 ? "\(seconds)s" : "\(seconds / 60)m \(seconds % 60)s"
     }
+}
+
+/// Whether the chat is scrolling, kept out of `ChatView` so a change only redraws `IdleHitTesting`.
+@Observable final class ScrollState {
+    var scrolling = false
+}
+
+/// While the list moves, its rows don't answer the pointer.
+private struct IdleHitTesting: ViewModifier {
+    let state: ScrollState
+    func body(content: Content) -> some View { content.allowsHitTesting(!state.scrolling) }
 }
 
 /// A band of light that sweeps across text while something is in progress.
@@ -1799,7 +1868,7 @@ private struct AnswerSlot: View {
     let record: (String, String) -> Void
 
     var body: some View {
-        if blocked || AnswerParser.inLogin(model.frame.textLines) {
+        if blocked || model.inLogin {
             AnswerCard(status: terminal.status, model: model, palette: palette) { record($0, $1) }
                 .transition(transition)
         }
@@ -1815,7 +1884,7 @@ private struct PermissionsMenu: View {
     let failed: (String) -> Void
 
     var body: some View {
-        let current = PermissionModes.current(agent, in: model.frame.textLines, saved: saved)
+        let current = PermissionModes.current(agent, in: model.textLines, saved: saved)
         Menu {
             ForEach(PermissionModes.modes(agent), id: \.self) { mode in
                 Button {
@@ -1868,6 +1937,27 @@ private extension AnyTransition {
 /// The commands in a message, for "Copy Command": code blocks, inline code that has a space in it
 /// (`git push origin main`, not a lone `name`), or the message itself when it's a `!` command.
 enum Commands {
+    private static let inCache = NSCache<NSString, NSArray>()
+    private static let ranCache = NSCache<NSString, NSArray>()
+
+    /// `in(_:)`, remembered per text: the context menus ask on every body.
+    static func cachedIn(_ text: String) -> [String] {
+        let key = text as NSString
+        if let hit = inCache.object(forKey: key) as? [String] { return hit }
+        let value = Self.in(text)
+        inCache.setObject(value as NSArray, forKey: key)
+        return value
+    }
+
+    /// `ran(_:)`, remembered per list of steps.
+    static func cachedRan(_ steps: [(name: String, summary: String)]) -> [String] {
+        let key = steps.map { "\($0.name)\u{1}\($0.summary)" }.joined(separator: "\u{2}") as NSString
+        if let hit = ranCache.object(forKey: key) as? [String] { return hit }
+        let value = ran(steps)
+        ranCache.setObject(value as NSArray, forKey: key)
+        return value
+    }
+
     static func `in`(_ text: String) -> [String] {
         var out: [String] = []
         func add(_ s: String) {

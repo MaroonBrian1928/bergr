@@ -153,8 +153,14 @@ final class ChatFeed {
     /// the conversation is built in `building` and shown in one step once it's caught up, so a
     /// first open lands on the finished conversation instead of growing and jumping.
     private(set) var items: [Item] = []
-    private var building: [Item] = [] {
-        didSet { if caughtUp { items = building } }
+    /// The backlog while it is read; empty once caught up (then `items` is the one copy, mutated in place).
+    @ObservationIgnored private var building: [Item] = []
+    /// Where changes go: `items` once caught up, else `building`. One storage, so no per-event copy.
+    private var working: [Item] {
+        get { caughtUp ? items : building }
+        _modify {
+            if caughtUp { yield &items } else { yield &building }
+        }
     }
     /// The tail of each tool's result, by the tool item's id (arrives after the tool itself).
     private(set) var toolOutput: [String: String] = [:]
@@ -185,8 +191,8 @@ final class ChatFeed {
     /// Puts an answer given from the chat into the conversation, where it was given.
     func recordDecision(question: String, answer: String) {
         let id = "decision-\(UUID().uuidString)"
-        index[id] = building.count
-        building.append(Item(id: id, kind: .decision(question: question, answer: answer)))
+        index[id] = working.count
+        working.append(Item(id: id, kind: .decision(question: question, answer: answer)))
     }
     private(set) var commands: [Command] = []
 
@@ -268,7 +274,7 @@ final class ChatFeed {
                 return
             } catch {
                 if Task.isCancelled { return }
-                if building.isEmpty { phase = .failed(Self.describe(error)) }
+                if working.isEmpty { phase = .failed(Self.describe(error)) }
             }
             try? await Task.sleep(for: .seconds(3))
         }
@@ -280,17 +286,17 @@ final class ChatFeed {
     static let stallAfter: TimeInterval = 15
 
     private func read(_ pipe: ExecPipe) async throws {
-        var pending = Data()
         var pings = 0
         var sawConversation = false
+        // Splitting, JSON, base64 and markdown happen off the main actor; chunks are awaited one
+        // at a time, so events keep their order.
+        let parser = ChatChunkParser()
         for try await chunk in pipe.output {
             lastHeard = .now
-            pending.append(chunk)
-            while let newline = pending.firstIndex(of: 0x0A) {
-                let line = pending[pending.startIndex..<newline]
-                pending = Data(pending[pending.index(after: newline)...])
-                guard let event = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                      let type = event["t"] as? String else { continue }
+            let events = await parser.feed(chunk)
+            for parsed in events {
+                let event = parsed.event
+                let type = parsed.type
                 switch type {
                 case "reset":
                     sawConversation = true
@@ -333,7 +339,7 @@ final class ChatFeed {
                         return Command(name: name, description: $0["description"] as? String ?? "")
                     }
                 case "msg", "tool", "toolout", "plan", "image", "question":
-                    apply(event, type: type)
+                    apply(event, type: type, prepared: parsed)
                 case "subagent":
                     applySubagent(event)
                 case "ping":
@@ -345,11 +351,12 @@ final class ChatFeed {
                             let shown = Set(items.map(\.id))
                             for item in building where !shown.contains(item.id) {
                                 arrivedAt[item.id] = .now
-                                if case .assistant = item.kind { revealStart[item.id] = .now }
+                                if case .assistant = item.kind { markReveal(item.id) }
                             }
                         }
                         caughtUp = true
                         items = building
+                        building = []
                     }
                     pings += 1
                     if !sawConversation && pings >= 2 { phase = .noConversation }
@@ -362,13 +369,22 @@ final class ChatFeed {
         }
     }
 
+    /// A reveal lasts about 1.5 s, so entries older than this are finished: drop them.
+    private static let revealKeep: TimeInterval = 5
+
+    private func markReveal(_ id: String) {
+        let stale = revealStart.filter { $0.value.timeIntervalSinceNow < -Self.revealKeep }.keys
+        for key in stale { revealStart[key] = nil }
+        revealStart[id] = .now
+    }
+
     /// The demo agent is answering: the chat shows it working.
     var demoWorking = false
 
     /// Ready-made items, for the design preview and tests.
     func loadItems(_ items: [Item]) {
         self.items = items
-        building = items
+        building = []
         index = Dictionary(uniqueKeysWithValues: items.enumerated().map { ($1.id, $0) })
         phase = .live
         caughtUp = true
@@ -391,14 +407,17 @@ final class ChatFeed {
 
     /// Sample events, for the design preview.
     func loadEvents(_ events: [[String: Any]]) {
-        building = []
+        working = []
         index = [:]
         for event in events {
             if event["t"] as? String == "usage" { applyUsage(event) } else { apply(event, type: event["t"] as? String ?? "") }
         }
         // All in at once, like the helper's first ping.
-        caughtUp = true
-        items = building
+        if !caughtUp {
+            caughtUp = true
+            items = building
+            building = []
+        }
         phase = .live
     }
 
@@ -430,7 +449,7 @@ final class ChatFeed {
         if next != usage { usage = next }
     }
 
-    private func apply(_ event: [String: Any], type: String) {
+    private func apply(_ event: [String: Any], type: String, prepared: ChatEvent? = nil) {
         guard let id = event["id"] as? String else { return }
         if type == "toolout" {
             if let text = event["text"] as? String, toolOutput[id] != text { toolOutput[id] = text }
@@ -444,16 +463,16 @@ final class ChatFeed {
             }
             // The latest plan replaces the old one and sits at the end, where the agent is now.
             if let at = index[id] {
-                building.remove(at: at)
-                index = Dictionary(uniqueKeysWithValues: building.enumerated().map { ($1.id, $0) })
+                working.remove(at: at)
+                index = Dictionary(uniqueKeysWithValues: working.enumerated().map { ($1.id, $0) })
             }
-            index[id] = building.count
-            building.append(Item(id: id, kind: .plan(steps)))
+            index[id] = working.count
+            working.append(Item(id: id, kind: .plan(steps)))
             return
         } else if type == "image" {
             let fromUser = event["role"] as? String == "user"
             if let b64 = event["data"] as? String {
-                guard let data = Data(base64Encoded: b64) else { return }
+                guard let data = prepared?.imageData ?? Data(base64Encoded: b64) else { return }
                 kind = .image(data: data, fromUser: fromUser)
             } else {
                 kind = .imageLoading(width: (event["width"] as? NSNumber)?.doubleValue,
@@ -481,20 +500,20 @@ final class ChatFeed {
                 kind = .note(text)
             } else {
                 // Unchanged text (a step read again): keep the parsed blocks.
-                if let at = index[id], case .assistant(let old, _) = building[at].kind, old == text { return }
-                kind = .assistant(text: text, blocks: MarkdownBlock.parse(text))
+                if let at = index[id], case .assistant(let old, _) = working[at].kind, old == text { return }
+                kind = .assistant(text: text, blocks: prepared?.blocks ?? MarkdownBlock.parse(text))
             }
         }
         if let at = index[id] {
-            if building[at].kind != kind { building[at].kind = kind }
+            if working[at].kind != kind { working[at].kind = kind }
         } else {
-            index[id] = building.count
+            index[id] = working.count
             if caughtUp {
                 arrivedAt[id] = .now
                 if arrivedAt.count > 300 { arrivedAt = arrivedAt.filter { $0.value.timeIntervalSinceNow > -5 } }
             }
-            building.append(Item(id: id, kind: kind))
-            if caughtUp, case .assistant = kind { revealStart[id] = .now }
+            working.append(Item(id: id, kind: kind))
+            if caughtUp, case .assistant = kind { markReveal(id) }
         }
     }
 
@@ -507,5 +526,75 @@ final class ChatFeed {
             return stderr.contains("python3") ? "This machine needs python3 for the chat view. Install it there, or use the terminal view." : stderr
         }
         return error.localizedDescription
+    }
+}
+
+/// One line from the helper, decoded off the main actor. The dictionary comes straight from
+/// `JSONSerialization` and is never mutated, so it is safe to hand across.
+nonisolated struct ChatEvent: @unchecked Sendable {
+    let event: [String: Any]
+    let type: String
+    /// An assistant reply's parsed markdown.
+    var blocks: [MarkdownBlock]?
+    /// An image's decoded bytes.
+    var imageData: Data?
+
+    /// Decodes one line; nil when it isn't a JSON object with a type (or an image's data isn't base64).
+    static func parse(line: Data) -> ChatEvent? {
+        guard let event = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+              let type = event["t"] as? String else { return nil }
+        var parsed = ChatEvent(event: event, type: type)
+        switch type {
+        case "image":
+            if let b64 = event["data"] as? String {
+                guard let data = Data(base64Encoded: b64) else { return nil }
+                parsed.imageData = data
+            }
+        case "msg":
+            let role = event["role"] as? String
+            if role != "user" && role != "note" {
+                parsed.blocks = MarkdownBlock.parse(event["text"] as? String ?? "")
+            }
+        default:
+            break
+        }
+        return parsed
+    }
+}
+
+/// Splits the helper's byte stream into lines, scanning each byte once.
+nonisolated struct ChatLineSplitter {
+    private var pending = Data()
+    /// How far into `pending` has been scanned for a newline.
+    private var scanned = 0
+
+    /// Appends a chunk and returns the complete lines it finished.
+    mutating func feed(_ chunk: Data) -> [Data] {
+        pending.append(chunk)
+        var lines: [Data] = []
+        var lineStart = 0
+        let count = pending.count
+        pending.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+            var i = scanned
+            while i < count {
+                if bytes[i] == 0x0A {
+                    lines.append(Data(bytes[lineStart..<i]))
+                    lineStart = i + 1
+                }
+                i += 1
+            }
+        }
+        if lineStart > 0 { pending = Data(pending[(pending.startIndex + lineStart)...]) }
+        scanned = pending.count
+        return lines
+    }
+}
+
+/// Parses chunks on a background executor, keeping the partial line between them.
+actor ChatChunkParser {
+    private var splitter = ChatLineSplitter()
+
+    func feed(_ chunk: Data) -> [ChatEvent] {
+        splitter.feed(chunk).compactMap { ChatEvent.parse(line: $0) }
     }
 }

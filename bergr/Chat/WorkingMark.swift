@@ -22,7 +22,7 @@ struct WorkingMark: View {
     static let morphDuration = 1.1
 
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
             Canvas { gc, canvas in
                 let t = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate
                 let now = Pattern.at(index)
