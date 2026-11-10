@@ -18,8 +18,8 @@ final="$out/appstore"
 
 # Captions, in the order the shots should appear in the App Store.
 shots=(1-terminals 2-agent 3-needs-you 4-shell)
-titles=("All your agents" "Jump into any terminal" "Answer when it matters" "Powered by Ghostty")
-subtitles=("Every machine, space and agent at a glance." "See what an agent is doing, live." "Blocked agents come first. Reply in a tap." "Built on libghostty, the engine of Ghostty.")
+titles=("All your agents" "Chat with any agent" "Answer when it matters" "Powered by Ghostty")
+subtitles=("Every machine, sorted by what needs you." "Its conversation, live, as it works." "Blocked agents come first. Reply in a tap." "A real terminal, built on libghostty.")
 
 # A clean, dedicated simulator (sets $device).
 source scripts/simulator.sh
