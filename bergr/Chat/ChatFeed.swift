@@ -184,6 +184,8 @@ final class ChatFeed {
     /// A newer Claude Code is installed on the machine than this conversation runs (`/update`
     /// restarts into it): the installed version, else nil.
     private(set) var newerAgent: String?
+    /// The models in the picker that need the newer version.
+    private(set) var modelsNeedingUpdate: [String] = []
     /// The conversation being followed (Claude: its session id).
     private(set) var conversationID: String?
     /// The Claude Code version this conversation runs.
@@ -290,6 +292,7 @@ final class ChatFeed {
                 case "version":
                     agentVersion = event["running"] as? String
                     newerAgent = event["installed"] as? String
+                    modelsNeedingUpdate = event["needs"] as? [String] ?? []
                 case "commands":
                     commands = (event["items"] as? [[String: Any]] ?? []).compactMap {
                         guard let name = $0["name"] as? String else { return nil }

@@ -398,7 +398,7 @@ struct ChatView: View {
             CommandSuggestions(commands: feed.commands, draft: $draft, palette: palette)
                 .padding(.horizontal, 12)
             if agent == .claude, let newer = feed.newerAgent, !updateDismissed {
-                UpdateBanner(running: feed.agentVersion, installed: newer, palette: palette,
+                UpdateBanner(running: feed.agentVersion, installed: newer, needs: feed.modelsNeedingUpdate, palette: palette,
                              canUpdate: canType && state != "working") {
                     restartAgent()
                 } dismiss: {
@@ -1727,6 +1727,7 @@ enum Commands {
 private struct UpdateBanner: View {
     let running: String?
     let installed: String
+    let needs: [String]
     let palette: ChatPalette
     let canUpdate: Bool
     let update: () -> Void
@@ -1737,10 +1738,11 @@ private struct UpdateBanner: View {
             Image(systemName: "arrow.down.circle")
                 .foregroundStyle(palette.accent)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Claude Code \(installed) is installed")
+                Text(needs.isEmpty ? "Claude Code \(installed) is installed"
+                     : "\(needs.formatted(.list(type: .and))) needs a restart")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(palette.text)
-                Text(canUpdate ? "This chat runs \(running ?? "an older version"). Restarting keeps the conversation."
+                Text(canUpdate ? "This chat runs Claude Code \(running ?? "an older version"), \(installed) is installed. Restarting keeps the conversation."
                                : "Restart once Claude finishes this step.")
                     .font(.caption)
                     .foregroundStyle(palette.secondary)

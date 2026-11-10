@@ -194,18 +194,30 @@ class ClaudeModels(Base):
 
 
 class ClaudeVersion(Base):
-    def test_newer_installed_version_is_reported(self):
-        for v in ("2.1.319", "2.1.321", "2.1.40"):
+    def setUp(self):
+        super().setUp()
+        import json as j
+        for v in ("2.1.300", "2.1.322"):
             os.makedirs(os.path.join(self.home, ".local", "share", "claude", "versions", v))
-        ns = load("claude", self.home)
-        evs = list(ns["Claude"]().parse({"type": "user", "version": "2.1.319", "uuid": "v1", "message": {"content": "hi"}}))
-        self.assertEqual(evs[0], {"t": "version", "running": "2.1.319", "installed": "2.1.321"})
+        d = os.path.join(self.home, ".claude", "cache", "model-catalog")
+        os.makedirs(d)
+        with open(os.path.join(d, "x-cc.json"), "w") as fh:
+            j.dump({"catalog": {"config": {"models": [
+                {"id": "claude-fable-5-2", "name": "Fable 5.2", "section": "main", "min_claude_code_version": "2.1.290"},
+                {"id": "claude-new", "name": "New", "section": "main", "min_claude_code_version": "2.1.320"}]}}}, fh)
 
-    def test_up_to_date_reports_nothing_newer(self):
-        os.makedirs(os.path.join(self.home, ".local", "share", "claude", "versions", "2.1.321"))
+    def version(self, running):
         ns = load("claude", self.home)
-        evs = list(ns["Claude"]().parse({"type": "user", "version": "2.1.321", "uuid": "v2", "message": {"content": "hi"}}))
-        self.assertEqual(evs[0], {"t": "version", "running": "2.1.321", "installed": None})
+        evs = list(ns["Claude"]().parse({"type": "user", "version": running, "uuid": "v", "message": {"content": "hi"}}))
+        return evs[0]
+
+    def test_banner_when_a_model_needs_the_installed_version(self):
+        self.assertEqual(self.version("2.1.310"),
+                         {"t": "version", "running": "2.1.310", "installed": "2.1.322", "needs": ["New"]})
+
+    def test_no_banner_for_a_newer_version_no_model_needs(self):
+        self.assertEqual(self.version("2.1.321"),
+                         {"t": "version", "running": "2.1.321", "installed": None, "needs": []})
 
 
 class ToolOutput(Base):

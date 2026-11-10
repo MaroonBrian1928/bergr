@@ -1124,12 +1124,25 @@ def claude_installed():
 
 
 def claude_version_event():
-    """Says when a newer Claude Code is installed than this conversation runs: `/update` restarts
-    it into the new one, keeping the conversation."""
+    """Says when this conversation's Claude Code is too old for a model in its picker (the
+    catalog names each model's minimum version) and a new enough one is installed: restarting
+    into it makes that model usable. Not for every newer version: Claude Code updates often and
+    fetches the next one as it starts, so that would always be showing."""
     CLAUDE_VERSION[1] = claude_installed()
     running, installed = CLAUDE_VERSION
-    newer = bool(running and installed and version_key(installed) > version_key(running))
-    yield {"t": "version", "running": running, "installed": installed if newer else None}
+    needs = []
+    if running and installed:
+        try:
+            with open(claude_catalog_file()) as fh:
+                models = json.load(fh)["catalog"]["config"]["models"]
+        except Exception:
+            models = []
+        for m in models:
+            least = m.get("min_claude_code_version") if isinstance(m, dict) else None
+            if m.get("section", "main") == "main" and least \
+                    and version_key(running) < version_key(least) <= version_key(installed):
+                needs.append(m.get("name") or m.get("id"))
+    yield {"t": "version", "running": running, "installed": installed if needs else None, "needs": needs}
 
 
 MODELS_SEEN = [None, 0, 0]  # file, its mtime, ticks since the last check
@@ -1154,6 +1167,9 @@ def refresh_models(force=False):
     if force or (f, mtime) != tuple(MODELS_SEEN[:2]):
         MODELS_SEEN[0], MODELS_SEEN[1] = f, mtime
         emit({"t": "models", "items": list_models()})
+        if AGENT == "claude" and CLAUDE_VERSION[0] and not force:
+            for ev in claude_version_event():
+                emit(ev)
 
 
 def list_models():
