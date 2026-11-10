@@ -179,15 +179,11 @@ struct SettingsView: View {
                     }
                 }
             } footer: {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(!push.enabled
-                         ? "Turn on push alerts to use this: the same helpers keep it up to date."
-                         : liveActivityContent == "full"
-                            ? "Agent names and status aren't encrypted: Apple and Bergr's push service can read them on the way to your Lock Screen."
-                            : "How many agents need you, are working and are done, on your Lock Screen. Only the numbers leave your machines.")
-                    Text("No answer buttons: an agent's question never leaves your machines this way. To see questions and answer them from the Lock Screen, turn on Keep connected in background.")
-                        .fontWeight(.semibold)
-                }
+                Text(!push.enabled
+                     ? "Needs push alerts. The same helpers keep it up to date."
+                     : liveActivityContent == "full"
+                        ? "Shows agent names and status. Apple and Bergr's push service can read them. To answer agents from the Lock Screen, use Keep connected instead."
+                        : "Shows how many agents need you, are working or are done. To answer agents from the Lock Screen, use Keep connected instead.")
             }
 
             Section {
@@ -200,7 +196,7 @@ struct SettingsView: View {
                 }
                 .frame(minHeight: 44)
             } footer: {
-                Text("Bergr stays connected and sends alerts and Live Activity updates itself, instantly and without the helpers. Only this way does the Live Activity show an agent's question with buttons to answer it. It uses more battery, and \"Always\" location access to keep running; your location is never stored or sent.")
+                Text("Bergr updates alerts and the Live Activity itself, with no helpers. You can answer agents from the Lock Screen. Uses more battery and \"Always\" location access. Bergr never stores or sends your location.")
             }
 
             Section {
