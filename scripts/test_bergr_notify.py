@@ -1,6 +1,7 @@
 #!/usr/bin/env python3 -I
 """Tests for bergr/Push/bergr-notify.py. Run: python3 -I scripts/test_bergr_notify.py"""
-import base64, importlib.util, json, os, subprocess, tempfile, unittest
+import base64, importlib.util, json, os, subprocess, tempfile, unittest, urllib.error
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "..", "bergr", "Push", "bergr-notify.py")
@@ -338,10 +339,6 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(hosts, ["UUID-1"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class LiveActivityTests(unittest.TestCase):
     def terms(self):
         return {t["address"]: t for t in [term("t1", "blocked"), term("t2", "working"), term("t3", "working"),
@@ -368,14 +365,15 @@ class LiveActivityTests(unittest.TestCase):
         self.assertTrue(p.due("s", dict(summary, working=2), 1003))  # changed
         self.assertTrue(p.due("s", summary, 1301))
         p.devices["s"].update(active=False, at=1000)
-        self.assertTrue(p.due("s", summary, 1061))             # no activity: about once a minute
+        self.assertFalse(p.due("s", summary, 1061))           # inactive, unchanged: no idle beat
+        self.assertTrue(p.due("s", summary, 1300))            # but a beat while a count is non-zero
 
     def test_post_sends_counts_and_learns_full_mode(self):
         p = notify.ActivityPoster()
         sent = []
 
         class Resp:
-            def __init__(self, body): self.body = body
+            def __init__(self, body): self.body, self.status = body, 200
             def __enter__(self): return self
             def __exit__(self, *a): return False
             def read(self): return json.dumps(self.body).encode()
@@ -415,3 +413,154 @@ class HideAfterTests(unittest.TestCase):
                                                        "data": {"status": {"state": "done"}}}})
         after = notify.apply_event(before, ev)
         self.assertGreater(after["t1"]["status_ms"], 0)
+
+
+def fleet(blocked=0, working=0, done=0, msg="needs approval"):
+    """Terminals in the given numbers of states; `msg` is the text the rows would show."""
+    terms = {}
+    for state, n in (("blocked", blocked), ("working", working), ("done", done)):
+        for i in range(n):
+            terms[f"{state}{i}"] = term(f"{state}{i}", state, turn=1, msg=msg)
+    return terms
+
+
+class FakeResponse:
+    def __init__(self, body, status=200):
+        self.body, self.status = body, status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return json.dumps(self.body).encode()
+
+
+class FakeRelay:
+    """Stands in for urllib.request.urlopen: records every request body, answers with `reply`."""
+    def __init__(self):
+        self.calls, self.reply, self.status, self.down = [], {"active": False}, 200, False
+
+    def __call__(self, req, timeout=0):
+        self.calls.append(json.loads(req.data))
+        if self.down:
+            raise urllib.error.URLError("relay down")
+        return FakeResponse(self.reply, self.status)
+
+
+ACTIVE_FULL = {"active": True, "mode": "full", "hide_after": 86400}
+
+
+class PosterCadenceTests(unittest.TestCase):
+    DEVICE = {"relay": "https://relay.example", "secret": "s3cret", "host_id": "H"}
+
+    def setUp(self):
+        self.poster = notify.ActivityPoster()
+        self.relay = FakeRelay()
+        patch = mock.patch.object(notify.urllib.request, "urlopen", self.relay)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def post(self, terms, now):
+        self.poster.post(self.DEVICE, terms, "box", now)
+
+    def activate(self):
+        self.relay.reply = ACTIVE_FULL  # the relay answers every post with "active"
+        self.poster.learn("s3cret", ACTIVE_FULL)
+
+    def test_inactive_all_zero_never_posts(self):
+        self.post(fleet(), 1000)
+        self.post(fleet(), 1000 + 600)
+        self.assertEqual(len(self.relay.calls), 0)
+
+    def test_inactive_unchanged_nonzero_beats_only_at_300s(self):
+        self.post(fleet(working=1), 1000)
+        self.post(fleet(working=1), 1299)
+        self.assertEqual(len(self.relay.calls), 1)
+        self.post(fleet(working=1), 1300)
+        self.assertEqual(len(self.relay.calls), 2)
+
+    def test_inactive_count_change_posts_counts_only(self):
+        self.post(fleet(working=1), 1000)
+        self.post(fleet(working=2), 1001)  # within 2 s: not yet
+        self.assertEqual(len(self.relay.calls), 1)
+        self.post(fleet(working=2), 1010)
+        self.assertEqual(len(self.relay.calls), 2)
+        self.assertEqual(self.relay.calls[1]["working"], 2)
+        self.assertNotIn("rows", self.relay.calls[1])
+
+    def test_urgent_posts_inside_the_min_gap(self):
+        self.post(fleet(working=1), 1000)
+        self.post(fleet(working=1, blocked=1), 1001)
+        self.assertEqual(len(self.relay.calls), 2)
+        self.assertTrue(self.relay.calls[1]["urgent"])
+
+    def test_active_text_change_in_full_mode_waits_20s(self):
+        self.activate()
+        self.post(fleet(working=1, msg="step 1"), 1000)
+        self.post(fleet(working=1, msg="step 2"), 1005)
+        self.post(fleet(working=1, msg="step 2"), 1019)
+        self.assertEqual(len(self.relay.calls), 1)
+        self.post(fleet(working=1, msg="step 2"), 1020)
+        self.assertEqual(len(self.relay.calls), 2)
+        self.assertEqual(self.relay.calls[1]["rows"][0]["status"], "step 2")
+
+    def test_active_count_change_posts_after_2s(self):
+        self.activate()
+        self.post(fleet(working=1), 1000)
+        self.post(fleet(working=2), 1001)
+        self.assertEqual(len(self.relay.calls), 1)
+        self.post(fleet(working=2), 1002)
+        self.assertEqual(len(self.relay.calls), 2)
+
+    def test_active_beats_only_while_counts_nonzero(self):
+        self.activate()
+        self.post(fleet(), 1000)
+        self.post(fleet(), 2000)
+        self.assertEqual(len(self.relay.calls), 0)
+        self.post(fleet(working=1), 2001)
+        self.post(fleet(working=1), 2300)
+        self.assertEqual(len(self.relay.calls), 1)
+        self.post(fleet(working=1), 2301)
+        self.assertEqual(len(self.relay.calls), 2)
+
+    def test_failed_post_not_recorded_and_retried_after_30s(self):
+        self.relay.down = True
+        self.post(fleet(working=1), 1000)
+        self.assertIsNone(self.poster.devices["s3cret"]["last"])
+        self.relay.down = False
+        self.post(fleet(working=1), 1010)
+        self.assertEqual(len(self.relay.calls), 1)  # no retry within 30 s
+        self.post(fleet(working=1), 1030)
+        self.assertEqual(len(self.relay.calls), 2)
+        self.assertEqual(self.poster.devices["s3cret"]["last"]["working"], 1)
+
+    def test_non_200_is_a_failure(self):
+        self.relay.status = 503
+        self.post(fleet(working=1), 1000)
+        self.assertIsNone(self.poster.devices["s3cret"]["last"])
+
+    def test_inactive_reply_returns_mode_to_counts(self):
+        self.activate()
+        self.assertEqual(self.poster.devices["s3cret"]["mode"], "full")
+        self.poster.learn("s3cret", {"active": False})
+        self.assertEqual(self.poster.devices["s3cret"]["mode"], "counts")
+
+    def test_push_reply_with_active_flips_device(self):
+        self.relay.reply = {"active": True, "mode": "full", "hide_after": 3600}
+        notify.send_alert({"devices": [self.DEVICE]}, "T", "B", "t1", "box", notify.JwtCache(),
+                          on_reply=self.poster.learn)
+        d = self.poster.devices["s3cret"]
+        self.assertEqual((d["active"], d["mode"], d["hide_after"]), (True, "full", 3600))
+
+    def test_push_reply_without_active_is_ignored(self):
+        self.relay.reply = {"ok": True}
+        notify.send_alert({"devices": [self.DEVICE]}, "T", "B", "t1", "box", notify.JwtCache(),
+                          on_reply=self.poster.learn)
+        self.assertNotIn("s3cret", self.poster.devices)
+
+
+if __name__ == "__main__":
+    unittest.main()

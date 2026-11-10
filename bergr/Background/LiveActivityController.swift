@@ -85,6 +85,27 @@ final class LiveActivityController {
             prompt: PromptBuilder.prompt(machines: machines, screens: screens))
     }
 
+    /// What each machine's helper would post for the relay to sum, keyed by host id (the helper's
+    /// `machine`): the per-machine counts `content` gives, and rows only in full mode. Seeded when
+    /// the relay starts an activity, so a machine that stays quiet still counts toward the first push.
+    nonisolated static func seed(machines: [LiveActivityMachine], fullContent: Bool) -> [String: Any] {
+        var out: [String: Any] = [:]
+        for machine in machines {
+            let part = content(machines: [machine])
+            var entry: [String: Any] = [
+                "needsYou": part?.needsYou ?? 0, "working": part?.working ?? 0, "done": part?.done ?? 0,
+            ]
+            if fullContent {
+                entry["rows"] = (part?.rows ?? []).map { row -> [String: Any] in
+                    ["kind": row.kind, "title": row.title, "status": row.status, "machine": row.machine,
+                     "needsYou": row.needsYou, "host": row.host, "address": row.address]
+                }
+            }
+            out[machine.host.uuidString] = entry
+        }
+        return out
+    }
+
     /// Identifies a blocked terminal's current question: a new status or turn is a new key.
     nonisolated static func screenKey(host: UUID, terminal: Terminal) -> String {
         [host.uuidString, terminal.address, terminal.status?.title ?? "", terminal.status?.msg ?? "",
@@ -296,11 +317,17 @@ final class LiveActivityController {
 
     private var tokenTask: Task<Void, Never>?
     private var registeredForPush = false
+    /// The machines' counts as the activity shows them now, sent with the token (see `seed`).
+    private var relaySeed: [String: Any] = [:]
 
     /// Hands the activity's push token to the relay as soon as iOS gives it, with the time the
     /// app gets to finish that in the background; the machines' helpers then keep it current.
     private func registerForPush(_ activity: Activity<BergrActivityAttributes>) {
         tokenTask?.cancel()
+        // Only machines whose list is live: a paused or reconnecting one would seed zeros that its
+        // helper, seeing no change of its own, would never correct. Left out, it posts on its next change.
+        let live = machines().filter { sessions.existing($0.host)?.state == .connected }
+        relaySeed = Self.seed(machines: live, fullContent: Self.fullContent)
         let app = UIApplication.shared
         var background = UIBackgroundTaskIdentifier.invalid
         background = app.beginBackgroundTask { app.endBackgroundTask(background) }
@@ -316,7 +343,8 @@ final class LiveActivityController {
                 let token = PushRegistration.hex(data)
                 guard let self, await self.post(path: "v1/activity", method: "POST",
                                                  body: ["token": token, "mode": Self.fullContent ? "full" : "counts",
-                                                        "hide_after": String(QuietAgents.seconds)])
+                                                        "hide_after": String(QuietAgents.seconds),
+                                                        "machines": self.relaySeed])
                 else { return }
                 self.registeredForPush = true
                 app.endBackgroundTask(background)
@@ -332,7 +360,7 @@ final class LiveActivityController {
         Task { [weak self] in _ = await self?.post(path: "v1/activity", method: "DELETE", body: nil) }
     }
 
-    private func post(path: String, method: String, body: [String: String]?) async -> Bool {
+    private func post(path: String, method: String, body: [String: Any]?) async -> Bool {
         guard let secret = PushRegistration.shared.relaySecret else { return false }
         var request = URLRequest(url: PushRegistration.relayURL.appending(path: path))
         request.httpMethod = method

@@ -25,7 +25,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 8
+VERSION = 9
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 ALERT_STATES = ("blocked", "done")
 KINDS = ("permission", "question", "auth")
@@ -278,36 +278,62 @@ def activity_summary(terms, rows=False, host_id="", machine="", hide_after=0, no
     return out
 
 
+def _counts(summary):
+    return (summary["needsYou"], summary["working"], summary["done"])
+
+
+def parse_reply(raw):
+    """The relay's JSON reply as a dict; {} when there is none or it isn't JSON."""
+    try:
+        answer = json.loads(raw or b"{}")
+    except ValueError:
+        return {}
+    return answer if isinstance(answer, dict) else {}
+
+
 class ActivityPoster:
-    """Posts this machine's summary to the relay for the phone's Live Activity: when it changes
-    (at most every 2 s; urgent when someone newly needs the user), every 5 minutes while the
-    phone has an activity (so the relay keeps counting this machine), and about once a minute
-    while it has none (to notice one starting). Names and statuses only in the phone's "full"
-    mode, which the relay reports back."""
-    MIN_GAP, ACTIVE_BEAT, IDLE_BEAT = 2, 300, 60
+    """Posts this machine's summary to the relay for the phone's Live Activity, only when something
+    the phone shows has changed, so the traffic stays about as rare as push alerts:
+    - Inactive (the relay last said no activity, or hasn't said): counts only, and only when a count
+      changes: at least 2 s apart, at once when someone newly needs the user. Nothing while all counts
+      are zero. A 300 s beat while any count is non-zero, for phone apps that don't seed the activity.
+    - Active: a count change at least 2 s after the last post (at once when someone newly needs the
+      user). In "full" mode, a change to row text or status alone at most every 20 s. A 300 s beat
+      while any count is non-zero.
+    A post that fails is not recorded; the same change is sent again after 30 s."""
+    MIN_GAP, TEXT_GAP, BEAT, RETRY_DELAY = 2, 20, 300, 30
+    ZERO = {"needsYou": 0, "working": 0, "done": 0}
 
     def __init__(self):
-        self.devices = {}  # secret -> {"mode", "active", "last", "at", "hide_after"}
+        self.devices = {}  # secret -> {"mode", "active", "last", "at", "retry_at", "hide_after"}
+
+    def _device(self, secret):
+        return self.devices.setdefault(secret, {"mode": "counts", "active": None, "last": None,
+                                                "at": 0, "retry_at": 0})
 
     def due(self, secret, summary, now):
-        d = self.devices.setdefault(secret, {"mode": "counts", "active": None, "last": None, "at": 0})
-        if now - d["at"] < self.MIN_GAP:
+        d = self._device(secret)
+        if now < d["retry_at"]:
             return False
-        if summary != d["last"]:
+        prev = d["last"] or self.ZERO
+        gap = now - d["at"]
+        if _counts(summary) != _counts(prev):
+            return summary["needsYou"] > prev["needsYou"] or gap >= self.MIN_GAP
+        if d["active"] and d["last"] is not None and summary != d["last"] and gap >= self.TEXT_GAP:
             return True
-        return now - d["at"] >= (self.ACTIVE_BEAT if d["active"] else self.IDLE_BEAT)
+        return any(_counts(summary)) and gap >= self.BEAT
 
     def post(self, device, terms, host, now):
         secret = device["secret"]
-        d = self.devices.setdefault(secret, {"mode": "counts", "active": None, "last": None, "at": 0})
+        d = self._device(secret)
         host_id = device.get("host_id") or host
-        summary = activity_summary(terms, rows=d["mode"] == "full", host_id=host_id, machine=host,
+        rows = bool(d["active"]) and d["mode"] == "full"
+        summary = activity_summary(terms, rows=rows, host_id=host_id, machine=host,
                                    hide_after=d.get("hide_after", 86400), now=now)
         if not self.due(secret, summary, now):
             return
-        previous = d["last"] or {}
-        urgent = summary["needsYou"] > previous.get("needsYou", 0)
-        d["at"], d["last"] = now, summary
+        urgent = summary["needsYou"] > (d["last"] or self.ZERO)["needsYou"]
+        d["at"] = now
         url = device["relay"].rstrip("/") + "/v1/activity/state"
         body = dict(summary, machine=host_id[:100], urgent=urgent)
         req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers={
@@ -315,17 +341,33 @@ class ActivityPoster:
             "user-agent": f"bergr-notify/{VERSION}"})
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
-                answer = json.loads(resp.read() or b"{}")
+                if resp.status != 200:
+                    raise RuntimeError(f"HTTP {resp.status}")
+                raw = resp.read()
         except Exception as e:
             log(f"live activity update failed: {e}")
+            d["retry_at"] = now + self.RETRY_DELAY
             return
-        d["active"] = bool(answer.get("active"))
+        d["last"] = summary
+        d["retry_at"] = 0
+        self.learn(secret, parse_reply(raw))
+
+    def learn(self, secret, answer):
+        """Takes the relay's reply, to a post or to a push alert. Ignored when it has no "active"
+        (an old relay)."""
+        if "active" not in answer:
+            return
+        d = self._device(secret)
+        d["active"] = bool(answer["active"])
         if isinstance(answer.get("hide_after"), int):
             if answer["hide_after"] != d.get("hide_after"):
                 d["at"] = 0  # A different setting: send the counts it gives right away.
             d["hide_after"] = answer["hide_after"]
+        if not d["active"]:
+            d["mode"] = "counts"
+            return
         mode = answer.get("mode") if answer.get("mode") in ("counts", "full") else "counts"
-        if d["active"] and mode != d["mode"]:
+        if mode != d["mode"]:
             d["mode"] = mode
             d["at"] = 0  # The mode changed (full content now): send the rows right away.
 
@@ -451,20 +493,22 @@ def relay_request(device, title, body, address, host):
 
 
 def send_relay(device, title, body, address, host):
+    """Sends one push through the device's relay. Returns the relay's reply (see ActivityPoster.learn)."""
     url, headers, data = relay_request(device, title, body, address, host)
     req = urllib.request.Request(url, data=data, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            resp.read()
+            return parse_reply(resp.read())
     except urllib.error.HTTPError as e:
         if e.code == 410:
             raise RuntimeError("the phone is no longer registered (turn push alerts off and on again in Bergr)")
         raise RuntimeError(f"relay HTTP {e.code}: {e.read()[:200].decode('utf-8', 'replace')}")
 
 
-def send_alert(cfg, title, body, address, host, jwt_cache):
+def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None):
     """Sends one alert to every device (through its relay, or straight to APNs with a key on this
-    machine) or to the ntfy topic. Returns the successful sends."""
+    machine) or to the ntfy topic. Returns the successful sends. on_reply(secret, reply) gets each
+    relay's reply."""
     mode = cfg.get("mode", "apns")
     sent = 0
     devices = [d for d in cfg.get("devices") or [] if isinstance(d, dict)]
@@ -472,8 +516,10 @@ def send_alert(cfg, title, body, address, host, jwt_cache):
     for device in [d for d in devices if d.get("relay") and d.get("secret")]:
         try:
             # The app's own id for this machine when it gave one, so a tap opens the right one.
-            send_relay(device, title, body, address, device.get("host_id") or host)
+            reply = send_relay(device, title, body, address, device.get("host_id") or host)
             sent += 1
+            if on_reply and isinstance(reply, dict):
+                on_reply(device["secret"], reply)
         except Exception as e:
             log(f"push to {device.get('name', 'device')} through the relay failed: {e}")
     cfg = dict(cfg, devices=[d for d in devices if not (d.get("relay") and d.get("secret"))])
@@ -531,7 +577,8 @@ def run():
                         continue
                     for a in alerts:
                         log(f"alert for {a['address']}: {a['title']}")
-                        send_alert(cfg, a["title"], a["body"], a["address"], host, jwt_cache)
+                        send_alert(cfg, a["title"], a["body"], a["address"], host, jwt_cache,
+                                   on_reply=poster.learn)
             finally:
                 if proc.poll() is None:
                     proc.kill()

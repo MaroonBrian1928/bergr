@@ -7,6 +7,23 @@ compatibility_date = "2026-10-01"
 binding = "REGISTRATIONS"
 id = "e5a0f8f192cd4fabb85bcc1a434c4567"
 
+# Per-device hot state (Live Activity records, push/state rate buckets): one SQLite-backed DO each.
+[[durable_objects.bindings]]
+name = "DEVICE"
+class_name = "Device"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Device"]
+
+# POST /v1/register: 5 per 60 s per hashed IP. namespace_id is any integer string, unique in the account.
+[[ratelimits]]
+name = "REGISTER_LIMITER"
+namespace_id = "1001"
+  [ratelimits.simple]
+  limit = 5
+  period = 60
+
 # Secrets (set with `npx wrangler secret put <NAME>`):
 #   APNS_TEAM_ID, APNS_SANDBOX_KEY_ID, APNS_SANDBOX_KEY,
 #   APNS_PRODUCTION_KEY_ID, APNS_PRODUCTION_KEY
