@@ -156,6 +156,8 @@ struct RootView: View {
         #endif
         .task {
             if notifier == nil {
+                Delivery.migrate()
+                Delivery.apply()
                 let notifier = AgentNotifier(sessions: sessions)
                 notifier.start()
                 self.notifier = notifier
@@ -191,7 +193,7 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background:
-                // Kept connected in the background (Settings → Alerts): the sessions stay up, so
+                // Kept connected in the background (Settings → When Bergr isn't open): the sessions stay up, so
                 // agents that need you can alert. Otherwise they pause, as before.
                 if KeepAlive.shared.enabled {
                     KeepAlive.shared.appEnteredBackground()

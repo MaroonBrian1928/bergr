@@ -21,6 +21,17 @@ struct SettingsView: View {
         UserDefaults.standard.stringArray(forKey: LiveActivityController.historyKey) ?? []
     }
     @AppStorage(LiveActivityController.contentKey) private var liveActivityContent = "counts"
+    @AppStorage(Delivery.notificationsKey) private var notifications = false
+
+    /// "Updates come from": Bergr itself (kept running) or the helpers.
+    private var stayRunning: Binding<Bool> {
+        Binding(get: { keepAlive.enabled }, set: { keepAlive.enabled = $0; Delivery.apply() })
+    }
+
+    /// A Notifications or Lock Screen box switch: stores it, then registers the helpers to match.
+    private func deliverySwitch(_ value: Binding<Bool>) -> Binding<Bool> {
+        Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0; Delivery.apply() })
+    }
     @State private var push = PushRegistration.shared
     /// Adds the demo machine and shows it.
     var addDemo: () -> Void = {}
@@ -108,18 +119,79 @@ struct SettingsView: View {
                 Text("Finished and idle agents untouched for longer don't count on the Lock Screen and widget, and fold away under Older in the list. Agents that need you or are working always show.")
             }
 
-            // In the order they depend on each other: alerts (the helper on each machine), the
-            // Live Activity (sent the same way), and staying connected (the other way to get both).
+            // When Bergr isn't open: where updates come from, then what you get (either source).
             Section {
-                Toggle(isOn: $push.enabled) {
+                Picker(selection: stayRunning) {
+                    Text("Helpers on your computers").tag(false)
+                    Text("Bergr stays running").tag(true)
+                } label: {
                     Label {
-                        Text("Push alerts")
+                        Text("Updates come from")
+                    } icon: {
+                        SettingsIcon("arrow.down.circle.fill", color: .blue)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(minHeight: 44)
+            } header: {
+                Text("When Bergr isn't open")
+            } footer: {
+                Text(keepAlive.enabled
+                     ? "Bergr keeps running in the background and watches your computers itself. Agents' questions appear on the Lock Screen with buttons to answer them. Uses more battery, and needs \"Always\" location access to keep running. Bergr never stores or sends your location."
+                     : "A small helper on each computer tells your phone what its agents are doing. Easy on the battery. You can see what agents are doing, but you can't answer them from the Lock Screen.")
+            }
+
+            Section {
+                Toggle(isOn: deliverySwitch($notifications)) {
+                    Label {
+                        Text("Notifications")
                     } icon: {
                         SettingsIcon("app.badge.fill", color: .orange)
                     }
                 }
                 .frame(minHeight: 44)
-                if push.enabled, let sessions {
+                Toggle(isOn: deliverySwitch($liveActivityPush)) {
+                    Label {
+                        Text("Lock Screen box")
+                    } icon: {
+                        SettingsIcon("platter.filled.top.iphone", color: .green)
+                    }
+                }
+                .frame(minHeight: 44)
+                if liveActivityPush, !keepAlive.enabled {
+                    Picker(selection: $liveActivityContent) {
+                        Text("Numbers only").tag("counts")
+                        Text("Numbers and names").tag("full")
+                    } label: {
+                        Label {
+                            Text("Show")
+                        } icon: {
+                            SettingsIcon("list.bullet", color: .gray)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(minHeight: 44)
+                }
+                if liveActivityPush, !liveActivityHistory.isEmpty {
+                    DisclosureGroup("Recent") {
+                        ForEach(liveActivityHistory.reversed(), id: \.self) { line in
+                            Text(line).font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.subheadline)
+                    .frame(minHeight: 44)
+                }
+            } footer: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Notifications: when an agent needs you or finishes. Lock Screen box: how many agents need you, are working or are done.")
+                    if liveActivityPush, !keepAlive.enabled, liveActivityContent == "full" {
+                        Text("Names and status can be read by Apple and Bergr's push service on the way.")
+                    }
+                }
+            }
+
+            if push.enabled, let sessions {
+                Section {
                     ForEach(sessions.ids.compactMap { sessions.existing($0) }.filter { $0.state == .connected }, id: \.host.id) { session in
                         let state = push.helperState[session.host.id]
                         HStack {
@@ -135,68 +207,14 @@ struct SettingsView: View {
                             }
                         }
                     }
-                }
-            } header: {
-                Text("When Bergr is closed")
-            } footer: {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Get an alert when an agent needs you or finishes. A small helper on each machine sends them, encrypted so only this device can read them.")
-                    if let error = push.lastError { Text(error).foregroundStyle(.red) }
-                }
-            }
-
-            Section {
-                Toggle(isOn: $liveActivityPush) {
-                    Label {
-                        Text("Live Activity")
-                    } icon: {
-                        SettingsIcon("platter.filled.top.iphone", color: .green)
+                } header: {
+                    Text("Helpers")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Only this phone can read what the helpers send.")
+                        if let error = push.lastError { Text(error).foregroundStyle(.red) }
                     }
                 }
-                .frame(minHeight: 44)
-                .disabled(!push.enabled)
-                if liveActivityPush, push.enabled {
-                    Picker(selection: $liveActivityContent) {
-                        Text("Counts").tag("counts")
-                        Text("Counts and agent names").tag("full")
-                    } label: {
-                        Label {
-                            Text("Show")
-                        } icon: {
-                            SettingsIcon("list.bullet", color: .gray)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .frame(minHeight: 44)
-                    if !liveActivityHistory.isEmpty {
-                        DisclosureGroup("Recent") {
-                            ForEach(liveActivityHistory.reversed(), id: \.self) { line in
-                                Text(line).font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
-                            }
-                        }
-                        .font(.subheadline)
-                        .frame(minHeight: 44)
-                    }
-                }
-            } footer: {
-                Text(!push.enabled
-                     ? "Needs push alerts. The same helpers keep it up to date."
-                     : liveActivityContent == "full"
-                        ? "Shows agent names and status. Apple and Bergr's push service can read them. To answer agents from the Lock Screen, use Keep connected instead."
-                        : "Shows how many agents need you, are working or are done. To answer agents from the Lock Screen, use Keep connected instead.")
-            }
-
-            Section {
-                Toggle(isOn: $keepAlive.enabled) {
-                    Label {
-                        Text("Keep connected in background")
-                    } icon: {
-                        SettingsIcon("bell.badge.fill", color: .red)
-                    }
-                }
-                .frame(minHeight: 44)
-            } footer: {
-                Text("Bergr updates alerts and the Live Activity itself, with no helpers. You can answer agents from the Lock Screen. Uses more battery and \"Always\" location access. Bergr never stores or sends your location.")
             }
 
             Section {

@@ -25,7 +25,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 9
+VERSION = 10
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 ALERT_STATES = ("blocked", "done")
 KINDS = ("permission", "question", "auth")
@@ -513,7 +513,8 @@ def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None):
     sent = 0
     devices = [d for d in cfg.get("devices") or [] if isinstance(d, dict)]
     # Devices registered through a relay carry its address and a secret; the relay holds the key.
-    for device in [d for d in devices if d.get("relay") and d.get("secret")]:
+    # A device with "alerts": false wants only the Lock Screen box kept current, not notifications.
+    for device in [d for d in devices if d.get("relay") and d.get("secret") and d.get("alerts", True) is not False]:
         try:
             # The app's own id for this machine when it gave one, so a tap opens the right one.
             reply = send_relay(device, title, body, address, device.get("host_id") or host)

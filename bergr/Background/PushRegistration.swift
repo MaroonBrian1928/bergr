@@ -21,6 +21,10 @@ final class PushRegistration {
             if newValue { register() } else { unregisterFromRelay() }
         }
     }
+    /// Whether the helpers send this phone notifications (Settings → Notifications). Off, they
+    /// still keep the Lock Screen box current. Mirrors `Delivery.notifications`.
+    private(set) var alerts = UserDefaults.standard.object(forKey: Delivery.notificationsKey) as? Bool ?? true
+    func alertsChanged() { if alerts != Delivery.notifications { alerts = Delivery.notifications } }
     /// Lowercase hex APNs token, once iOS has issued one.
     var deviceToken: String?
     var lastError: String?
@@ -178,15 +182,16 @@ final class PushRegistration {
 
     private func observe() {
         let current = withObservationTracking {
-            (enabled, deviceToken, (sessions?.ids ?? []).compactMap { id in
+            (enabled, deviceToken, alerts, (sessions?.ids ?? []).compactMap { id in
                 sessions?.existing(id).map { ($0, $0.state == .connected && $0.canRunCommands) }
             })
         } onChange: { [weak self] in
             Task { @MainActor in self?.observe() }
         }
         guard let token = current.1 else { return }
-        let state = "\(token)|\(current.0)"
-        for (session, ready) in current.2 where ready {
+        let alerts = current.2
+        let state = "\(token)|\(current.0)|\(alerts)"
+        for (session, ready) in current.3 where ready {
             let id = session.host.id
             let identity = ObjectIdentifier(session)
             if let last = written[id], last.session == identity, last.state == state { continue }
@@ -194,7 +199,7 @@ final class PushRegistration {
             // after the relay secret was forgotten.
             guard let secret = relaySecret ?? (current.0 ? nil : "") else { continue }
             written[id] = (identity, state)
-            let command = Self.command(token: token, secret: secret, enabled: current.0, host: id)
+            let command = Self.command(token: token, secret: secret, enabled: current.0, alerts: alerts, host: id)
             let enabled = current.0
             Task { @MainActor [weak self] in
                 if enabled, let reason = await Self.probe(session) {
@@ -385,7 +390,7 @@ final class PushRegistration {
             let sent = await Self.output("python3 -I ~/.local/bin/bergr-notify --test 2>&1", on: session)
             let tested = sent?.contains("sent 1") == true || sent?.contains("sent 2") == true
             finishedMessage = (updated ? "The push helper on \(name) is updated." : "Push alerts are set up on \(name).")
-                + (tested ? " A test alert is on its way." : " The test alert didn't go out; check Settings → Push alerts.")
+                + (tested ? " A test alert is on its way." : " The test alert didn't go out; check Settings → When Bergr isn't open.")
         } else {
             helperState[id] = before
             let reason = result?["error"] as? String ?? "no answer from the machine"
@@ -419,20 +424,24 @@ final class PushRegistration {
     }
 
     /// What goes in the payload for this device: the relay and its secret, not the APNs token.
-    nonisolated static func payload(token: String, secret: String, enabled: Bool, relay: URL = relayURL,
-                                    name: String, key: Data? = PushAlertKey.current(), host: UUID? = nil) -> Data {
+    nonisolated static func payload(token: String, secret: String, enabled: Bool, alerts: Bool = true,
+                                    relay: URL = relayURL, name: String, key: Data? = PushAlertKey.current(),
+                                    host: UUID? = nil) -> Data {
         var device: [String: Any] = ["id": deviceID(token: token), "relay": relay.absoluteString,
                                      "secret": secret, "name": name]
         // Bergr's id for this machine, sent back with each alert so a tap opens this machine.
         if let host { device["host_id"] = host.uuidString }
         if let key { device["key"] = key.base64EncodedString() }
+        // Off: the helper keeps the Lock Screen box current but sends no notifications (v10 on).
+        if !alerts { device["alerts"] = false }
         let object: [String: Any] = ["op": enabled ? "add" : "remove", "device": device]
         return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
     }
 
     /// Script and payload both travel base64-encoded, so no shell quoting can break them.
-    static func command(token: String, secret: String, enabled: Bool, host: UUID? = nil) -> String {
-        command(payload: payload(token: token, secret: secret, enabled: enabled, name: UIDevice.current.name, host: host))
+    static func command(token: String, secret: String, enabled: Bool, alerts: Bool = true, host: UUID? = nil) -> String {
+        command(payload: payload(token: token, secret: secret, enabled: enabled, alerts: alerts,
+                                 name: UIDevice.current.name, host: host))
     }
 
     nonisolated static func command(payload: Data) -> String {

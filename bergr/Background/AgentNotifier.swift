@@ -88,6 +88,8 @@ final class AgentNotifier {
     }
 
     private func post(_ alert: Alert) {
+        // Settings → Notifications.
+        guard UserDefaults.standard.bool(forKey: Delivery.notificationsKey) else { return }
         let content = UNMutableNotificationContent()
         content.title = alert.title
         content.body = alert.body

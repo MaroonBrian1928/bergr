@@ -328,6 +328,16 @@ class RelayTests(unittest.TestCase):
             notify.send_relay = orig
         self.assertEqual((n, sent), (1, ["abcd"]))
 
+    def test_device_with_alerts_off_gets_none(self):
+        sent = []
+        orig = notify.send_relay
+        notify.send_relay = lambda d, *a: sent.append(d["id"])
+        try:
+            n = notify.send_alert({"devices": [dict(self.DEVICE, alerts=False)]}, "t", "b", "t1", "pop", notify.JwtCache())
+        finally:
+            notify.send_relay = orig
+        self.assertEqual((n, sent), (0, []))
+
     def test_relay_sends_host_id(self):
         hosts = []
         orig = notify.send_relay
