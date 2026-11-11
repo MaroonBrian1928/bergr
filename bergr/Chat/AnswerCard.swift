@@ -197,22 +197,27 @@ struct AnswerCard: View {
     var body: some View {
         let lines = model.frame.textLines
         let choices = AnswerParser.choices(in: lines)
-        let asked = lines.last(where: { $0.contains("?") }).map(AnswerParser.clean)
+        // Only a question near the prompt counts: a "?" higher up is the conversation.
+        let asked = lines.suffix(12).last(where: { $0.contains("?") }).map(AnswerParser.clean)
+        // Claude Code and Codex ask with numbered menus that ignore y/n: if none was read, the
+        // generic Yes/No buttons would answer nothing.
+        let numberedOnly = ["claude-code", "codex"].contains(status?.app ?? "")
         if choices.isEmpty, AnswerParser.rewindOpen(lines) {
             rewindCard
         } else if choices.isEmpty, let step = AnswerParser.loginStep(in: lines) {
             LoginStepCard(step: step, model: model, palette: palette)
         } else if choices.isEmpty, AnswerParser.needsLogin(in: lines) || status?.kind == "auth" {
             loginCard
-        } else if choices.isEmpty, let asked {
+        } else if choices.isEmpty, let asked, !numberedOnly {
             NeedsYouBar(status: status, model: model, dark: scheme == .dark) { answer in
                 onAnswer?(asked, answer)
             }
         } else if choices.isEmpty {
             // Blocked, but nothing on screen to answer: Yes/No would only type letters into the
             // agent's input. Say so instead, and point at the terminal.
-            notice(title: status?.title ?? "Waiting for you",
-                   detail: "There's nothing to answer here. Open the terminal (top right) to see what it needs.")
+            notice(title: status?.title ?? asked ?? "Waiting for you",
+                   detail: [status?.msg, "Bergr couldn't read the choices. Open the terminal (top right) to answer."]
+                       .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n"))
         } else {
             card(choices, question: AnswerParser.question(in: lines), context: AnswerParser.context(in: lines))
         }
