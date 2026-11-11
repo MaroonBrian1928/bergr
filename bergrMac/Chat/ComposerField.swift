@@ -65,20 +65,25 @@ struct ComposerField: NSViewRepresentable {
         context.coordinator.parent = self
         guard let view = scroll.documentView as? ComposerTextView else { return }
         view.delegate = context.coordinator
+        // The chat's SwiftUI color didn't survive the trip to NSColor (text drew invisibly): use the
+        // system's label colors, which follow light and dark mode.
+        let textColor = NSColor.labelColor
         view.textColor = textColor
         view.insertionPointColor = textColor
         // New typing takes its look from the typing attributes, not textColor: without them it
         // came out in the default color, white on the light bubble.
         view.typingAttributes = [.foregroundColor: textColor, .font: view.font ?? .preferredFont(forTextStyle: .body)]
         view.placeholder = placeholder
-        view.placeholderColor = placeholderColor
+        view.placeholderColor = .placeholderTextColor
         view.isEditable = enabled
         view.isSelectable = enabled
         view.maxLines = maxLines
         view.onPasteImages = { onPasteImages($0) }
         if view.string != text, !view.hasMarkedText() {
             view.string = text
-            view.textColor = textColor
+        }
+        if let storage = view.textStorage, storage.length > 0, !view.hasMarkedText() {
+            storage.addAttribute(.foregroundColor, value: textColor, range: NSRange(location: 0, length: storage.length))
         }
         // The text view spans the whole box, so a click anywhere in it lands in the text.
         let width = scroll.contentSize.width
