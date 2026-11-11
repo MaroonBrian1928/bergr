@@ -62,6 +62,16 @@ struct ChatView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var palette: ChatPalette { .of(colorScheme) }
+
+    /// The agent's queue as its transcript records it, less what our own replies already show.
+    private func othersQueued(_ ours: [ReplyDelivery]) -> [String] {
+        var mine = ours.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return feed.queued.filter { text in
+            let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let i = mine.firstIndex(of: t) { mine.remove(at: i); return false }
+            return true
+        }
+    }
     private var draftKey: String? {
         guard let session, let address = terminal?.address else { return nil }
         return "\(session.host.id.uuidString)|\(address)"
@@ -183,6 +193,29 @@ struct ChatView: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .modifier(ArriveIn(active: true))
                     .transition(.identity)
+                }
+                // Queued in the agent from elsewhere (typed in its terminal, another device):
+                // shown like ours, without Retry. Ours are already above.
+                if search == nil {
+                    ForEach(Array(othersQueued(shownReplies).enumerated()), id: \.offset) { _, text in
+                        VStack(alignment: .trailing, spacing: 6) {
+                            UserBubble(text: text, palette: palette)
+                                .opacity(0.55)
+                                .contextMenu {
+                                    if state == "working" {
+                                        Button("Send Now", systemImage: "bolt.fill") { pushNow() }
+                                    }
+                                    copyButton(text)
+                                }
+                                .accessibilityLabel("Queued: \(text)")
+                            Label("Queued, the agent reads it after this step", systemImage: "clock")
+                                .font(.caption)
+                                .foregroundStyle(palette.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .modifier(ArriveIn(active: true))
+                        .transition(.identity)
+                    }
                 }
                 if search == nil, state == "working" {
                     // herdr's status is mostly the agent's description of its current tool, which

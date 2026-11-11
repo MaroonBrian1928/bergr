@@ -195,6 +195,8 @@ final class ChatFeed {
         working.append(Item(id: id, kind: .decision(question: question, answer: answer)))
     }
     private(set) var commands: [Command] = []
+    /// Messages waiting in the agent's queue (Claude Code), oldest first, wherever they were typed.
+    private(set) var queued: [String] = []
 
     /// A model the agent can switch to mid-session, with its effort levels.
     struct ModelOption: Equatable, Sendable, Identifiable {
@@ -342,6 +344,9 @@ final class ChatFeed {
                     apply(event, type: type, prepared: parsed)
                 case "subagent":
                     applySubagent(event)
+                case "queued":
+                    let now = event["items"] as? [String] ?? []
+                    if now != queued { queued = now }
                 case "ping":
                     if !caughtUp {
                         // Read again after coming back: what's new since the chat was last on

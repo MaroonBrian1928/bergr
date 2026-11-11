@@ -429,6 +429,26 @@ class Claude:
             if c and d.get("parentUuid"):
                 yield {"t": "toolout", "id": d["parentUuid"], "text": c}
             return
+        # Its input queue: messages typed while it works, from this terminal or anywhere else.
+        # The whole queue goes out on each change, so a replay ends with the queue as it is now.
+        if kind == "queue-operation" and not d.get("isSidechain"):
+            q = self.__dict__.setdefault("queue", [])
+            op, text = d.get("operation"), d.get("content")
+            if op == "enqueue" and isinstance(text, str) and text.strip():
+                q.append(text)
+            elif op == "dequeue" and q:
+                q.pop(0)
+            elif op == "remove" and q:
+                if isinstance(text, str) and text in q:
+                    q.remove(text)
+                else:
+                    q.pop(0)
+            elif op == "clear":
+                q.clear()
+            else:
+                return
+            yield {"t": "queued", "items": list(q)}
+            return
         # A message typed while Claude was working: Claude Code records it as a queued-command
         # attachment, not a user message, once it takes it in mid-turn.
         att = d.get("attachment") if kind == "attachment" else None

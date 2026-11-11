@@ -110,6 +110,17 @@ class MemoryCitations(Base):
 
 
 class QueuedMessages(Base):
+    def test_queue_operations_track_the_queue(self):
+        ns = load("claude", self.home)
+        c = ns["Claude"]()
+        def op(**kw):
+            return list(c.parse({"type": "queue-operation", **kw}))
+        self.assertEqual(op(operation="enqueue", content="a"), [{"t": "queued", "items": ["a"]}])
+        self.assertEqual(op(operation="enqueue", content="b"), [{"t": "queued", "items": ["a", "b"]}])
+        self.assertEqual(op(operation="remove", content="b", reason="absorbed_mid_turn"), [{"t": "queued", "items": ["a"]}])
+        self.assertEqual(op(operation="dequeue"), [{"t": "queued", "items": []}])
+        self.assertEqual(op(operation="dequeue"), [])
+
     def test_mid_turn_message_is_a_user_message(self):
         ns = load("claude", self.home)
         evs = list(ns["Claude"]().parse({"type": "attachment", "uuid": "a1", "attachment": {
