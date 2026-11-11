@@ -76,7 +76,9 @@ public enum AttachCommand {
 
     /// The `.command` file's content: one `exec` of the quoted argv.
     public static func script(argv: [String]) -> String {
-        "#!/bin/zsh -l\nexec " + argv.map(quote).joined(separator: " ") + "\n"
+        // herdr's variables say "you are inside terminal tN": inherited (Bergr started from a herdr
+        // terminal), hc would refuse to attach, taking it for that terminal attaching to itself.
+        "#!/bin/zsh -l\nunset -m 'HC_*' 'HERDR_*'\nexec " + argv.map(quote).joined(separator: " ") + "\n"
     }
 
     /// Single-quotes `s` for a POSIX shell.

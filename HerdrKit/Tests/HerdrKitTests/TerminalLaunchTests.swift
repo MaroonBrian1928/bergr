@@ -50,7 +50,7 @@ import Testing
     @Test func scriptQuotesEveryArgument() throws {
         let argv = try AttachCommand.argv(remote: .init(user: "u", host: "h", port: 2200), address: "t1")
         #expect(AttachCommand.script(argv: argv) ==
-            "#!/bin/zsh -l\nexec 'ssh' '-t' '-p' '2200' 'u@h' 'PATH=\"$HOME/.local/bin:$PATH\" hc attach '\\''t1'\\'''\n")
+            "#!/bin/zsh -l\nunset -m 'HC_*' 'HERDR_*'\nexec 'ssh' '-t' '-p' '2200' 'u@h' 'PATH=\"$HOME/.local/bin:$PATH\" hc attach '\\''t1'\\'''\n")
         #expect(AttachCommand.quote("it's") == "'it'\\''s'")
     }
 

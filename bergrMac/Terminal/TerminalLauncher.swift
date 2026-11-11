@@ -36,6 +36,9 @@ enum TerminalLauncher {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: plan.executable)
             process.arguments = plan.arguments
+            process.environment = ProcessInfo.processInfo.environment.filter {
+                !$0.key.hasPrefix("HC_") && !$0.key.hasPrefix("HERDR_")
+            }
             try process.run()
             return nil
         } catch is AttachCommand.Refusal {
