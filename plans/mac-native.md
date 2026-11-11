@@ -439,3 +439,13 @@ paused; C may find that `ChatView` needs more seams than 0 provided.
     menu-bar-only (`LSUIElement`)?
 12. **`just mac`**: keep the iPad build beside `just mac-native` for now, or replace it as soon as the
     native app is usable (memory note says app changes are installed on phone and this Mac).
+
+## Decisions (user, 2026-11-10)
+
+All recommendations accepted: separate bundle id `com.redacted.bergr.mac`; second target with
+`bergrIOS/` and `bergrMac/` folders beside shared `bergr/`; local notifications only in v1; Secure
+Enclave keys plus import from `~/.ssh` (ssh-agent later); a "This Mac" machine in v1; terminal attach
+uses the system `ssh` (document it, add copy-public-key and test buttons); launch through a generated
+`.command` script; macOS 26, Apple silicon only; shared MARKETING_VERSION/build number with tags
+`mac-v<version>`; this repo's GitHub releases, tap `MaroonBrian1928/homebrew-tap`, Developer ID cert via
+the API key; Dock icon plus menu-bar item; keep `just mac` (iPad build) and add `just mac-native`.
