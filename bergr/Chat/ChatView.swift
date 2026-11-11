@@ -117,7 +117,7 @@ struct ChatView: View {
             // Not lazy: every row is measured, so the list never grows by an estimate and shrinks
             // back (a jump on every arrival), and a conversation about one screen tall doesn't flip
             // between estimated and real heights (the list drifting by itself).
-            VStack(alignment: .leading, spacing: 18) {
+            ChatRows(alignment: .leading, spacing: 18) {
                 if search == nil { placeholder }
                 if hidden > 0 {
                     Button {
@@ -2091,3 +2091,11 @@ private struct ArriveIn: ViewModifier {
             }
     }
 }
+
+/// The chat's row stack. Eager on iOS (see the comment where it's used); lazy on the Mac, where a
+/// large window and long conversations made laying out every row on each scroll frame too slow.
+#if os(macOS)
+typealias ChatRows<Content: View> = LazyVStack<Content>
+#else
+typealias ChatRows<Content: View> = VStack<Content>
+#endif
