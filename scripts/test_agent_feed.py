@@ -121,6 +121,18 @@ class QueuedMessages(Base):
         self.assertEqual(op(operation="dequeue"), [{"t": "queued", "items": []}])
         self.assertEqual(op(operation="dequeue"), [])
 
+    def test_queued_notices_are_hidden_but_keep_their_place(self):
+        ns = load("claude", self.home)
+        c = ns["Claude"]()
+        def op(**kw):
+            return list(c.parse({"type": "queue-operation", **kw}))
+        self.assertEqual(op(operation="enqueue", content="<task-notification>\n<task-id>x</task-id>"),
+                         [{"t": "queued", "items": []}])
+        self.assertEqual(op(operation="enqueue", content="mine"), [{"t": "queued", "items": ["mine"]}])
+        self.assertEqual(op(operation="dequeue"), [{"t": "queued", "items": ["mine"]}])
+        self.assertEqual(op(operation="enqueue", content="<b>bold</b> isn't a notice? it is hidden too"),
+                         [{"t": "queued", "items": ["mine"]}])
+
     def test_mid_turn_message_is_a_user_message(self):
         ns = load("claude", self.home)
         evs = list(ns["Claude"]().parse({"type": "attachment", "uuid": "a1", "attachment": {

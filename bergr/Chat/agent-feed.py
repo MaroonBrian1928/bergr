@@ -245,6 +245,9 @@ def code_mode_call(src):
     return m.group(1), args
 
 
+QUEUED_NOTICE = re.compile(r"\s*<[a-z][a-z0-9-]*[ >]")
+
+
 def tool_summary(args):
     if isinstance(args, str):
         try:
@@ -447,7 +450,9 @@ class Claude:
                 q.clear()
             else:
                 return
-            yield {"t": "queued", "items": list(q)}
+            # Claude Code queues its own notices too (<task-notification>, <system-reminder>…): they
+            # stay in the queue so the order holds, but only what a person typed is shown.
+            yield {"t": "queued", "items": [x for x in q if not QUEUED_NOTICE.match(x)]}
             return
         # A message typed while Claude was working: Claude Code records it as a queued-command
         # attachment, not a user message, once it takes it in mid-turn.
