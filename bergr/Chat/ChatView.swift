@@ -45,7 +45,13 @@ struct ChatView: View {
     /// How many rows to draw. The list isn't lazy, so a long conversation drawn whole is slow to
     /// open and to scroll; the latest rows show, earlier ones a tap away. Search looks at all.
     @State private var rowLimit = Self.rowPage
+    // Rows shown at once ("Show earlier" adds more). Fewer on the Mac, where a wide window lays out
+    // long rows and every one is measured.
+    #if os(macOS)
+    private static let rowPage = 40
+    #else
     private static let rowPage = 150
+    #endif
     /// Scrolled well up from the latest message: a button brings it back.
     @State private var awayFromLatest = false
     #if os(macOS)
@@ -2127,10 +2133,7 @@ private struct ArriveIn: ViewModifier {
     }
 }
 
-/// The chat's row stack. Eager on iOS (see the comment where it's used); lazy on the Mac, where a
-/// large window and long conversations made laying out every row on each scroll frame too slow.
-#if os(macOS)
-typealias ChatRows<Content: View> = LazyVStack<Content>
-#else
+/// The chat's row stack: eager everywhere (see the comment where it's used). Lazy on the Mac
+/// bounced on opening a chat: rows realized near the bottom changed the estimated height, the
+/// bottom anchor moved, more rows realized… The Mac shows fewer rows at a time instead (`rowPage`).
 typealias ChatRows<Content: View> = VStack<Content>
-#endif
