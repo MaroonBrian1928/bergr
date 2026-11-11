@@ -72,8 +72,13 @@ mac-native configuration="Debug":
     if [ -n "${BERGR_ASC_KEY_PATH:-}" ]; then
         auth=(-authenticationKeyPath "${BERGR_ASC_KEY_PATH/#\~/$HOME}" -authenticationKeyID "$BERGR_ASC_KEY_ID" -authenticationKeyIssuerID "$BERGR_ASC_KEY_ISSUER")
     fi
-    xcodebuild -project {{project}} -scheme bergrMac -derivedDataPath .build/xcode-mac-native -allowProvisioningUpdates{{signing}} ${auth[@]+"${auth[@]}"} \
+    # Unsigned unless BERGR_MAC_SIGNED=1: signing needs a Mac provisioning profile (see
+    # docs/mac-release.md). Unsigned, the keychain isn't available, so Secure Enclave keys are off.
+    sign=(CODE_SIGNING_ALLOWED=NO)
+    if [ -n "${BERGR_MAC_SIGNED:-}" ]; then sign=(-allowProvisioningUpdates{{signing}} ${auth[@]+"${auth[@]}"}); fi
+    xcodebuild -project {{project}} -scheme bergrMac -derivedDataPath .build/xcode-mac-native "${sign[@]}" \
         -configuration {{configuration}} -destination 'platform=macOS,arch=arm64' build | xcbeautify --quiet
+    git checkout -q -- bergr.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved 2>/dev/null || true
     name="{{ if configuration == "Debug" { "Bergr Dev" } else { "Bergr" } }}"
     osascript -e "tell application \"$name\" to quit" 2>/dev/null || true
     open ".build/xcode-mac-native/Build/Products/{{configuration}}/$name.app"
