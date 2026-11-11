@@ -19,9 +19,9 @@ struct MenuBarLabel: View {
         let counts = AgentCounts(sessions: sessions)
         let title = AgentRoster.menuBarTitle(counts)
         HStack(spacing: 4) {
-            Image(systemName: counts.needsYou > 0 ? "bubble.left.and.exclamationmark.bubble.right.fill"
-                                                  : "bubble.left.and.text.bubble.right")
-            if !title.isEmpty { Text(title) }
+            // Bergr's own mark as a template image: it takes the menu bar's color like the system's.
+            Image("MenuBarIcon")
+            if !title.isEmpty { Text(title).monospacedDigit() }
         }
         .accessibilityLabel("Bergr")
         .accessibilityValue(counts.needsYou + counts.working == 0
@@ -81,49 +81,113 @@ struct MenuBarContent: View {
 
     var body: some View {
         let entries = entries
-        VStack(alignment: .leading, spacing: 2) {
+        let needs = entries.filter { $0.state != .working }
+        let working = entries.filter { $0.state == .working }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Bergr").font(.headline)
+                Spacer()
+                Text(summary(needs: needs.count, working: working.count))
+                    .font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+            }
+            .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 8)
+
             if entries.isEmpty {
-                Text("No agents need you or are working.")
-                    .foregroundStyle(.secondary)
-                    .padding(8)
+                VStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle").font(.title2).foregroundStyle(.secondary)
+                    Text("All quiet").font(.subheadline.weight(.medium))
+                    Text("No agent needs you or is working.").font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 22)
             } else {
-                ForEach(entries) { entry in
-                    Button {
-                        openWindow(value: entry.ref)
-                        NSApp.activate()
-                    } label: {
-                        HStack(spacing: 8) {
-                            Circle()
-                                .fill(entry.state == .working ? Color.blue : Color.orange)
-                                .frame(width: 8, height: 8)
-                            VStack(alignment: .leading, spacing: 0) {
-                                Text(entry.title).lineLimit(1)
-                                Text("\(entry.machine) · \(entry.state == .working ? "working" : "needs you")")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .contentShape(.rect)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        section("Needs You", needs)
+                        section("Working", working)
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 6).padding(.bottom, 6)
+                }
+                .frame(maxHeight: 360)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider()
+            HStack {
+                Button("Open Bergr") {
+                    openWindow(id: "main")
+                    NSApp.activate()
+                }
+                .keyboardShortcut("o")
+                Spacer()
+                Menu {
+                    Button("Settings…") { openSettings(); NSApp.activate() }
+                    Divider()
+                    Button("Quit Bergr") { NSApp.terminate(nil) }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("More")
+            }
+            .controlSize(.small)
+            .padding(.horizontal, 14).padding(.vertical, 10)
+        }
+        .frame(width: 320)
+    }
+
+    private func summary(needs: Int, working: Int) -> String {
+        switch (needs, working) {
+        case (0, 0): return ""
+        case (_, 0): return "\(needs) need\(needs == 1 ? "s" : "") you"
+        case (0, _): return "\(working) working"
+        default: return "\(needs) need\(needs == 1 ? "s" : "") you · \(working) working"
+        }
+    }
+
+    @ViewBuilder
+    private func section(_ title: String, _ items: [AgentEntry]) -> some View {
+        if !items.isEmpty {
+            Text(title.uppercased())
+                .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                .padding(.horizontal, 8).padding(.top, 8).padding(.bottom, 4)
+            ForEach(items) { entry in
+                MenuBarRow(entry: entry) {
+                    openWindow(value: entry.ref)
+                    NSApp.activate()
                 }
             }
-            Divider().padding(.vertical, 4)
-            Button("Open Bergr") {
-                openWindow(id: "main")
-                NSApp.activate()
-            }
-            .buttonStyle(.plain).padding(.horizontal, 8)
-            Button("Settings…") {
-                openSettings()
-                NSApp.activate()
-            }
-            .buttonStyle(.plain).padding(.horizontal, 8)
-            Button("Quit Bergr") { NSApp.terminate(nil) }
-                .buttonStyle(.plain).padding(.horizontal, 8).padding(.bottom, 4)
         }
-        .padding(6)
-        .frame(width: 300)
+    }
+}
+
+/// One agent in the popover: the native-looking hover highlight, the whole row clickable.
+private struct MenuBarRow: View {
+    let entry: AgentEntry
+    let open: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(entry.state == .working ? Color.blue : Color.orange)
+                    .frame(width: 7, height: 7)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(entry.title).lineLimit(1)
+                    Text(entry.machine).font(.caption).foregroundStyle(hovering ? .primary : .secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(hovering ? Color.accentColor.opacity(0.85) : .clear, in: .rect(cornerRadius: 6))
+            .foregroundStyle(hovering ? Color.white : Color.primary)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
