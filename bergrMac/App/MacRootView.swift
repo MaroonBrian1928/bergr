@@ -16,6 +16,13 @@ struct MacRootView: View {
                 shell.selection = AgentRef(host: host, address: address)
             }
             .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 400)
+            // In the sidebar's title bar, beside the list it adds to (like Messages' compose).
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    Button("New Session", systemImage: "plus.bubble") { shell.showingNewSession = true }
+                        .help("New Session (⌘N)")
+                }
+            }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
                     Divider()
@@ -48,12 +55,6 @@ struct MacRootView: View {
                 } actions: {
                     Button("Add Machine…") { shell.showingAddMachine = true }
                 }
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("New Session", systemImage: "square.and.pencil") { shell.showingNewSession = true }
-                    .help("New Session (⌘N)")
             }
         }
         .sheet(isPresented: $shell.showingAddMachine) {

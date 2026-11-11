@@ -8,6 +8,16 @@ struct ChatInspector: View {
     let agent: ChatAgent
     let terminal: Terminal?
     let machine: String
+    let model: TerminalScreenModel
+    let canSetMode: Bool
+    /// Tool calls and written files, worked out when the conversation grows, not on every streamed
+    /// token: scanning the whole conversation on each update made scrolling stutter.
+    @State private var activity = Activity()
+
+    struct Activity: Equatable {
+        var toolCalls = 0
+        var outputs: [String] = []
+    }
 
     var body: some View {
         Form {
@@ -33,8 +43,11 @@ struct ChatInspector: View {
                     if let window = usage.weekly { limit("Weekly", window) }
                 }
             }
+            Section("Permissions") {
+                PermissionPicker(agent: agent, model: model, saved: feed.usage?.mode, enabled: canSetMode)
+            }
             Section("Outputs") {
-                let files = outputs
+                let files = activity.outputs
                 if files.isEmpty {
                     Text("No files written yet").foregroundStyle(.secondary)
                 } else {
@@ -51,11 +64,13 @@ struct ChatInspector: View {
                 } else {
                     ForEach(running) { sub in row("person.2", sub.name, trailing: "\(sub.steps) steps") }
                 }
-                row("hammer", "\(toolCalls) tool calls")
+                row("hammer", "\(activity.toolCalls) tool calls")
             }
         }
         .formStyle(.grouped)
         .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
+        // A view of its own reads the conversation, so a streamed token redraws only it.
+        .background(ActivityTracker(feed: feed, activity: $activity))
     }
 
     // MARK: Data
@@ -79,16 +94,19 @@ struct ChatInspector: View {
         }
     }
 
-    private var toolCalls: Int {
-        feed.items.reduce(0) { count, item in if case .tool = item.kind { count + 1 } else { count } }
+    /// Tool calls, and the files the agent wrote or edited (newest first, each once).
+    static func activity(of items: [ChatFeed.Item]) -> Activity {
+        var result = Activity()
+        result.toolCalls = items.reduce(0) { count, item in if case .tool = item.kind { count + 1 } else { count } }
+        result.outputs = outputs(of: items)
+        return result
     }
 
-    /// Files the agent wrote or edited, newest first, each once.
-    private var outputs: [String] {
+    private static func outputs(of items: [ChatFeed.Item]) -> [String] {
         let writers: Set<String> = ["Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "write_file", "edit_file"]
         var seen = Set<String>()
         var files: [String] = []
-        for item in feed.items.reversed() {
+        for item in items.reversed() {
             guard case .tool(let name, let summary) = item.kind, writers.contains(name) else { continue }
             let path = summary.split(separator: "\n").last.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
             guard !path.isEmpty, path.contains("/") || path.contains("."), seen.insert(path).inserted else { continue }
@@ -153,5 +171,51 @@ struct ChatInspector: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+/// The agent's permission mode, read from its screen, and switched from here. Its own view: the
+/// screen changes constantly, and only this row should redraw for it.
+private struct PermissionPicker: View {
+    let agent: ChatAgent
+    let model: TerminalScreenModel
+    let saved: String?
+    let enabled: Bool
+    @State private var problem: String?
+    @State private var switching = false
+
+    var body: some View {
+        let current = PermissionModes.current(agent, in: model.textLines, saved: saved)
+        Picker("Mode", selection: Binding(
+            get: { current ?? "" },
+            set: { mode in
+                guard mode != current, !switching else { return }
+                switching = true
+                Task {
+                    problem = await PermissionModes.set(mode, agent: agent, model: model, saved: saved)
+                    switching = false
+                }
+            })) {
+            if current == nil { Text("Unknown").tag("") }
+            ForEach(PermissionModes.modes(agent), id: \.self) { Text($0).tag($0) }
+        }
+        .disabled(!enabled || switching)
+        if let problem {
+            Text(problem).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct ActivityTracker: View {
+    let feed: ChatFeed
+    @Binding var activity: ChatInspector.Activity
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onChange(of: feed.items.count, initial: true) { _, _ in
+                let next = ChatInspector.activity(of: feed.items)
+                if next != activity { activity = next }
+            }
     }
 }

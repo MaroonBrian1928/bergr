@@ -1891,6 +1891,8 @@ private struct MoreMenu: View, Equatable {
     var body: some View {
         Menu {
             Button("Search", systemImage: "magnifyingglass", action: search)
+            // On the Mac the inspector shows usage and sets the permission mode.
+            #if os(iOS)
             if hasUsage {
                 Button("Usage", systemImage: "gauge.with.dots.needle.50percent", action: usage)
             }
@@ -1898,6 +1900,7 @@ private struct MoreMenu: View, Equatable {
             // every second while an agent works.
             Button("Permissions" + (currentMode.map { " · \($0)" } ?? ""), systemImage: "lock.shield", action: permissions)
                 .disabled(!canSetMode)
+            #endif
             if hasInfo {
                 Button("Info", systemImage: "info.circle", action: info)
             }

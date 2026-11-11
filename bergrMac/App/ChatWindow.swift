@@ -106,7 +106,8 @@ private struct ChatWindowContent: View {
         .focusedSceneValue(\.interruptAgent, { model.press(.escape) })
         .inspector(isPresented: $showingInspector) {
             if let agent = terminal.flatMap(ChatAgent.detect) {
-                ChatInspector(feed: feed, agent: agent, terminal: terminal, machine: session.host.name)
+                ChatInspector(feed: feed, agent: agent, terminal: terminal, machine: session.host.name,
+                              model: model, canSetMode: terminal?.isLive == true)
             }
         }
         .toolbar {
