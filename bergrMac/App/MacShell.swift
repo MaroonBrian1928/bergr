@@ -6,8 +6,24 @@ import SwiftUI
 /// App-scoped UI state the main window, the commands and the menu bar share.
 @MainActor @Observable
 final class MacShell {
-    /// The agent the main window shows.
-    var selection: AgentRef?
+    /// The agent the main window shows; remembered, so a relaunch reopens it like any Mac app.
+    var selection: AgentRef? = MacShell.restored() {
+        didSet { Self.remember(selection) }
+    }
+
+    private static let selectionKey = "bergr.mac.selection"
+
+    private static func restored() -> AgentRef? {
+        UserDefaults.standard.data(forKey: selectionKey).flatMap { try? JSONDecoder().decode(AgentRef.self, from: $0) }
+    }
+
+    private static func remember(_ ref: AgentRef?) {
+        if let ref, let data = try? JSONEncoder().encode(ref) {
+            UserDefaults.standard.set(data, forKey: selectionKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: selectionKey)
+        }
+    }
     /// ⌘N: the main window presents the New Session sheet.
     var showingNewSession = false
     var showingAddMachine = false

@@ -125,7 +125,8 @@ struct MacSettings: View {
                 .modifier(SettingsPane())
                 .tabItem { Label("Terminal", systemImage: "terminal") }
         }
-        .frame(width: 660, height: 540)
+        // Width only: each tab is as tall as its content, like a Mac settings window.
+        .frame(width: 600)
         .sheet(isPresented: $showingLicenses) { MacLicensesSheet() }
         .sheet(item: $editing) { HostEditor(host: $0).frame(width: 620, height: 640) }
     }
@@ -134,6 +135,8 @@ struct MacSettings: View {
 private struct SettingsPane: ViewModifier {
     func body(content: Content) -> some View {
         content.formStyle(.grouped)
+            .scrollDisabled(true)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

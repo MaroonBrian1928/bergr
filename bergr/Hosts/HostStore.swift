@@ -29,7 +29,7 @@ struct Host: Identifiable, Codable, Hashable {
     }
 
     var subtitle: String {
-        if isLocal { return "This Mac · no SSH needed" }
+        if isLocal { return "Runs here · no SSH needed" }
         if isDemo { return "Built in · try Bergr without a server" }
         return "\(target.username)@\(target.host)" + (target.port == 22 ? "" : ":\(target.port)")
     }
