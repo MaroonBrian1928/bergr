@@ -43,8 +43,8 @@ A CHAT FOR EACH AGENT
 • Switch the model, effort and permission mode, and see how full the context is
 
 ANSWER IN ONE TAP
-• An agent's question or approval becomes buttons: in the chat, on the Lock Screen and in the
-  Dynamic Island
+• An agent's question or approval becomes buttons in the chat, and on the Lock Screen and in
+  the Dynamic Island while Bergr stays running
 
 STAYS WITH YOU
 • A Live Activity and a Home Screen widget
