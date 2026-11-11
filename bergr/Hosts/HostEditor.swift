@@ -57,6 +57,8 @@ struct HostEditor: View {
     @State private var copied: String?
     @State private var test: HostSession?
     @State private var tested = false
+    @State private var systemSSH: SystemSSHTest.Outcome?
+    @State private var testingSystemSSH = false
 
     private var palette: ChatPalette { .of(scheme) }
     private var isExisting: Bool { hosts.hosts.contains { $0.id == host.id } }
@@ -94,6 +96,9 @@ struct HostEditor: View {
                 keySection
                 if let key { authorizeSection(key) }
                 testSection
+                #if os(macOS)
+                systemSSHSection
+                #endif
                 sessionSection
                 if isExisting {
                     Section {
@@ -268,6 +273,33 @@ struct HostEditor: View {
             Text("Tries to sign in and start herdr-core with what is above, without saving. You can save without testing, for example if the machine is off.")
         }
     }
+
+    #if os(macOS)
+    private var systemSSHSection: some View {
+        Section {
+            Button(testingSystemSSH ? "Testing…" : "Test System ssh") {
+                testingSystemSSH = true
+                systemSSH = nil
+                let target = host.target
+                Task {
+                    systemSSH = await SystemSSHTest.run(target)
+                    testingSystemSSH = false
+                }
+            }
+            .disabled(testingSystemSSH || host.target.host.trimmed.isEmpty)
+            switch systemSSH {
+            case .works: Label("ssh works without a prompt", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            case .failed(let text), .unavailable(let text): Text(text).font(.subheadline).foregroundStyle(.red).textSelection(.enabled)
+            case nil: EmptyView()
+            }
+        } header: {
+            Text("Open in terminal")
+        } footer: {
+            Text("Terminals open with the system ssh, which can't use Bergr's Secure Enclave key. "
+                + "It needs its own key or ssh-agent login for this machine; copy Bergr's public key above to authorize it too.")
+        }
+    }
+    #endif
 
     private var isTesting: Bool {
         guard let test else { return false }

@@ -9,6 +9,8 @@ struct HostConnection {
     let ssh: SSHConnection?
     let coreName: String?
     let coreVersion: String?
+    /// "This Mac": commands run here instead of over SSH.
+    var isLocal = false
     /// Live: `client.close()`, then `ssh?.close()`.
     let close: @Sendable () async -> Void
 }
@@ -28,6 +30,14 @@ struct HostConnector {
 
     static func live(host: Host, knownHosts: any KnownHostsStore) -> HostConnector {
         HostConnector { context in
+            if host.isLocal {
+                context.progress("Starting herdr-core…")
+                let client = try await LocalCore.connect(session: host.session)
+                let hello = await client.hello
+                return HostConnection(
+                    client: client, ssh: nil, coreName: hello?.core.name, coreVersion: hello?.version,
+                    isLocal: true, close: { await client.close() })
+            }
             if host.isDemo {
                 context.progress("Starting the demo…")
                 let client = try await HerdrClient.connectDemo()

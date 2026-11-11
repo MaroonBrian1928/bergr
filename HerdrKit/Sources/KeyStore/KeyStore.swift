@@ -103,7 +103,24 @@ public enum KeyStoreError: Error, LocalizedError {
     case notFound(UUID)
     case secureEnclaveUnavailable
     case keychain(OSStatus)
+    /// The data protection keychain is closed to this build: it has no `keychain-access-groups`
+    /// entitlement (an unsigned or ad-hoc signed Mac build). Importing or creating keys can't work;
+    /// the rest of the app still can.
+    case keychainUnavailable
     case accessControl(String)
+
+    /// `errSecMissingEntitlement`.
+    public static let missingEntitlementStatus: OSStatus = -34018
+
+    /// The error for a failed keychain call, with the missing-entitlement case set apart.
+    public static func keychain(status: OSStatus) -> KeyStoreError {
+        status == missingEntitlementStatus ? .keychainUnavailable : .keychain(status)
+    }
+
+    public var isKeychainUnavailable: Bool {
+        if case .keychainUnavailable = self { return true }
+        return false
+    }
 
     public var errorDescription: String? {
         switch self {
@@ -111,6 +128,9 @@ public enum KeyStoreError: Error, LocalizedError {
         case .secureEnclaveUnavailable: "This device has no Secure Enclave."
         case .keychain(let status):
             "Keychain error \(status): \(SecCopyErrorMessageString(status, nil) as String? ?? "unknown")"
+        case .keychainUnavailable:
+            "Keys are unavailable in this build: it isn't signed with the keychain entitlement. "
+                + "Use a release build of Bergr, or the system ssh with your own key."
         case .accessControl(let message): "Could not set up key access control: \(message)"
         }
     }
@@ -129,6 +149,24 @@ public final class KeyStore: Sendable {
 
     public static var isSecureEnclaveAvailable: Bool { SecureEnclave.isAvailable }
 
+    /// Access control flags for a new Secure Enclave key. On a Mac a biometry-only flag would lock
+    /// out machines without Touch ID (mini, Studio, clamshell), so there it is `.userPresence`:
+    /// Touch ID, Apple Watch or the login password.
+    public static func accessFlags(
+        requireBiometry: Bool, isMac: Bool = KeyStore.isMac
+    ) -> SecAccessControlCreateFlags {
+        guard requireBiometry else { return [.privateKeyUsage] }
+        return isMac ? [.privateKeyUsage, .userPresence] : [.privateKeyUsage, .biometryCurrentSet]
+    }
+
+    public static var isMac: Bool {
+        #if os(macOS)
+        true
+        #else
+        false
+        #endif
+    }
+
     public func keys() throws -> [SSHKeyInfo] {
         try records().map(\.info).sorted { $0.createdAt < $1.createdAt }
     }
@@ -143,8 +181,7 @@ public final class KeyStore: Sendable {
     ) throws -> SSHKeyInfo {
         let record: StoredKey
         if Self.isSecureEnclaveAvailable {
-            let flags: SecAccessControlCreateFlags =
-                requireBiometry ? [.privateKeyUsage, .biometryCurrentSet] : [.privateKeyUsage]
+            let flags = Self.accessFlags(requireBiometry: requireBiometry)
             var error: Unmanaged<CFError>?
             guard let access = SecAccessControlCreateWithFlags(
                 nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, flags, &error
@@ -278,7 +315,7 @@ public struct KeychainKeyStorage: KeyStorage {
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return [] }
-        guard status == errSecSuccess else { throw KeyStoreError.keychain(status) }
+        guard status == errSecSuccess else { throw KeyStoreError.keychain(status: status) }
         let items = result as? [[String: Any]] ?? []
         return items.compactMap { $0[kSecValueData as String] as? Data }
     }
@@ -293,7 +330,7 @@ public struct KeychainKeyStorage: KeyStorage {
             query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             status = SecItemAdd(query as CFDictionary, nil)
         }
-        guard status == errSecSuccess else { throw KeyStoreError.keychain(status) }
+        guard status == errSecSuccess else { throw KeyStoreError.keychain(status: status) }
     }
 
     public func delete(account: String) throws {
@@ -301,7 +338,7 @@ public struct KeychainKeyStorage: KeyStorage {
         query[kSecAttrAccount as String] = account
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeyStoreError.keychain(status)
+            throw KeyStoreError.keychain(status: status)
         }
     }
 }

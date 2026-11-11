@@ -67,7 +67,7 @@ struct SidebarView: View {
     }
 
     private func icon(for host: Host) -> String {
-        host.isDemo ? "play.rectangle" : "server.rack"
+        host.isLocal ? "desktopcomputer" : host.isDemo ? "play.rectangle" : "server.rack"
     }
 
     /// "2 need you", or the connection state when it's not simply connected.

@@ -11,22 +11,33 @@ public final class ExecPipe: @unchecked Sendable {
     /// `SSHTransportError.commandFailed` on a non-zero exit.
     public let output: AsyncThrowingStream<Data, Error>
 
-    private let writer: TTYStdinWriter
-    private let lifetime: Lifetime
+    private let writeImpl: @Sendable (Data) async throws -> Void
+    private let closeImpl: @Sendable () -> Void
 
     private init(output: AsyncThrowingStream<Data, Error>, writer: TTYStdinWriter, lifetime: Lifetime) {
         self.output = output
-        self.writer = writer
-        self.lifetime = lifetime
+        self.writeImpl = { try await writer.write(ByteBuffer(bytes: $0)) }
+        self.closeImpl = { lifetime.cancel() }
+    }
+
+    /// A pipe that is not an SSH channel: a command run on this machine (the Mac's "This Mac").
+    public init(
+        output: AsyncThrowingStream<Data, Error>,
+        write: @escaping @Sendable (Data) async throws -> Void,
+        close: @escaping @Sendable () -> Void
+    ) {
+        self.output = output
+        self.writeImpl = write
+        self.closeImpl = close
     }
 
     public func write(_ data: Data) async throws {
-        try await writer.write(ByteBuffer(bytes: data))
+        try await writeImpl(data)
     }
 
     /// Closes the channel. The remote command sees EOF / hangup.
     public func close() {
-        lifetime.cancel()
+        closeImpl()
     }
 
     static func open(command: String, on client: SSHClient) async throws -> ExecPipe {

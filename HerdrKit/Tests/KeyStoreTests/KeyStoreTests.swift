@@ -78,7 +78,7 @@ func secureEnclaveKeySigns() throws {
 
 // MARK: - Key import
 
-private let edKey = """
+let edKey = """
 -----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
 QyNTUxOQAAACCRbshhCTzdiIUgm3HvJd6m+MElZ4UL/DlBq323BgcEWgAAAJCaThKnmk4S
@@ -87,7 +87,7 @@ AAAEDm6ppStPcxzMbuCmNYr0dS8lEROG8siuJIntic1P8135FuyGEJPN2IhSCbce8l3qb4
 wSVnhQv8OUGrfbcGBwRaAAAAB3Rlc3QtZWQBAgMEBQY=
 -----END OPENSSH PRIVATE KEY-----
 """
-private let edPub = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJFuyGEJPN2IhSCbce8l3qb4wSVnhQv8OUGrfbcGBwRa test-ed"
+let edPub = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJFuyGEJPN2IhSCbce8l3qb4wSVnhQv8OUGrfbcGBwRa test-ed"
 private let ecKey = """
 -----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAaAAAABNlY2RzYS
@@ -99,7 +99,7 @@ Lngz0L6zmCFr8Nlv/QxNASp4DRciN1TQFjK72r3iiNczWNRcr/CRv8q1nsnFEPiNdAITO4
 -----END OPENSSH PRIVATE KEY-----
 """
 private let ecPub = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBA/SJ4uNN3i4Tn93Lngz0L6zmCFr8Nlv/QxNASp4DRciN1TQFjK72r3iiNczWNRcr/CRv8q1nsnFEPiNdAITO40= test-ec"
-private let pwKey = """
+let pwKey = """
 -----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABD/XtgSU4
 YYEliUTzhuVRUwAAAAGAAAAAEAAAAzAAAAC3NzaC1lZDI1NTE5AAAAIE7JCvPvqAdUIeKU
@@ -109,7 +109,7 @@ gEF0+AOQbedEAopiEuwPY2K/iO4W4whPqxMryCc5xhZjY4Zw8xqJfkMPQKrk2N9RcuiyfC
 6hq+MgUOixiJmKpg==
 -----END OPENSSH PRIVATE KEY-----
 """
-private let rsaKey = """
+let rsaKey = """
 -----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABFwAAAAdzc2gtcn
 NhAAAAAwEAAQAAAQEAtz6DXpla1zaWNuuoIqtsjzOVHnv3hfHefdrse+dLz5/uodEEaSeN

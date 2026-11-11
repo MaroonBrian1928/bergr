@@ -197,11 +197,13 @@ final class HostSession {
     }
 
     /// Whether a command can run on this machine over SSH (not the demo).
-    var canRunCommands: Bool { attempt?.connection?.ssh != nil && !host.isDemo }
+    var canRunCommands: Bool { (attempt?.connection?.ssh != nil || attempt?.connection?.isLocal == true) && !host.isDemo }
 
     /// Runs a long-lived command on the machine, beside herdr-core (the chat feed).
     func openExec(_ command: String) async throws -> ExecPipe {
-        guard let ssh = attempt?.connection?.ssh, state == .connected else { throw SessionError.connectionLost }
+        guard state == .connected else { throw SessionError.connectionLost }
+        if attempt?.connection?.isLocal == true { return try LocalCore.openExec(command) }
+        guard let ssh = attempt?.connection?.ssh else { throw SessionError.connectionLost }
         return try await ssh.openExec(command)
     }
 

@@ -6,6 +6,13 @@ extension HostSession {
     /// and returns that path. Throws on failure or if no line comes back within 20 s.
     func uploadImage(_ data: Data) async throws -> String {
         let path = "/tmp/bergr-images/\(UUID().uuidString.lowercased()).jpg"
+        if host.isLocal {
+            // On this Mac an upload is a file copy.
+            try FileManager.default.createDirectory(
+                atPath: "/tmp/bergr-images", withIntermediateDirectories: true)
+            try data.write(to: URL(fileURLWithPath: path))
+            return path
+        }
         let pipe = try await openExec(AttachmentPrep.uploadCommand(path: path))
         defer { pipe.close() }
         return try await withThrowingTaskGroup(of: String.self) { group in

@@ -9,6 +9,9 @@ import Observation
 final class KeyLibrary {
     private(set) var keys: [SSHKeyInfo] = []
     var lastError: String?
+    /// Set when the keychain is closed to this build (no entitlement: an unsigned Mac build).
+    /// Keys can't be created, imported or used then; the rest of the app works.
+    private(set) var unavailableReason: String?
 
     private let store: KeyStore
 
@@ -30,7 +33,7 @@ final class KeyLibrary {
             reload()
             return info
         } catch {
-            lastError = error.localizedDescription
+            note(error)
             return nil
         }
     }
@@ -43,7 +46,35 @@ final class KeyLibrary {
             reload()
             return nil
         } catch {
+            note(error)
             return error.localizedDescription
+        }
+    }
+
+    /// Private keys found in `~/.ssh` (Mac only: elsewhere there is nothing to read).
+    func discoverSSHFolder() -> [DiscoveredKey] {
+        #if os(macOS)
+        SSHFolder.discover()
+        #else
+        []
+        #endif
+    }
+
+    /// Imports one file from `~/.ssh`. Returns an error message on failure.
+    func importFile(_ url: URL, label: String = "") -> String? {
+        do {
+            return importKey(text: try SSHFolder.read(url), label: label)
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Remembers why keys are unavailable, when that is why `error` happened.
+    private func note(_ error: Error) {
+        if let keyError = error as? KeyStoreError, keyError.isKeychainUnavailable {
+            unavailableReason = keyError.localizedDescription
+        } else {
+            lastError = error.localizedDescription
         }
     }
 
@@ -52,7 +83,7 @@ final class KeyLibrary {
             try store.rename(id: key.id, to: label)
             reload()
         } catch {
-            lastError = error.localizedDescription
+            note(error)
         }
     }
 
@@ -98,8 +129,9 @@ final class KeyLibrary {
         var context: LAContext?
         if key.requiresBiometry {
             let unlock = LAContext()
+            // On a Mac the key was made with `.userPresence`: Touch ID, Watch or the password.
             try await unlock.evaluatePolicy(
-                .deviceOwnerAuthenticationWithBiometrics,
+                KeyStore.isMac ? .deviceOwnerAuthentication : .deviceOwnerAuthenticationWithBiometrics,
                 localizedReason: "Unlock “\(key.label)” to connect")
             context = unlock
         }
@@ -109,8 +141,10 @@ final class KeyLibrary {
     private func reload() {
         do {
             keys = try store.keys()
+            unavailableReason = nil
         } catch {
-            lastError = error.localizedDescription
+            keys = []
+            note(error)
         }
     }
 }

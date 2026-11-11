@@ -30,6 +30,9 @@ struct MachinesView: View {
                     } else {
                         Button("Add Machine") { editing = newHost() }.buttonStyle(.borderedProminent)
                     }
+                    if LocalCore.isAvailable && !hosts.hasLocal {
+                        Button("Add This Mac") { selection = hosts.addLocal().id }
+                    }
                     Button("Try the Demo") { _ = hosts.addDemo() }
                 }
                 .listRowBackground(Color.clear)
@@ -37,7 +40,7 @@ struct MachinesView: View {
             Section {
                 ForEach(hosts.hosts) { host in
                     Button {
-                        if host.isDemo {
+                        if host.isDemo || host.isLocal {
                             selection = host.id
                             if inSheet { dismiss() }
                         } else {
@@ -57,7 +60,7 @@ struct MachinesView: View {
                             selection = host.id
                             if inSheet { dismiss() }
                         }
-                        if !host.isDemo {
+                        if !host.isDemo && !host.isLocal {
                             Button("Edit", systemImage: "pencil") { editing = host }
                         }
                         Button("Delete", systemImage: "trash", role: .destructive) {
@@ -97,6 +100,9 @@ struct MachinesView: View {
             ToolbarItem(placement: .trailingAction) {
                 Menu {
                     Button("Add Machine", systemImage: "server.rack") { editing = newHost() }
+                    if LocalCore.isAvailable && !hosts.hasLocal {
+                        Button("Add This Mac", systemImage: "desktopcomputer") { selection = hosts.addLocal().id }
+                    }
                 } label: {
                     Label("Add Machine", systemImage: "plus")
                 } primaryAction: {

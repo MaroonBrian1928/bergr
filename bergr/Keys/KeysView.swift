@@ -9,6 +9,13 @@ struct KeysView: View {
 
     var body: some View {
         List {
+            if let reason = keys.unavailableReason {
+                Section {
+                    Label(reason, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.subheadline)
+                }
+            }
             if keys.keys.isEmpty {
                 ContentUnavailableView {
                     Label("No keys", systemImage: "key")
@@ -126,7 +133,11 @@ struct NewKeyView: View {
                     Text("Shown as the comment in authorized_keys.")
                 }
                 Section {
+                    #if os(macOS)
+                    Toggle("Require Touch ID or password", isOn: $requireBiometry)
+                    #else
                     Toggle("Require Face ID", isOn: $requireBiometry)
+                    #endif
                 } footer: {
                     if keys.hasSecureEnclave {
                         Text("The private key is created inside the Secure Enclave and can never leave this device. "
@@ -149,13 +160,18 @@ struct NewKeyView: View {
                             dismiss()
                         }
                     }
-                    .disabled(label.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(label.trimmingCharacters(in: .whitespaces).isEmpty || keys.unavailableReason != nil)
                 }
             }
             .alert("Couldn't create key", isPresented: .constant(keys.lastError != nil)) {
                 Button("OK") { keys.lastError = nil }
             } message: {
                 Text(keys.lastError ?? "")
+            }
+            .safeAreaInset(edge: .top) {
+                if let reason = keys.unavailableReason {
+                    Text(reason).font(.footnote).foregroundStyle(.orange).padding(.horizontal)
+                }
             }
         }
     }
@@ -168,10 +184,40 @@ struct ImportKeyView: View {
     @State private var label = ""
     @State private var error: String?
     @State private var choosingFile = false
+    @State private var found: [DiscoveredKey] = []
 
     var body: some View {
         NavigationStack {
             Form {
+                if !found.isEmpty {
+                    Section {
+                        ForEach(found) { item in
+                            Button {
+                                if case .importable = item.status {
+                                    error = keys.importFile(item.url)
+                                    if error == nil { dismiss() }
+                                }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("~/.ssh/\(item.name)")
+                                    switch item.status {
+                                    case .importable(let algorithm, let comment):
+                                        Text([algorithm == .ed25519 ? "ed25519" : "ecdsa P-256", comment]
+                                            .compactMap { $0 }.joined(separator: " · "))
+                                            .font(.footnote).foregroundStyle(.secondary)
+                                    case .unusable(let reason):
+                                        Text(reason).font(.footnote).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            .disabled({ if case .importable = item.status { false } else { true } }())
+                        }
+                    } header: {
+                        Text("Found in ~/.ssh")
+                    } footer: {
+                        Text("Tap a key to copy it into Bergr's Keychain. The original file stays where it is.")
+                    }
+                }
                 Section {
                     TextEditor(text: $text)
                         .font(.footnote.monospaced())
@@ -196,6 +242,10 @@ struct ImportKeyView: View {
             }
             .navigationTitle("Import Key")
             .inlineNavigationTitle()
+            .onAppear { found = keys.discoverSSHFolder() }
+            #if os(macOS)
+            .fileDialogDefaultDirectory(SSHFolder.defaultURL)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -205,7 +255,8 @@ struct ImportKeyView: View {
                         error = keys.importKey(text: text, label: label)
                         if error == nil { dismiss() }
                     }
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || keys.unavailableReason != nil)
                 }
             }
             .fileImporter(isPresented: $choosingFile, allowedContentTypes: [.item]) { result in
