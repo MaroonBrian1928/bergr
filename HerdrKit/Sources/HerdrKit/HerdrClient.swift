@@ -150,6 +150,14 @@ public actor HerdrClient {
             terminal: result.terminal, channel: channel, output: output, automaticInput: automaticInput, client: self)
     }
 
+    /// Runs one program here or on a linked machine (`on`) without a terminal: its exit code and
+    /// what it wrote.
+    public func exec(argv: [String], on machine: String? = nil, timeout: Double? = nil) async throws -> ExecOutput {
+        let r: ExecResult = try await call("machine.exec", ExecParams(argv: argv, on: machine, timeout: timeout))
+        func text(_ b: String) -> String { String(decoding: Data(base64Encoded: b) ?? Data(), as: UTF8.self) }
+        return ExecOutput(code: r.code, stdout: text(r.stdout), stderr: text(r.stderr))
+    }
+
     /// Calls any method by name.
     public func call<Params: Encodable & Sendable, Result: Decodable & Sendable>(
         _ method: String, _ params: Params
@@ -413,6 +421,24 @@ public struct AttachedTerminal: Sendable {
     public func detach() async {
         await client.closeChannel(channel)
     }
+}
+
+public struct ExecOutput: Sendable {
+    public let code: Int32?
+    public let stdout: String
+    public let stderr: String
+}
+
+struct ExecParams: Encodable, Sendable {
+    let argv: [String]
+    let on: String?
+    let timeout: Double?
+}
+
+struct ExecResult: Decodable, Sendable {
+    let code: Int32?
+    let stdout: String
+    let stderr: String
 }
 
 struct AttachParams: Encodable, Sendable {

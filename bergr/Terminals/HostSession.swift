@@ -84,6 +84,10 @@ final class HostSession {
         return client
     }
 
+    func exec(_ argv: [String], on machine: String? = nil, timeout: Double? = nil) async throws -> ExecOutput {
+        try await connectedClient().exec(argv: argv, on: machine, timeout: timeout)
+    }
+
     func run(_ request: RunRequest) async throws -> Terminal {
         try await connectedClient().run(request)
     }

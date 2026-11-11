@@ -28,6 +28,8 @@ struct TerminalScreenView: View {
     /// Machines (by name) whose agents open as terminals without asking about a direct connection.
     @AppStorage("bergr.linkedTerminalOnly") private var terminalOnly = ""
     @State private var addingMachine: Host?
+    @State private var settingUp = false
+    @Environment(KeyLibrary.self) private var keys
 
     /// The agent whose conversation can show as a chat. Not for terminals on machines herdr-core
     /// added (`machine/t7`): their files are on another computer.
@@ -61,12 +63,18 @@ struct TerminalScreenView: View {
         return hosts.hosts.contains { names.contains($0.name.lowercased()) || names.contains($0.target.host.lowercased()) }
     }
 
-    /// A new machine filled in from what this core knows: its address, and this connection's
-    /// user and key (often the same; the editor shows how to allow the key in if not).
-    private func directHost(for machine: LinkedMachine) -> Host {
-        Host(name: machine.name,
-             target: SSHTarget(host: machine.target ?? machine.host ?? machine.name, username: session.host.target.username),
-             keyID: session.host.keyID)
+    /// Fills in a new machine through the link: its user and an address the phone can reach, with
+    /// this connection's key allowed in there. Where that can't run (Windows), what the core knows,
+    /// and the editor shows the line to paste.
+    private func prepareDirectHost(_ machine: LinkedMachine) async {
+        settingUp = true
+        defer { settingUp = false }
+        let line = keys.key(id: session.host.keyID)?.authorizedKeysLine
+        let found = await LinkedSetup.run(on: machine.name, keyLine: line, session: session)
+        let address = LinkedSetup.address(target: machine.target, found: found?.address) ?? machine.host ?? machine.name
+        addingMachine = Host(name: machine.name,
+                             target: SSHTarget(host: address, username: found?.user ?? session.host.target.username),
+                             keyID: session.host.keyID)
     }
 
     private var theme: TerminalTheme { TerminalTheme.current(colorScheme, light: lightTheme, dark: darkTheme) }
@@ -124,8 +132,8 @@ struct TerminalScreenView: View {
                 overlay(terminal)
             }
             if !chat, let linked = linkedMachine(terminal) {
-                LinkedChatPrompt(machine: linked.name, alreadyAdded: hasDirectHost(linked)) {
-                    addingMachine = directHost(for: linked)
+                LinkedChatPrompt(machine: linked.name, alreadyAdded: hasDirectHost(linked), working: settingUp) {
+                    Task { await prepareDirectHost(linked) }
                 } terminalOnly: {
                     withAnimation { terminalOnly = (terminalOnly.split(separator: ",").map(String.init) + [linked.name]).joined(separator: ",") }
                 }
@@ -394,6 +402,7 @@ struct NeedsYouBar: View {
 private struct LinkedChatPrompt: View {
     let machine: String
     let alreadyAdded: Bool
+    let working: Bool
     let add: () -> Void
     let terminalOnly: () -> Void
 
@@ -402,12 +411,20 @@ private struct LinkedChatPrompt: View {
             Text("Chat with this agent?").font(.headline)
             Text(alreadyAdded
                  ? "You've added \(machine) as its own machine: open this agent from there for the chat. From here, Bergr reaches \(machine) through another computer, which only carries the terminal."
-                 : "Bergr reaches \(machine) through another computer, which only carries the terminal. Add \(machine) as its own machine to get the chat.")
+                 : "Bergr reaches \(machine) through another computer, which only carries the terminal. Add \(machine) as its own machine to get the chat: Bergr allows this phone's SSH key in on \(machine) for you, through that computer, and fills in its address.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
                 if !alreadyAdded {
-                    Button("Add \(machine)", action: add).buttonStyle(.borderedProminent)
+                    Button(action: add) {
+                        if working {
+                            HStack(spacing: 8) { ProgressView(); Text("Setting up…") }
+                        } else {
+                            Text("Add \(machine)")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(working)
                 }
                 Button(alreadyAdded ? "OK" : "Terminal only", action: terminalOnly).buttonStyle(.bordered)
             }
