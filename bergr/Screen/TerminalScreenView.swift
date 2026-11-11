@@ -24,6 +24,10 @@ struct TerminalScreenView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.scenePhase) private var scenePhase
     @State private var wasInBackground = false
+    @Environment(HostStore.self) private var hosts
+    /// Machines (by name) whose agents open as terminals without asking about a direct connection.
+    @AppStorage("bergr.linkedTerminalOnly") private var terminalOnly = ""
+    @State private var addingMachine: Host?
 
     /// The agent whose conversation can show as a chat. Not for terminals on machines herdr-core
     /// added (`machine/t7`): their files are on another computer.
@@ -37,6 +41,32 @@ struct TerminalScreenView: View {
         // stays and waits, instead of the terminal flashing up until the line is back.
         guard let terminal, !session.host.isDemo, !address.contains("/") else { return nil }
         return ChatAgent.detect(terminal)
+    }
+
+    /// An agent on a machine this one's herdr-core links to (`popos/t3`): its chat needs Bergr
+    /// connected to that machine itself. Nil once "Terminal only" was picked for the machine.
+    private struct LinkedMachine { let name: String; let host: String?; let target: String? }
+
+    private func linkedMachine(_ terminal: Terminal?) -> LinkedMachine? {
+        guard let terminal, !session.host.isDemo, let slash = address.firstIndex(of: "/"),
+              ChatAgent.detect(terminal) != nil else { return nil }
+        let name = String(address[..<slash])
+        guard !terminalOnly.split(separator: ",").contains(Substring(name)) else { return nil }
+        let known = session.machines.first { $0.name == name }
+        return LinkedMachine(name: name, host: known?.host, target: known?.target)
+    }
+
+    private func hasDirectHost(_ machine: LinkedMachine) -> Bool {
+        let names = Set([machine.name, machine.host, machine.target].compactMap { $0?.lowercased() })
+        return hosts.hosts.contains { names.contains($0.name.lowercased()) || names.contains($0.target.host.lowercased()) }
+    }
+
+    /// A new machine filled in from what this core knows: its address, and this connection's
+    /// user and key (often the same; the editor shows how to allow the key in if not).
+    private func directHost(for machine: LinkedMachine) -> Host {
+        Host(name: machine.name,
+             target: SSHTarget(host: machine.target ?? machine.host ?? machine.name, username: session.host.target.username),
+             keyID: session.host.keyID)
     }
 
     private var theme: TerminalTheme { TerminalTheme.current(colorScheme, light: lightTheme, dark: darkTheme) }
@@ -93,6 +123,15 @@ struct TerminalScreenView: View {
             } else {
                 overlay(terminal)
             }
+            if !chat, let linked = linkedMachine(terminal) {
+                LinkedChatPrompt(machine: linked.name, alreadyAdded: hasDirectHost(linked)) {
+                    addingMachine = directHost(for: linked)
+                } terminalOnly: {
+                    withAnimation { terminalOnly = (terminalOnly.split(separator: ",").map(String.init) + [linked.name]).joined(separator: ",") }
+                }
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .transition(.opacity)
+            }
             if !chat, let terminal, terminal.isLive, terminal.status?.state == "blocked", model.phase == .live {
                 AnswerBar(terminal: terminal, model: model, dark: theme.dark)
             }
@@ -106,6 +145,7 @@ struct TerminalScreenView: View {
         // Watching, the size being watched instead (the screen shows it as an outline).
         .navigationSubtitle(pane == nil ? subtitle(terminal) : "")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $addingMachine) { HostEditor(host: $0) }
         // The title bar sits on the terminal's background: match its brightness, not the app's.
         .toolbarColorScheme(chat ? colorScheme : theme.dark ? .dark : .light, for: .navigationBar)
         .onChange(of: theme, initial: true) { _, theme in model.theme = theme }
@@ -346,5 +386,37 @@ struct NeedsYouBar: View {
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
         .environment(\.colorScheme, dark ? .dark : .light)
+    }
+}
+
+/// Over a linked machine's agent: the chat needs a direct connection to that machine (its
+/// transcripts are there); through this one, only the terminal comes.
+private struct LinkedChatPrompt: View {
+    let machine: String
+    let alreadyAdded: Bool
+    let add: () -> Void
+    let terminalOnly: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Chat with this agent?").font(.headline)
+            Text(alreadyAdded
+                 ? "You've added \(machine) as its own machine: open this agent from there for the chat. From here, Bergr reaches \(machine) through another computer, which only carries the terminal."
+                 : "Bergr reaches \(machine) through another computer, which only carries the terminal. Add \(machine) as its own machine to get the chat.")
+                .font(.subheadline).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 10) {
+                if !alreadyAdded {
+                    Button("Add \(machine)", action: add).buttonStyle(.borderedProminent)
+                }
+                Button(alreadyAdded ? "OK" : "Terminal only", action: terminalOnly).buttonStyle(.bordered)
+            }
+            .controlSize(.large)
+        }
+        .padding(16)
+        .frame(maxWidth: 520, alignment: .leading)
+        .background(.regularMaterial, in: .rect(cornerRadius: 20))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
     }
 }
