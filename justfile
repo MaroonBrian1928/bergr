@@ -85,7 +85,11 @@ mac-native configuration="Debug":
     id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")"
     osascript -e "tell application id \"$id\" to quit" 2>/dev/null || true
     sleep 1  # opening while it quits fails (-609)
-    open ".build/xcode-mac-native/Build/Products/{{configuration}}/$name.app"
+    # Installed under its own name: the Dock and Spotlight tell it from the iPad build ("Bergr Dev"),
+    # and a fresh path gets a fresh icon.
+    dest="/Applications/{{ if configuration == "Debug" { "Bergr Mac Dev" } else { "Bergr" } }}.app"
+    rm -rf "$dest" && cp -R "$app" "$dest"
+    open "$dest"
 
 # Build and run in the simulator (BERGR_SIMULATOR, default "iPhone 17 Pro")
 sim:
