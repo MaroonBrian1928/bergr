@@ -22,7 +22,7 @@ struct ChatView: View {
     @State private var attachments: [ChatAttachment] = []
     @State private var sendError: String?
     /// Sent replies, shown at once and until the agent's conversation has them.
-    @State private var pending: [Pending] = []
+    @State private var outbox = ReplyOutbox()
     @State private var sent = 0
     /// Each Send Now: a firmer tap than a send, felt as stopping the agent.
     @State private var pushes = 0
@@ -60,50 +60,6 @@ struct ChatView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(KeyLibrary.self) private var keys
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    struct Pending: Identifiable, Equatable {
-        let id = UUID()
-        let text: String
-        var at = Date.now
-        var images = false
-        /// No sign of it in the conversation, and the agent didn't start working: offer Retry.
-        var failed = false
-        /// Sent now (the agent was stopped for it), not waiting in its queue.
-        var pushed = false
-        /// Waiting in the agent's queue: sent while it worked.
-        var queued = false
-        /// The user messages the conversation already had when this was sent: an earlier "yes"
-        /// mustn't confirm a new one.
-        var known: Set<String> = []
-
-        /// Whether the conversation has this reply as a message that came after it was sent.
-        func arrived(in items: [ChatFeed.Item]) -> Bool {
-            let said = Set(items.suffix(20).compactMap { item -> String? in
-                guard !known.contains(item.id), case .user(let text) = item.kind else { return nil }
-                return text.trimmingCharacters(in: .whitespacesAndNewlines)
-            })
-            return isIn(said)
-        }
-
-        /// Whether the conversation has this reply. With images it comes back with the image
-        /// paths (or "[Image #1]") in front of the words, so the words only have to end it.
-        /// Whether the terminal's screen shows the reply: the start of its first line, enough to
-        /// tell it apart, on one row (a long reply wraps).
-        static func onScreen(_ text: String, lines: [String]) -> Bool {
-            let first = text.split(separator: "\n", omittingEmptySubsequences: true).first
-                .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
-            guard !first.isEmpty else { return false }
-            let probe = String(first.prefix(24))
-            return lines.contains { $0.contains(probe) }
-        }
-
-        func isIn(_ said: Set<String>) -> Bool {
-            if said.contains(text) { return true }
-            // Sent twice in one message (a retry after the first copy reached the prompt).
-            if text.count >= 12, said.contains(where: { $0.contains(text) }) { return true }
-            return images && !text.isEmpty && said.contains { $0.hasSuffix(text) }
-        }
-    }
 
     private var palette: ChatPalette { .of(colorScheme) }
     private var draftKey: String? {
@@ -143,7 +99,7 @@ struct ChatView: View {
         let tools = ToolContext(liveRunID: liveRunID, agents: feed.subagents, lastRowID: allRows.last?.id)
         let hidden = search == nil ? max(0, all.count - rowLimit) : 0
         let shown = hidden > 0 ? Array(all.suffix(rowLimit)) : all
-        let shownReplies = shownPending
+        let shownReplies = outbox.shown(in: feed.items, search: search)
         ScrollView {
             // Not lazy: every row is measured, so the list never grows by an estimate and shrinks
             // back (a jump on every arrival), and a conversation about one screen tall doesn't flip
@@ -193,29 +149,29 @@ struct ChatView: View {
                             // Sent while the agent works, it waits in the agent's queue: long-press
                             // can stop the agent so it's read now.
                             .contextMenu {
-                                if state == "working", !reply.failed {
+                                if state == "working", reply.phase != .failed {
                                     Button("Send Now", systemImage: "bolt.fill") { pushNow() }
                                 }
                                 copyButton(reply.text)
                             }
-                            .accessibilityLabel(reply.failed ? "Not delivered: \(reply.text)" : "Sending: \(reply.text)")
-                        if !reply.failed, reply.queued || reply.pushed {
-                            Label(reply.pushed ? "Sending now" : "Queued, the agent reads it after this step",
-                                  systemImage: reply.pushed ? "bolt.fill" : "clock")
+                            .accessibilityLabel(reply.phase == .failed ? "Not delivered: \(reply.text)" : "Sending: \(reply.text)")
+                        if reply.phase == .queued || reply.phase == .pushed {
+                            Label(reply.phase == .pushed ? "Sending now" : "Queued, the agent reads it after this step",
+                                  systemImage: reply.phase == .pushed ? "bolt.fill" : "clock")
                                 .font(.caption)
-                                .foregroundStyle(reply.pushed ? palette.accent : palette.secondary)
+                                .foregroundStyle(reply.phase == .pushed ? palette.accent : palette.secondary)
                                 .contentTransition(.symbolEffect(.replace))
                                 .transition(.opacity)
                         }
-                        if reply.failed {
+                        if reply.phase == .failed {
                             HStack(spacing: 12) {
                                 Label("Not delivered", systemImage: "exclamationmark.circle")
                                     .font(.footnote).foregroundStyle(palette.secondary)
-                                Button("Retry") { retry(reply) }
+                                Button("Retry") { prepared().retry(reply.id) }
                                     .font(.footnote.weight(.semibold))
                                     .frame(minHeight: 44)
                                 Button("Discard", systemImage: "xmark") {
-                                    withAnimation(motion) { pending.removeAll { $0.id == reply.id } }
+                                    withAnimation(motion) { outbox.discard(reply.id) }
                                 }
                                 .labelStyle(.iconOnly)
                                 .font(.footnote)
@@ -336,7 +292,8 @@ struct ChatView: View {
             bottomBar
         }
         .background(palette.background)
-        .onChange(of: feed.items) { confirmPending() }
+        .onChange(of: feed.items) { outbox.feedChanged(feed.items) }
+        .onDisappear { outbox.cancelAll() }
         .onChange(of: state, initial: true) { _, now in workingSeen = now == "working" ? (workingSeen ?? .now) : nil }
         .toolbar { if pane == nil { chatToolbar } }
         .sheet(isPresented: $showingModels) {
@@ -634,14 +591,6 @@ struct ChatView: View {
                 return kept.isEmpty ? nil : .tools(kept)
             }
         }
-    }
-
-    private var shownPending: [Pending] {
-        // A reply the conversation already has is drawn as the real message from the same update:
-        // never both for a frame.
-        let waiting = pending.filter { !$0.arrived(in: feed.items) }
-        guard let search else { return waiting }
-        return waiting.filter { $0.text.localizedStandardContains(search) }
     }
 
     /// The id of the tool run the agent is in right now (a `Row.id`), if any.
@@ -969,60 +918,10 @@ struct ChatView: View {
         }
     }
 
-    /// Stops the agent so the replies waiting in its queue are read now. Claude Code puts queued
-    /// messages back in its prompt when interrupted; Return sends them (on an empty prompt it does nothing).
+    /// Stops the agent so the replies waiting in its queue are read now.
     private func pushNow() {
-        withAnimation(motion) {
-            for i in pending.indices where pending[i].queued { pending[i].pushed = true }
-        }
+        withAnimation(motion) { prepared().pushNow() }
         pushes += 1
-        let waiting = pending.filter(\.queued).map(\.text)
-        Task {
-            await model.automate {
-                model.press(.escape)
-                // Return only once the queued text is back in the prompt: Claude Code takes a moment
-                // to stop, and a Return before then lands on an empty prompt (a second tap was needed).
-                await waitForScreen(upTo: .seconds(3)) { lines in
-                    let bottom = lines.suffix(12).joined(separator: " ")
-                    return waiting.contains { bottom.contains(String($0.prefix(24))) }
-                }
-                // An agent that sends its queue by itself once stopped: nothing to press.
-                if waiting.allSatisfy({ text in !model.frame.textLines.suffix(12).joined(separator: " ")
-                    .contains(String(text.prefix(24))) }) { return }
-                model.press(.enter)
-            }
-        }
-    }
-
-    /// Waits until herdr-core says the agent stopped working (the same for every agent), or the
-    /// time runs out; then a short pause more, for its prompt to take input.
-    private func waitUntilStopped(upTo limit: Duration) async {
-        guard let session, let address = terminal?.address else {
-            try? await Task.sleep(for: .seconds(1))
-            return
-        }
-        let end = ContinuousClock.now + limit
-        // Read from the session each time: this view's own copy of the status doesn't change.
-        while ContinuousClock.now < end, session.terminal(address)?.status?.state == "working" {
-            try? await Task.sleep(for: .milliseconds(100))
-        }
-        try? await Task.sleep(for: .milliseconds(250))
-    }
-
-    /// A Return can be lost (sent on a channel that was being replaced as the app came back): the
-    /// text sits in the agent's input, unsent. If after a moment the reply isn't in the
-    /// conversation and its text is still on the input's last lines, Return again (twice at most).
-    private func confirmEnter(for id: UUID, text: String) async {
-        let probe = String(text.replacingOccurrences(of: "\n", with: " ").prefix(24))
-        guard probe.count >= 3 else { return }
-        for _ in 0..<2 {
-            try? await Task.sleep(for: .milliseconds(2500))
-            guard let reply = pending.first(where: { $0.id == id }), !reply.failed else { return }
-            if state == "working" { return }
-            let bottom = model.frame.textLines.suffix(6)
-            guard bottom.contains(where: { $0.contains(probe) }) else { return }
-            model.press(.enter)
-        }
     }
 
     /// Waits until the terminal screen shows what `done` looks for, or the time runs out; then a
@@ -1033,6 +932,48 @@ struct ChatView: View {
             try? await Task.sleep(for: .milliseconds(100))
         }
         try? await Task.sleep(for: .milliseconds(150))
+    }
+
+    /// The outbox, with what it needs from this view right now.
+    private func prepared() -> ReplyOutbox {
+        let session = session, feed = feed, address = terminal?.address, fallback = terminal, keys = keys
+        let model = model
+        #if DEBUG
+        let previewWorking = previewWorking
+        #else
+        let previewWorking = false
+        #endif
+        outbox.motion = motion
+        outbox.environment = ReplyEnvironment(
+            terminal: model,
+            agentState: {
+                if feed.demoWorking || previewWorking { return "working" }
+                // Read from the session each time: this view's own copy of the status doesn't change.
+                if let session, let address, let live = session.terminal(address) { return live.status?.state }
+                return fallback?.status?.state
+            },
+            feedItems: { feed.items },
+            upload: { data in
+                guard let session else { throw CocoaError(.fileNoSuchFile) }
+                let path = try await session.uploadImage(data)
+                SentImages.store(data, for: path)
+                return path
+            },
+            reconnect: {
+                guard let session else { return }
+                model.stop()
+                session.retry(keys: keys)
+                let end = ContinuousClock.now + .seconds(20)
+                while ContinuousClock.now < end, session.state != .connected {
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+                model.reconnect()
+                let live = ContinuousClock.now + .seconds(5)
+                while ContinuousClock.now < live, model.phase != .live {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+            })
+        return outbox
     }
 
     /// `interrupting`: stop the agent first (Esc), then send, instead of queueing behind its work.
@@ -1052,125 +993,19 @@ struct ChatView: View {
         sendError = nil
         sent += 1
         if session?.host.isDemo == true { feed.demoUserSaid(text) }
-        var reply = Pending(text: text.isEmpty ? "\(images.count) image\(images.count == 1 ? "" : "s")" : text,
-                            images: !images.isEmpty)
-        reply.known = Set(feed.items.compactMap { if case .user = $0.kind { $0.id } else { nil } })
-        if state == "working" {
-            if interrupting { reply.pushed = true; pushes += 1 } else { reply.queued = true }
-        }
-        pending.append(reply)
-        let replyID = reply.id
-        watchDelivery(of: replyID)
-        if reply.images {
-            // The 20 s fallback must not wait for the conversation to change again.
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(21))
-                confirmPending()
+        if state == "working", interrupting { pushes += 1 }
+        prepared().send(text: text, images: images, interrupting: interrupting) { error in
+            // Nothing is sent; the reply comes back so it can be sent again.
+            sendError = "Couldn't send the image: \(error.localizedDescription)"
+            // Back in the box only if nothing new was typed there meanwhile.
+            if draft.isEmpty && attachments.isEmpty {
+                draft = text
+                attachments = images
             }
         }
         // What you just sent is where you want to be: straight there, then the list's own
         // bottom anchoring follows it as it grows (an animated scroll would chase a moving end).
         position.scrollTo(edge: .bottom)
-        Task {
-            var paths: [String] = []
-            if let session, !images.isEmpty {
-                do {
-                    for image in images {
-                        let path = try await session.uploadImage(image.data)
-                        SentImages.store(image.data, for: path)
-                        paths.append(path)
-                    }
-                } catch {
-                    // Nothing is sent; the reply comes back so it can be sent again.
-                    sendError = "Couldn't send the image: \(error.localizedDescription)"
-                    // Back in the box only if nothing new was typed there meanwhile.
-                    if draft.isEmpty && attachments.isEmpty {
-                        draft = text
-                        attachments = images
-                    }
-                    pending.removeAll { $0.id == replyID }
-                    return
-                }
-            }
-            let message = (paths + (text.isEmpty ? [] : [text])).joined(separator: " ")
-            await model.automate {
-            if interrupting {
-                model.press(.escape)
-                // Type only once the agent has stopped (its screen says so), or it's queued again.
-                await waitUntilStopped(upTo: .seconds(3))
-            }
-            // Image paths go first, pasted as the terminal would get them; the agents attach them.
-            if paths.isEmpty, !message.contains("\n"), message.hasPrefix("!"), message.count > 1 {
-                // A shell command: `!` on its own switches the agent's input to shell mode first
-                // (as typing it does), then the command.
-                model.type("!")
-                try? await Task.sleep(for: .milliseconds(120))
-                model.type(String(message.dropFirst()))
-            } else if !paths.isEmpty || message.contains("\n") { model.paste(message) } else { model.type(message) }
-            // Return on its own, a moment later, so the agent sees it as "send" and not as part of the text.
-            try? await Task.sleep(for: .milliseconds(150))
-            model.press(.enter)
-            }
-            await confirmEnter(for: reply.id, text: message)
-        }
-    }
-
-    /// A sent reply is confirmed once the conversation has a message with its text.
-    private func confirmPending() {
-        guard !pending.isEmpty else { return }
-        // A reply with images comes back worded differently ("[Image #1] …"): it goes after a while.
-        pending.removeAll { $0.arrived(in: feed.items) || ($0.images && $0.at.timeIntervalSinceNow < -20) }
-    }
-
-    /// Ten seconds without the reply in the conversation, without the agent working, and without
-    /// the words on the terminal's screen (an agent shows a queued reply under its prompt): it most
-    /// likely never arrived (a channel that died quietly), so the bubble offers Retry. While the
-    /// agent works or the screen shows it, it keeps watching: the agent reads it after this step.
-    private func watchDelivery(of id: UUID) {
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(10))
-            while let at = pending.firstIndex(where: { $0.id == id }), !pending[at].images, !pending[at].failed {
-                if state != "working", !Pending.onScreen(pending[at].text, lines: model.textLines) {
-                    withAnimation(motion) { pending[at].failed = true }
-                    return
-                }
-                try? await Task.sleep(for: .seconds(5))
-            }
-        }
-    }
-
-    /// Reconnects from scratch, as reopening the app does, and sends the reply again. Reopening
-    /// only the terminal's channel isn't enough: a line that died quietly keeps the old connection
-    /// looking fine, and the new channel hangs on it.
-    private func retry(_ reply: Pending) {
-        guard let at = pending.firstIndex(where: { $0.id == reply.id }) else { return }
-        pending[at].failed = false
-        pending[at].at = .now
-        Task { @MainActor in
-            if let session {
-                model.stop()
-                session.retry(keys: keys)
-                let end = ContinuousClock.now + .seconds(20)
-                while ContinuousClock.now < end, session.state != .connected {
-                    try? await Task.sleep(for: .milliseconds(200))
-                }
-                model.reconnect()
-                let live = ContinuousClock.now + .seconds(5)
-                while ContinuousClock.now < live, model.phase != .live {
-                    try? await Task.sleep(for: .milliseconds(100))
-                }
-            }
-            // The words may already be in the prompt, typed before the line died with Enter lost:
-            // typing them again would send them twice in one message. Submit what's there.
-            await model.automate {
-                if !Pending.onScreen(reply.text, lines: model.textLines) {
-                    model.type(reply.text)
-                    try? await Task.sleep(for: .milliseconds(150))
-                }
-                model.press(.enter)
-            }
-            watchDelivery(of: reply.id)
-        }
     }
 }
 
