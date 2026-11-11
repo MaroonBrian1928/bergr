@@ -410,4 +410,13 @@ final class TerminalScreenModel {
         let login = AnswerParser.inLogin(lines)
         if login != inLogin { inLogin = login }
     }
+
+    #if DEBUG
+    /// A screen's text without a terminal behind it, for tests: what a new frame sets.
+    func showText(_ lines: [String]) {
+        if lines != textLines { textLines = lines }
+        let login = AnswerParser.inLogin(lines)
+        if login != inLogin { inLogin = login }
+    }
+    #endif
 }

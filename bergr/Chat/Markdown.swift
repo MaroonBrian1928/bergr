@@ -261,6 +261,9 @@ struct MarkdownView: View {
     var revealed: Int?
 
     var body: some View {
+        #if DEBUG
+        let _ = RenderProbe.hit("MarkdownView")
+        #endif
         let starts = blocks.reduce(into: [0]) { $0.append($0.last! + $1.wordCount) }
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { i, block in
@@ -364,3 +367,12 @@ private struct TableView: View {
         .padding(.horizontal, -16)
     }
 }
+
+#if DEBUG
+/// Counts body evaluations by view name, so tests can tell what an update rebuilt.
+@MainActor
+enum RenderProbe {
+    static var counts: [String: Int] = [:]
+    static func hit(_ name: String) { counts[name, default: 0] += 1 }
+}
+#endif

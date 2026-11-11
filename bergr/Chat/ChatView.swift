@@ -30,6 +30,7 @@ struct ChatView: View {
     @State private var choosingMode = false
     @State private var selecting: SelectableMessage?
     @State private var viewing: ViewedImage?
+    @State private var imageOpener = ImageOpener()
     /// The Claude Code version whose update banner was closed: it stays away until a newer one
     /// is installed.
     @AppStorage("chat.dismissedClaudeUpdate") private var dismissedUpdate = ""
@@ -42,6 +43,8 @@ struct ChatView: View {
     /// While the list moves, its rows don't answer the pointer: on the Mac every pointer move over
     /// moving content was checked against every message (a quarter of the time spent scrolling).
     @State private var scroll = ScrollState()
+    /// The rows drawn, with what each last showed: a row is built again only when that changed.
+    @State private var rowStore = RowStore()
     /// How many rows to draw. The list isn't lazy, so a long conversation drawn whole is slow to
     /// open and to scroll; the latest rows show, earlier ones a tap away. Search looks at all.
     @State private var rowLimit = Self.rowPage
@@ -117,11 +120,19 @@ struct ChatView: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = RenderProbe.hit("ChatView")
+        #endif
         let allRows = rows
         let all = shownRows(allRows)
+        let state = self.state
+        let canType = self.canType
         let tools = ToolContext(liveRunID: liveRunID, agents: feed.subagents, lastRowID: allRows.last?.id)
+        let loose = search == nil ? looseSubagents : []
         let hidden = search == nil ? max(0, all.count - rowLimit) : 0
         let shown = hidden > 0 ? Array(all.suffix(rowLimit)) : all
+        let epoch = rowStore.update(shown.map { rowKey($0, tools: tools, canType: canType, state: state) },
+                                    chat: self, isNew: isNew)
         let shownReplies = outbox.shown(in: feed.items, search: search)
         ScrollView {
             // Not lazy: every row is measured, so the list never grows by an estimate and shrinks
@@ -147,24 +158,17 @@ struct ChatView: View {
                     .accessibilityHint("\(hidden) more")
                 }
                 Group {
-                    ForEach(shown) { row in
-                        rowView(row, tools: tools)
-                            // A row is hit as its box, not its text's outline: matching the outline
-                            // on every pointer move made scrolling slow on the Mac.
-                            .contentShape(.rect)
-                            // Rows take their place at once (the list keeps its bottom still, and
-                            // animating positions fought that: rows overshot up and settled back
-                            // down); a new one fades and rises into place by drawing alone.
-                            .modifier(ArriveIn(active: isNew(row)))
-                            .transition(.identity)
-                    }
+                    // The chat's body runs on every streamed token, every key typed and every
+                    // change of the agent's status: the rows are gone through again only when one
+                    // of them changed, and only the changed ones are built (see `RowList`).
+                    RowList(store: rowStore, epoch: epoch)
                 }
                 // The read conversation arrives in one step: fade it in where it lands (no slide).
                 .opacity(feed.items.isEmpty ? 0 : 1)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: feed.items.isEmpty)
                 // Sub-agents whose starting tool call isn't in the conversation (yet).
-                if search == nil, !looseSubagents.isEmpty {
-                    SubagentGroup(agents: looseSubagents, palette: palette)
+                if !loose.isEmpty {
+                    SubagentGroup(agents: loose, palette: palette)
                 }
                 // A sent reply shows at once; when the conversation has it, the real one takes
                 // its place without moving, and this one goes in the same instant.
@@ -369,6 +373,10 @@ struct ChatView: View {
         .background(palette.background)
         .onChange(of: feed.items) { outbox.feedChanged(feed.items) }
         .onDisappear { outbox.cancelAll() }
+        // The store keeps this view for building rows: let go of it with the chat (and take it
+        // back when the chat shows again without having been rebuilt).
+        .onAppear { rowStore.chat = self }
+        .onDisappear { rowStore.chat = nil }
         .onChange(of: state, initial: true) { _, now in workingSeen = now == "working" ? (workingSeen ?? .now) : nil }
         .toolbar { if pane == nil { chatToolbar } }
         .sheet(isPresented: $showingModels) {
@@ -391,7 +399,7 @@ struct ChatView: View {
         .sheet(item: $selecting) { SelectTextSheet(text: $0.text) }
         #endif
         // Images open from here, not from their rows (see `showImage`).
-        .environment(\.showImage) { viewing = ViewedImage(image: $0) }
+        .environment(\.showImage, imageOpener.action($viewing))
         .platformCover(item: $viewing) { ImageViewer(image: $0.image) }
     }
 
@@ -429,33 +437,18 @@ struct ChatView: View {
         moreMenu
     }
 
-    /// Its own view, compared by what it shows: rebuilt on every screen change (a working Codex
-    /// redraws its timer each second), an open menu closed before you could pick anything.
+    /// Its own view: it reads the terminal's screen (for the permission mode), which changes many
+    /// times a second while an agent works, and read here that rebuilt the whole chat each time.
     private var moreMenu: some View {
-        MoreMenu(
-            agent: agent, hasUsage: feed.usage != nil || agent == .claude, hasInfo: onInfo != nil,
-            currentMode: PermissionModes.current(agent, in: model.textLines, saved: feed.usage?.mode),
-            saved: feed.usage?.mode, canSetMode: canType,
+        MoreMenuSlot(
+            agent: agent, feed: feed, model: model, hasInfo: onInfo != nil, canSetMode: canType,
+            choosingMode: $choosingMode, sendError: $sendError,
             search: {
                 withAnimation(motion) { searching = true }
                 searchFocused = true
             },
             usage: { showingUsage = true },
-            permissions: { choosingMode = true },
             info: { onInfo?() })
-        .equatable()
-        .confirmationDialog("Permissions", isPresented: $choosingMode, titleVisibility: .visible) {
-            let current = PermissionModes.current(agent, in: model.textLines, saved: feed.usage?.mode)
-            ForEach(PermissionModes.modes(agent), id: \.self) { mode in
-                Button(mode == current ? "\(mode) ✓" : mode) {
-                    Task {
-                        if let problem = await PermissionModes.set(mode, agent: agent, model: model, saved: feed.usage?.mode) {
-                            sendError = problem
-                        }
-                    }
-                }
-            }
-        }
     }
 
     private var contextItem: some ToolbarContent {
@@ -657,7 +650,7 @@ struct ChatView: View {
     // MARK: Rows
 
     /// Items as shown: a run of tool calls between two messages reads as one line.
-    private enum Row: Identifiable {
+    private enum Row: Identifiable, Equatable {
         case item(ChatFeed.Item)
         case tools([ChatFeed.Item])
 
@@ -748,8 +741,11 @@ struct ChatView: View {
     /// one whose call isn't loaded (it was before a compaction, or beyond the backlog) has nowhere
     /// to sit, and piling those at the end of every visit only buries the conversation.
     private var looseSubagents: [ChatFeed.SubagentInfo] {
+        let running = feed.subagents.filter { $0.state == .running }
+        // Mostly none: then the conversation isn't walked (this runs on every streamed token).
+        guard !running.isEmpty else { return [] }
         let tools = Set(feed.items.filter { if case .tool = $0.kind { true } else { false } }.map(\.id))
-        return feed.subagents.filter { ($0.parent.map { !tools.contains($0) } ?? true) && $0.state == .running }
+        return running.filter { $0.parent.map { !tools.contains($0) } ?? true }
     }
 
     /// What every tool row needs, worked out once per body rather than per row.
@@ -766,30 +762,88 @@ struct ChatView: View {
         }
     }
 
-    @ViewBuilder
-    private func rowView(_ row: Row, tools: ToolContext) -> some View {
+    /// Everything a row shows or acts on that can change, so an unchanged row is skipped (see
+    /// `RowSlot`). What a row needs from the feed or the terminal goes through here: read inside
+    /// the row, a change to any tool's output or any question would redraw every row that read it.
+    private struct RowKey: Equatable {
+        let row: Row
+        let scheme: ColorScheme
+        let reduceMotion: Bool
+        let canType: Bool
+        let session: ObjectIdentifier?
+        let address: String?
+        // A tool run: its steps with their output, the sub-agents it started, and its state.
+        var steps: [ToolRun.Step] = []
+        var agents: [ChatFeed.SubagentInfo] = []
+        var running = false
+        var waiting = false
+        /// When an assistant message arrived, while it reveals.
+        var reveal: Date?
+        // A question card.
+        var info: ChatFeed.QuestionInfo?
+        var earlierOpen = false
+        var answer: String?
+    }
+
+    private func rowKey(_ row: Row, tools: ToolContext, canType: Bool, state: String?) -> RowKey {
+        var key = RowKey(row: row, scheme: colorScheme, reduceMotion: reduceMotion, canType: canType,
+                         session: session.map(ObjectIdentifier.init), address: terminal?.address)
         switch row {
         case .tools(let items):
             // The tool call that started a sub-agent is replaced by the sub-agent's row.
-            let agents = tools.agents
             let started = tools.started
-            let steps = items.compactMap { item -> ToolRun.Step? in
+            key.steps = items.compactMap { item -> ToolRun.Step? in
                 if case .tool(let name, let summary) = item.kind, !started.contains(item.id) {
                     ToolRun.Step(id: item.id, name: name, summary: summary, output: feed.toolOutput[item.id])
                 } else { nil }
             }
-            let mine = agents.filter { a in a.parent.map { p in items.contains { $0.id == p } } ?? false }
+            if !tools.agents.isEmpty {
+                key.agents = tools.agents.filter { a in a.parent.map { p in items.contains { $0.id == p } } ?? false }
+            }
+            let id = row.id
+            key.running = id == tools.liveRunID
+            key.waiting = state == "blocked" && id == tools.lastRowID
+        case .item(let item):
+            switch item.kind {
+            case .assistant:
+                key.reveal = feed.revealStart[item.id]
+            case .question:
+                if let info = feed.questionInfo[item.id], info.keys {
+                    // Claude's: picked in the terminal by number, one question after another.
+                    key.info = info
+                    key.earlierOpen = info.index > 0 && info.group.map { group in
+                        (0..<info.index).contains { i in
+                            let id = "\(group)-q\(i)"
+                            return feed.questionInfo[id]?.answer == nil && questionPicks[id] == nil
+                        }
+                    } == true
+                    key.answer = info.answer ?? questionPicks[item.id]
+                } else {
+                    key.answer = answer(after: item.id)
+                }
+            default:
+                break
+            }
+        }
+        return key
+    }
+
+    @ViewBuilder
+    private func rowView(_ key: RowKey) -> some View {
+        let palette = ChatPalette.of(key.scheme)
+        switch key.row {
+        case .tools:
+            let steps = key.steps
             VStack(alignment: .leading, spacing: 0) {
                 if !steps.isEmpty {
-                    ToolRun(steps: steps, palette: palette, running: row.id == tools.liveRunID,
-                            waiting: state == "blocked" && row.id == tools.lastRowID)
+                    ToolRun(steps: steps, palette: palette, running: key.running, waiting: key.waiting)
                         // The commands the agent ran: copy one, or run it again.
                         .contextMenu {
                             let commands = Commands.cachedRan(steps.map { ($0.name, $0.summary) })
                             if !commands.isEmpty { commandButtons(commands) }
                         }
                 }
-                if !mine.isEmpty { SubagentGroup(agents: mine, palette: palette) }
+                if !key.agents.isEmpty { SubagentGroup(agents: key.agents, palette: palette) }
             }
         case .item(let item):
             switch item.kind {
@@ -806,7 +860,7 @@ struct ChatView: View {
                 }
             case .assistant(let text, let blocks):
                 Group {
-                    if !reduceMotion, let since = feed.revealStart[item.id] {
+                    if !key.reduceMotion, let since = key.reveal {
                         RevealingMarkdown(blocks: blocks, palette: palette, since: since)
                     } else {
                         MarkdownView(blocks: blocks, palette: palette)
@@ -826,22 +880,15 @@ struct ChatView: View {
             case .note(let text):
                 NoteRow(text: text, palette: palette)
             case .question(let title, let options):
-                if let info = feed.questionInfo[item.id], info.keys {
-                    // Claude's: picked in the terminal by number, one question after another.
-                    let earlierOpen = info.index > 0 && info.group.map { group in
-                        (0..<info.index).contains { i in
-                            let id = "\(group)-q\(i)"
-                            return feed.questionInfo[id]?.answer == nil && questionPicks[id] == nil
-                        }
-                    } == true
+                if let info = key.info {
                     QuestionCard(title: title, options: options, details: info.details,
-                                 answer: info.answer ?? questionPicks[item.id], palette: palette,
-                                 enabled: canType && !earlierOpen) { choice in
+                                 answer: key.answer, palette: palette,
+                                 enabled: key.canType && !key.earlierOpen) { choice in
                         pick(choice, in: options, question: item.id, info: info)
                     }
                 } else {
-                    QuestionCard(title: title, options: options, answer: answer(after: item.id), palette: palette,
-                                 enabled: canType) { choice in
+                    QuestionCard(title: title, options: options, answer: key.answer, palette: palette,
+                                 enabled: key.canType) { choice in
                         draft = choice
                         send()
                     }
@@ -849,6 +896,109 @@ struct ChatView: View {
             case .tool:
                 EmptyView()
             }
+        }
+    }
+
+    /// One row of the conversation, built again only when what it shows changed. The rows' builder
+    /// is a function of the whole chat, so without this every streamed token built all of them.
+    ///
+    /// Two plain words on purpose (a reference and a number), the same bit for bit while the row
+    /// is unchanged. SwiftUI skips a view whose value is bitwise equal at once; anything it has to
+    /// compare field by field or with `==` (also `.equatable()`) it only skips once it has worked
+    /// out how to compare that type, in the background, seconds after the type first shows (longer
+    /// on a busy machine). Until then such rows were all built on every token.
+    private struct RowSlot: View {
+        let box: RowBox
+        let version: Int
+
+        var body: some View {
+            if let chat = box.store.chat { chat.rowView(box.key) }
+        }
+    }
+
+    @MainActor
+    private final class RowBox {
+        var key: RowKey
+        /// Counts the key's changes.
+        var version = 0
+        unowned let store: RowStore
+
+        init(key: RowKey, store: RowStore) {
+            self.key = key
+            self.store = store
+        }
+    }
+
+    private struct Slot: Identifiable, Equatable {
+        let id: String
+        let box: RowBox
+        let version: Int
+        /// Joined the conversation just now: it fades in.
+        let new: Bool
+
+        static func == (a: Slot, b: Slot) -> Bool {
+            a.box === b.box && a.version == b.version && a.new == b.new
+        }
+    }
+
+    /// The conversation's rows. Like `RowSlot`, the same bit for bit until a row changes, joins or
+    /// leaves (`epoch` counts that), so the chat's body running for anything else skips the list.
+    private struct RowList: View {
+        let store: RowStore
+        let epoch: Int
+
+        var body: some View {
+            ForEach(store.slots) { slot in
+                RowSlot(box: slot.box, version: slot.version)
+                    // A row is hit as its box, not its text's outline: matching the outline
+                    // on every pointer move made scrolling slow on the Mac.
+                    .contentShape(.rect)
+                    // Rows take their place at once (the list keeps its bottom still, and
+                    // animating positions fought that: rows overshot up and settled back
+                    // down); a new one fades and rises into place by drawing alone.
+                    .modifier(ArriveIn(active: slot.new))
+                    .transition(.identity)
+            }
+        }
+    }
+
+    /// The rows drawn and their keys. Not observable: it is brought up to date while the chat's
+    /// body runs, and a row learns of its change through its `RowSlot`'s version.
+    @MainActor
+    private final class RowStore {
+        /// The chat as last drawn, which builds the rows.
+        var chat: ChatView?
+        private var boxes: [String: RowBox] = [:]
+        private(set) var slots: [Slot] = []
+        /// Counts the changes to `slots`.
+        private var epoch = 0
+
+        /// Brings the rows up to date with their keys; the count of changes so far.
+        func update(_ keys: [RowKey], chat: ChatView, isNew: (Row) -> Bool) -> Int {
+            self.chat = chat
+            var kept: [String: RowBox] = [:]
+            kept.reserveCapacity(keys.count)
+            let next = keys.map { key in
+                let id = key.row.id
+                let box: RowBox
+                if let old = boxes[id] {
+                    box = old
+                    if old.key != key {
+                        old.key = key
+                        old.version &+= 1
+                    }
+                } else {
+                    box = RowBox(key: key, store: self)
+                }
+                kept[id] = box
+                return Slot(id: id, box: box, version: box.version, new: isNew(key.row))
+            }
+            boxes = kept
+            if next != slots {
+                slots = next
+                epoch &+= 1
+            }
+            return epoch
         }
     }
 
@@ -1156,6 +1306,9 @@ private struct UserBubble: View {
     let palette: ChatPalette
 
     var body: some View {
+        #if DEBUG
+        let _ = RenderProbe.hit("UserBubble")
+        #endif
         Text(text)
             .foregroundStyle(palette.text)
             .padding(.horizontal, 14)
@@ -1264,7 +1417,7 @@ private struct SubagentLine: View {
 /// A run of tool calls: one line that says what happened ("Ran 2 commands"), opening to every
 /// step. The run the agent is still in says "Running…" with a shimmer.
 private struct ToolRun: View {
-    struct Step: Identifiable {
+    struct Step: Identifiable, Equatable {
         let id: String
         let name: String
         let summary: String
@@ -1333,6 +1486,9 @@ private struct ToolRun: View {
     @State private var gliding = false
 
     var body: some View {
+        #if DEBUG
+        let _ = RenderProbe.hit("ToolRun")
+        #endif
         let content = Group {
             if running && !waiting {
                 live
@@ -1642,6 +1798,21 @@ struct WorkingRow: View {
     }
 }
 
+/// The chat's way to open an image, made once. It is an environment value, which reaches every
+/// view in the chat: a closure made anew each time the chat's body ran read as a changed
+/// environment for all of them (every text in every row checked again, on every streamed token).
+@MainActor
+final class ImageOpener {
+    private var made: ((PlatformImage) -> Void)?
+
+    func action(_ viewing: Binding<ViewedImage?>) -> (PlatformImage) -> Void {
+        if let made { return made }
+        let action: (PlatformImage) -> Void = { viewing.wrappedValue = ViewedImage(image: $0) }
+        made = action
+        return action
+    }
+}
+
 /// Whether the chat is scrolling, kept out of `ChatView` so a change only redraws `IdleHitTesting`.
 @Observable final class ScrollState {
     var scrolling = false
@@ -1892,6 +2063,46 @@ private struct AnswerSlot: View {
         if blocked || model.inLogin {
             AnswerCard(status: terminal.status, model: model, palette: palette) { record($0, $1) }
                 .transition(transition)
+        }
+    }
+}
+
+/// The ⋯ menu with what it reads from the screen and the feed.
+private struct MoreMenuSlot: View {
+    let agent: ChatAgent
+    let feed: ChatFeed
+    let model: TerminalScreenModel
+    let hasInfo: Bool
+    let canSetMode: Bool
+    @Binding var choosingMode: Bool
+    @Binding var sendError: String?
+    let search: () -> Void
+    let usage: () -> Void
+    let info: () -> Void
+
+    var body: some View {
+        #if DEBUG
+        let _ = RenderProbe.hit("MoreMenuSlot")
+        #endif
+        // Compared by what it shows: rebuilt on every screen change (a working Codex redraws its
+        // timer each second), an open menu closed before you could pick anything.
+        MoreMenu(
+            agent: agent, hasUsage: feed.usage != nil || agent == .claude, hasInfo: hasInfo,
+            currentMode: PermissionModes.current(agent, in: model.textLines, saved: feed.usage?.mode),
+            saved: feed.usage?.mode, canSetMode: canSetMode,
+            search: search, usage: usage, permissions: { choosingMode = true }, info: info)
+        .equatable()
+        .confirmationDialog("Permissions", isPresented: $choosingMode, titleVisibility: .visible) {
+            let current = PermissionModes.current(agent, in: model.textLines, saved: feed.usage?.mode)
+            ForEach(PermissionModes.modes(agent), id: \.self) { mode in
+                Button(mode == current ? "\(mode) ✓" : mode) {
+                    Task {
+                        if let problem = await PermissionModes.set(mode, agent: agent, model: model, saved: feed.usage?.mode) {
+                            sendError = problem
+                        }
+                    }
+                }
+            }
         }
     }
 }
