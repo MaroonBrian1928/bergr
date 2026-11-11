@@ -24,7 +24,7 @@ struct LocalHostTests {
         #expect(decoded.isLocal)
         #expect(decoded.name == "This Mac")
         #expect(decoded.keyID == nil)
-        #expect(decoded.subtitle.hasPrefix("This Mac"))
+        #expect(decoded.subtitle.hasPrefix("Runs here"))
     }
 
     @Test func storeAddsThisMacOnceAndFirst() {
