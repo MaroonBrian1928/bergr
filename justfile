@@ -260,3 +260,12 @@ _device name="":
     id="$(xcrun devicectl list devices 2>/dev/null | awk '/iPhone/ && /physical/ && (/connected/ || /available/) { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9A-F]{8}-[0-9A-F]{16}$/) { print $i; exit } }')"
     if [ -z "$id" ]; then echo "No connected iPhone (unlock it, or plug it in). Plug it in, or set BERGR_DEVICE in .envrc.local (see: just devices)." >&2; exit 1; fi
     echo "$id"
+
+# Release the native Mac app: archive, DMG, notarize, staple, Sparkle appcast, cask file in .build/mac;
+# `just mac-release true` also creates the GitHub release mac-v<version>. See docs/mac-release.md
+mac-release upload="false":
+    scripts/mac-release.sh {{ if upload == "true" { "--upload" } else { "" } }}
+
+# Show the mac-release steps and check their prerequisites without building anything
+mac-release-check:
+    scripts/mac-release.sh --dry-run

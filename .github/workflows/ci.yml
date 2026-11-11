@@ -64,3 +64,10 @@ jobs:
           xcodebuild -project bergr.xcodeproj -scheme bergr -configuration Debug \
             -destination "generic/platform=iOS" -derivedDataPath .build/xcode \
             CODE_SIGNING_ALLOWED=NO build | xcbeautify
+
+      # Unsigned: it must start without the keychain entitlement. Releases stay local (just mac-release).
+      - name: Build the Mac app
+        run: |
+          xcodebuild -project bergr.xcodeproj -scheme bergrMac -configuration Debug \
+            -destination "generic/platform=macOS" -derivedDataPath .build/xcode-mac \
+            CODE_SIGNING_ALLOWED=NO build | xcbeautify

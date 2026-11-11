@@ -75,6 +75,9 @@ licenses = [
      "license": "MIT", "text": "Catppuccin, Dracula, Tokyo Night, Gruvbox, Nord, One, Rosé Pine, Solarized, GitHub, "
      "Kanagawa and Everforest colors, as collected by iTerm2-Color-Schemes and shipped with Ghostty. "
      "Each theme belongs to its authors.\n\n" + read(EXTRA / "terminal-themes.txt")},
+    # Sparkle (the Mac app's updater) is bound in by the Mac target only; its text is kept in scripts/licenses.
+    {"name": "Sparkle", "url": "https://github.com/sparkle-project/Sparkle", "license": "MIT",
+     "text": read(EXTRA / "sparkle.txt")},
     swift("Citadel", "https://github.com/orlandos-nl/Citadel", "MIT", "LICENSE"),
     swift("BigInt", "https://github.com/attaswift/BigInt", "MIT", "LICENSE.md"),
     swift("swift-nio", "https://github.com/apple/swift-nio", "Apache-2.0", "NOTICE.txt", "LICENSE.txt"),
