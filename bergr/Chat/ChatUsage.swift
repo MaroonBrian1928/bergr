@@ -92,7 +92,11 @@ struct UsageSheet: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
         }
+        #if os(macOS)
+        .frame(width: 540, height: 520)
+        #else
         .presentationDetents([.medium, .large])
+        #endif
         // Solid, so the conversation behind doesn't show through and dim the numbers.
         .presentationBackground(Color.groupedBackground)
     }

@@ -148,6 +148,16 @@ final class HostSession {
     }
 
     /// The user's home folder there, guessed from where terminals run (`/Users/me`, `/home/me`).
+    #if os(macOS)
+    @ObservationIgnored private var inputQueues: [String: TerminalInputQueue] = [:]
+
+    func automate(address: String, _ steps: @escaping @MainActor () async -> Void) async {
+        let queue = inputQueues[address] ?? TerminalInputQueue()
+        inputQueues[address] = queue
+        await queue.run(steps)
+    }
+    #endif
+
     // MARK: Chat feeds
 
     /// Conversations being followed, by terminal address. The session owns them, not the screen:

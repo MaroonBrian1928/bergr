@@ -29,7 +29,7 @@ enum TerminalLauncher {
         let app = selected
         do {
             guard let appURL = appURL(app) else { throw Failure("\(app.displayName) is not installed.") }
-            let remote = host.map { AttachCommand.Remote(user: $0.target.username, host: $0.target.host, port: $0.target.port) }
+            let remote = host.flatMap { $0.isLocal ? nil : $0 }.map { AttachCommand.Remote(user: $0.target.username, host: $0.target.host, port: $0.target.port) }
             let argv = try AttachCommand.argv(remote: remote, address: address)
             let script = try writeScript(AttachCommand.script(argv: argv))
             let plan = app.launchPlan(appPath: appURL.path, script: script.path)
@@ -57,8 +57,12 @@ enum TerminalLauncher {
         let caches = try fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
         let dir = caches.appendingPathComponent(Bundle.main.bundleIdentifier ?? "bergr").appendingPathComponent("attach")
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        for old in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] {
-            try? fm.removeItem(at: old)
+        for old in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
+            if old.pathExtension == "command",
+               let modified = try? old.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+               Date.now.timeIntervalSince(modified) > 7 * 24 * 60 * 60 {
+                try? fm.removeItem(at: old)
+            }
         }
         let url = dir.appendingPathComponent(UUID().uuidString + ".command")
         try content.write(to: url, atomically: true, encoding: .utf8)

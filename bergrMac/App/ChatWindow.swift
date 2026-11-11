@@ -27,12 +27,28 @@ struct ChatWindow: View {
     let session: HostSession
     let address: String
 
+    var body: some View {
+        ChatWindowContent(session: session, address: address)
+            .id(ChatIdentity(session: ObjectIdentifier(session), address: address))
+    }
+}
+
+private struct ChatIdentity: Hashable {
+    let session: ObjectIdentifier
+    let address: String
+}
+
+private struct ChatWindowContent: View {
+    let session: HostSession
+    let address: String
+    @State private var reading = false
+    @State private var launchError: String?
     @State private var model = TerminalScreenModel(theme: TerminalTheme.current(.dark, light: "", dark: ""))
     @State private var feed = ChatFeed()
     @AppStorage(TerminalTheme.lightKey) private var lightTheme = TerminalTheme.defaultLight
     @AppStorage(TerminalTheme.darkKey) private var darkTheme = TerminalTheme.defaultDark
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.appearsActive) private var appearsActive
+    @State private var appearsActive = false
 
     var body: some View {
         let terminal = session.terminal(address)
@@ -43,12 +59,16 @@ struct ChatWindow: View {
                     .task(id: "\(agent.rawValue) \(session.state == .connected)") {
                         guard session.state == .connected, let terminal else { return }
                         model.wantsKeyboard = false
+                        model.drawing = false
                         if !model.started {
                             model.start(session: session, address: address, cols: max(terminal.cols, 20), rows: max(terminal.rows, 5))
                         }
+                        let front = terminal.foreground.flatMap {
+                            ChatAgent.detect(name: $0.name, argv: $0.argv) == agent ? $0 : nil
+                        }
                         feed = session.chatFeed(
-                            address: address, agent: agent, pid: terminal.foreground?.pid ?? 0,
-                            cwd: terminal.foreground?.cwd ?? terminal.cwd,
+                            address: address, agent: agent, pid: front?.pid ?? 0,
+                            cwd: front?.cwd ?? terminal.cwd,
                             sessionHint: ChatAgent.sessionHint(argv: terminal.foreground?.argv ?? []))
                     }
             } else {
@@ -61,20 +81,46 @@ struct ChatWindow: View {
             model.theme = TerminalTheme.current(scheme, light: lightTheme, dark: darkTheme)
         }
         .onDisappear {
-            model.stop(); session.stopLooking(at: address)
+            model.stop(); setReading(false)
             clearFocus()
         }
-        .onAppear { session.startLooking(at: address) }
+        .background {
+            KeyWindowObserver { active in
+                appearsActive = active
+            }
+            .frame(width: 0, height: 0)
+        }
         // The window in front doesn't get banners about its own agent.
         .onChange(of: appearsActive, initial: true) { _, active in
+            setReading(active)
             if active {
                 NotificationRouter.shared.focused = (session.host.id, address)
                 MacNotifications.shared.focus(AgentRef(host: session.host.id, address: address))
             } else { clearFocus() }
         }
+        .focusedSceneValue(\.openTerminal, {
+            launchError = TerminalLauncher.open(host: session.host, address: address)
+        })
         .focusedSceneValue(\.interruptAgent, { model.press(.escape) })
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Open in Terminal", systemImage: "terminal") {
+                    launchError = TerminalLauncher.open(host: session.host, address: address)
+                }
+            }
+        }
+        .alert("Couldn’t Open Terminal", isPresented: Binding(get: { launchError != nil }, set: { if !$0 { launchError = nil } })) {
+            Button("OK") { launchError = nil }
+        } message: { Text(launchError ?? "") }
         .navigationTitle(terminal?.nameInSpace ?? address)
         .navigationSubtitle(session.host.name)
+    }
+
+    private func setReading(_ active: Bool) {
+        guard active != reading else { return }
+        reading = active
+        if active { session.startLooking(at: address) }
+        else { session.stopLooking(at: address) }
     }
 
     private func clearFocus() {

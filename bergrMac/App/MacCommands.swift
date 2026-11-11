@@ -10,6 +10,7 @@ struct MacCommands: SwiftUI.Commands {
     @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.agentRef) private var current
     @FocusedValue(\.showAgent) private var showAgent
+    @FocusedValue(\.openTerminal) private var openTerminal
     @FocusedValue(\.interruptAgent) private var interrupt
 
     /// Shows an agent: in the focused main window, else in its own window (which focuses it if
@@ -47,6 +48,11 @@ struct MacCommands: SwiftUI.Commands {
                 openWindow(id: "main")
             }
             .keyboardShortcut("n")
+            Button("Add Machine…") {
+                shell.showingAddMachine = true
+                openWindow(id: "main")
+            }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
             Button("New Window for Agent") { if let current { openWindow(value: current) } }
                 .keyboardShortcut("n", modifiers: [.command, .option])
                 .disabled(current == nil)
@@ -58,8 +64,7 @@ struct MacCommands: SwiftUI.Commands {
 
         CommandMenu("Agent") {
             Button("Open in Terminal") {
-                guard let current, let host = hosts.hosts.first(where: { $0.id == current.host }) else { return }
-                TerminalLauncher.open(host: host, address: current.address)
+                openTerminal?()
             }
             .keyboardShortcut("t")
             .disabled(current == nil)

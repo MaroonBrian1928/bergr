@@ -83,7 +83,9 @@ struct AgentsView: View {
                 } label: {
                     HStack(spacing: 3) {
                         Text("Agents").font(.headline)
+                        #if os(iOS)
                         Image(systemName: "chevron.down").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                        #endif
                     }
                     .foregroundStyle(.primary)
                 }

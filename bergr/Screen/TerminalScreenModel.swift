@@ -234,6 +234,12 @@ final class TerminalScreenModel {
 
     /// Runs one automated key sequence after the ones started before it have finished.
     func automate(_ steps: @escaping @MainActor () async -> Void) async {
+        #if os(macOS)
+        if let session, let address {
+            await session.automate(address: address, steps)
+            return
+        }
+        #endif
         let previous = automationTail
         let task = Task { @MainActor in
             await previous?.value

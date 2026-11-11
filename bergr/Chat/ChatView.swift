@@ -48,6 +48,9 @@ struct ChatView: View {
     private static let rowPage = 150
     /// Scrolled well up from the latest message: a button brings it back.
     @State private var awayFromLatest = false
+    #if os(macOS)
+    @State private var followsLatest = true
+    #endif
     /// Messages in the chat when you scrolled away from the latest: the ones after it are new.
     @State private var seenMessages = 0
     /// Options picked on Claude's question cards, until the conversation records the answers.
@@ -255,8 +258,14 @@ struct ChatView: View {
         .onScrollPhaseChange { _, phase in
             if scroll.scrolling != phase.isScrolling { scroll.scrolling = phase.isScrolling }
         }
+        #if os(macOS)
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(.bottom, for: .alignment)
+        .defaultScrollAnchor(followsLatest ? .bottom : nil, for: .sizeChanges)
+        #else
         .defaultScrollAnchor(.bottom)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
+        #endif
         #if DEBUG
         .modifier(BounceProbe(feed: feed, terminal: terminal, model: model, state: state,
                               on: UserDefaults.standard.bool(forKey: "bergr.bounceProbe")))
@@ -264,6 +273,11 @@ struct ChatView: View {
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentSize.height - geometry.visibleRect.maxY
         } action: { _, below in
+            #if os(macOS)
+            // Stop following as soon as the reader scrolls up, independently of the jump button.
+            let follows = below <= 48
+            if follows != followsLatest { followsLatest = follows }
+            #endif
             // Shows well above the bottom, hides only near it again: no flicker at the edge.
             let away = awayFromLatest ? below > 150 : below > 600
             if away != awayFromLatest {
@@ -303,12 +317,16 @@ struct ChatView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
         }
+        #if os(iOS)
         .scrollDismissesKeyboard(.interactively)
+        #endif
         // A reply being written stays with its agent: switching away and back finds it again.
         .onChange(of: draftKey, initial: true) { _, key in draft = ReplyDrafts.text(for: key) }
         .onChange(of: draft) { _, text in ReplyDrafts.set(text, for: draftKey) }
         // Where the conversation meets the floating bars, it softens under them instead of a hard cut.
+        #if os(iOS)
         .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+        #endif
         // A problem is felt as well as read; a change that went through is felt as done.
         .sensoryFeedback(.error, trigger: sendError) { _, new in new != nil }
         .sensoryFeedback(.success, trigger: feed.items.last?.id) { _, _ in
@@ -840,7 +858,7 @@ struct ChatView: View {
             ComposerField(
                 text: $draft, placeholder: prompt,
                 textColor: PlatformColor(palette.text), placeholderColor: PlatformColor(palette.secondary),
-                enabled: canType
+                enabled: canType, onSubmit: { send() }
             ) { images in
                 for image in images where attachments.count < ChatAttachment.limit {
                     if let item = ChatAttachment.make(from: image) { attachments.append(item) }

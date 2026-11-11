@@ -59,6 +59,11 @@ struct HostEditor: View {
     @State private var tested = false
     @State private var systemSSH: SystemSSHTest.Outcome?
     @State private var testingSystemSSH = false
+    @State private var sshAttemptID = UUID()
+    @State private var sshTask: Task<Void, Never>?
+    #if os(macOS)
+    @State private var sshProcess = SystemSSHTest.Attempt()
+    #endif
 
     private var palette: ChatPalette { .of(scheme) }
     private var isExisting: Bool { hosts.hosts.contains { $0.id == host.id } }
@@ -72,6 +77,7 @@ struct HostEditor: View {
     /// Why Save is greyed out, in words; nil when it can save.
     private var saveHint: String? {
         if host.target.host.trimmed.isEmpty { return "Enter an address to save." }
+        if host.isLocal { return nil }
         if host.target.username.trimmed.isEmpty { return "Enter a username (user@address) to save." }
         if portValue == nil { return "The port must be a number from 1 to 65535." }
         if host.keyID == nil { return "Pick or create a key to save." }
@@ -79,7 +85,7 @@ struct HostEditor: View {
     }
 
     private var canSave: Bool {
-        !host.target.host.trimmed.isEmpty && !host.target.username.trimmed.isEmpty && host.keyID != nil && portValue != nil
+        !host.target.host.trimmed.isEmpty && (host.isLocal || (!host.target.username.trimmed.isEmpty && host.keyID != nil && portValue != nil))
     }
 
     var body: some View {
@@ -108,6 +114,9 @@ struct HostEditor: View {
                     }
                 }
             }
+            #if os(macOS)
+            .formStyle(.grouped)
+            #endif
             .tint(palette.accent)
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: test?.state) {
@@ -120,7 +129,9 @@ struct HostEditor: View {
             .navigationTitle(isExisting ? "Edit Machine" : "Add Machine")
             .inlineNavigationTitle()
             .onAppear(perform: load)
-            .onDisappear { stopTest() }
+            .onDisappear { stopTest(); cancelSystemSSH() }
+            .onChange(of: host.target) { cancelSystemSSH() }
+            .onChange(of: port) { cancelSystemSSH() }
             .sheet(isPresented: $showingNewKey, onDismiss: {
                 if let newest = keys.keys.last, host.keyID == nil || !keys.keys.contains(where: { $0.id == host.keyID }) {
                     host.keyID = newest.id
@@ -280,9 +291,16 @@ struct HostEditor: View {
             Button(testingSystemSSH ? "Testing…" : "Test System ssh") {
                 testingSystemSSH = true
                 systemSSH = nil
-                let target = host.target
-                Task {
-                    systemSSH = await SystemSSHTest.run(target)
+                var target = host.target
+                target.port = portValue ?? 22
+                let id = UUID()
+                sshAttemptID = id
+                let attempt = SystemSSHTest.Attempt()
+                sshProcess = attempt
+                sshTask = Task {
+                    let outcome = await attempt.run(target)
+                    guard !Task.isCancelled, sshAttemptID == id else { return }
+                    systemSSH = outcome
                     testingSystemSSH = false
                 }
             }
@@ -300,6 +318,17 @@ struct HostEditor: View {
         }
     }
     #endif
+
+    private func cancelSystemSSH() {
+        sshAttemptID = UUID()
+        sshTask?.cancel()
+        sshTask = nil
+        #if os(macOS)
+        sshProcess.cancel()
+        #endif
+        testingSystemSSH = false
+        systemSSH = nil
+    }
 
     private var isTesting: Bool {
         guard let test else { return false }
@@ -365,7 +394,9 @@ struct HostEditor: View {
         guard address.isEmpty, port.isEmpty else { return }
         port = host.target.port == 22 ? "" : String(host.target.port)
         session = host.session ?? ""
-        if !host.target.host.isEmpty { address = host.subtitle }
+        if !host.target.host.isEmpty {
+            address = "\(host.target.username)@\(host.target.host)" + (host.target.port == 22 ? "" : ":\(host.target.port)")
+        }
     }
 
     private func applyAddress(_ text: String) {

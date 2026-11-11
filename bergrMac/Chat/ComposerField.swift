@@ -30,7 +30,7 @@ struct ComposerField: NSViewRepresentable {
     var placeholderColor: PlatformColor
     var enabled = true
     var maxLines = 6
-    /// Called on plain Return; when nil, the window gets ⌘↩ (what `ChatView` binds to Send).
+    /// Called directly on plain Return.
     var onSubmit: (() -> Void)?
     var onPasteImages: ([PlatformImage]) -> Void
 
@@ -44,6 +44,8 @@ struct ComposerField: NSViewRepresentable {
         textView.font = .preferredFont(forTextStyle: .body)
         textView.textContainerInset = .zero
         textView.textContainer?.lineFragmentPadding = 0
+        textView.minSize = NSSize(width: 0, height: textView.lineHeight)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -62,6 +64,7 @@ struct ComposerField: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let view = scroll.documentView as? ComposerTextView else { return }
+        view.delegate = context.coordinator
         view.textColor = textColor
         view.insertionPointColor = textColor
         view.placeholder = placeholder
@@ -81,7 +84,7 @@ struct ComposerField: NSViewRepresentable {
     func sizeThatFits(_ proposal: ProposedViewSize, nsView scroll: NSScrollView, context: Context) -> CGSize? {
         guard let view = scroll.documentView as? ComposerTextView else { return nil }
         let width = proposal.width ?? 300
-        view.setFrameSize(NSSize(width: width, height: view.frame.height))
+        view.setFrameSize(NSSize(width: width, height: max(view.frame.height, view.lineHeight)))
         view.textContainer?.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
         return CGSize(width: width, height: min(max(view.contentHeight(), view.lineHeight), view.maxHeight))
     }
@@ -108,20 +111,10 @@ struct ComposerField: NSViewRepresentable {
                 textView.insertNewlineIgnoringFieldEditor(nil)
                 return true
             case .send:
-                if let submit = parent.onSubmit { submit() } else { sendThroughWindow(textView) }
+                parent.text = textView.string
+                parent.onSubmit?()
                 return true
             }
-        }
-
-        /// Fires the window's ⌘↩ key equivalent, which `ChatView` binds to Send.
-        private func sendThroughWindow(_ view: NSView) {
-            guard let window = view.window,
-                  let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
-                                               timestamp: ProcessInfo.processInfo.systemUptime,
-                                               windowNumber: window.windowNumber, context: nil,
-                                               characters: "\r", charactersIgnoringModifiers: "\r",
-                                               isARepeat: false, keyCode: 36) else { return }
-            _ = window.performKeyEquivalent(with: event)
         }
     }
 }

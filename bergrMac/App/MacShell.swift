@@ -10,6 +10,7 @@ final class MacShell {
     var selection: AgentRef?
     /// ⌘N: the main window presents the New Session sheet.
     var showingNewSession = false
+    var showingAddMachine = false
 }
 
 /// What the focused window offers the commands (scene values, so they work without a focused view).
@@ -19,6 +20,7 @@ extension FocusedValues {
     /// Shows another agent in the focused window (the main window); nil where windows are per agent.
     @Entry var showAgent: ((AgentRef) -> Void)?
     /// Stops the focused window's agent (Esc in its terminal).
+    @Entry var openTerminal: (() -> Void)?
     @Entry var interruptAgent: (() -> Void)?
 }
 

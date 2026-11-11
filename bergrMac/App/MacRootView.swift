@@ -1,3 +1,4 @@
+import KeyStore
 import HerdrKit
 import SwiftUI
 
@@ -11,9 +12,18 @@ struct MacRootView: View {
 
     var body: some View {
         NavigationSplitView {
-            AgentsView(sessions: sessions) { host, address in shell.selection = AgentRef(host: host, address: address) }
+            VStack(spacing: 0) {
+                AgentsView(sessions: sessions) { host, address in shell.selection = AgentRef(host: host, address: address) }
+                Divider()
+                Button("Add Machine…", systemImage: "plus") { shell.showingAddMachine = true }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            }
                 .navigationSplitViewColumnWidth(min: 300, ideal: 360, max: 480)
                 .toolbar {
+                    ToolbarItem(placement: .automatic) {
+                        Button("Add Machine…", systemImage: "plus.rectangle") { shell.showingAddMachine = true }
+                    }
                     ToolbarItem(placement: .primaryAction) {
                         Button("New Session", systemImage: "plus") { shell.showingNewSession = true }
                     }
@@ -23,9 +33,18 @@ struct MacRootView: View {
                 ChatWindow(session: sessions.session(for: host), address: selected.address)
                     .id(selected)
             } else {
-                ContentUnavailableView("No agent selected", systemImage: "bubble.left.and.text.bubble.right",
-                                       description: Text("Pick an agent from the list."))
+                ContentUnavailableView {
+                    Label("No agent selected", systemImage: "bubble.left.and.text.bubble.right")
+                } description: {
+                    Text(hosts.hosts.isEmpty ? "Add a machine to connect to your agents." : "Pick an agent from the list.")
+                } actions: {
+                    Button("Add Machine…") { shell.showingAddMachine = true }
+                }
             }
+        }
+        .sheet(isPresented: $shell.showingAddMachine) {
+            HostEditor(host: Host.new(key: keys.keys.last?.id))
+                .frame(width: 620, height: 640)
         }
         .sheet(isPresented: $shell.showingNewSession) {
             NewSessionView(sessions: sessions) { host, address in

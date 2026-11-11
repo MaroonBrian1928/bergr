@@ -20,7 +20,13 @@ struct Host: Identifiable, Codable, Hashable {
     var local: Bool?
 
     var isDemo: Bool { demo == true }
-    var isLocal: Bool { local == true }
+    var isLocal: Bool {
+        #if os(macOS)
+        !isDemo && (local == true || LocalMachine.matches(target.host))
+        #else
+        local == true
+        #endif
+    }
 
     var subtitle: String {
         if isLocal { return "This Mac · no SSH needed" }

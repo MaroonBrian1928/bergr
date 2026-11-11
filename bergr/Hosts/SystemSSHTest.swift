@@ -39,29 +39,41 @@ enum SystemSSHTest {
         return .failed(text.isEmpty ? "ssh exited with status \(status)." : text)
     }
 
-    static func run(_ target: SSHTarget) async -> Outcome {
-        #if os(macOS)
-        guard let arguments = arguments(for: target) else {
-            return .unavailable("Enter a valid address first.")
+    #if os(macOS)
+    @MainActor
+    final class Attempt {
+        private var process: Process?
+        private var cancelled = false
+
+        func cancel() {
+            cancelled = true
+            if let process, process.isRunning { process.terminate() }
         }
-        return await withCheckedContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-            process.arguments = arguments
-            let error = Pipe()
-            process.standardError = error
-            process.standardOutput = FileHandle.nullDevice
-            process.standardInput = FileHandle.nullDevice
-            process.terminationHandler = { finished in
-                let text = String(decoding: error.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                continuation.resume(returning: explain(status: finished.terminationStatus, stderr: text))
+
+        func run(_ target: SSHTarget) async -> Outcome {
+            guard !cancelled, let arguments = SystemSSHTest.arguments(for: target) else {
+                return .unavailable("Enter a valid address first.")
             }
-            do { try process.run() } catch {
-                continuation.resume(returning: .unavailable(error.localizedDescription))
+            if LocalMachine.matches(target.host) { return .works }
+            return await withCheckedContinuation { continuation in
+                let process = Process()
+                self.process = process
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+                process.arguments = arguments
+                let error = Pipe()
+                process.standardError = error
+                process.standardOutput = FileHandle.nullDevice
+                process.standardInput = FileHandle.nullDevice
+                process.terminationHandler = { finished in
+                    let text = String(decoding: error.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                    continuation.resume(returning: SystemSSHTest.explain(status: finished.terminationStatus, stderr: text))
+                }
+                do { try process.run() } catch {
+                    self.process = nil
+                    continuation.resume(returning: .unavailable(error.localizedDescription))
+                }
             }
         }
-        #else
-        return .unavailable("Only available on the Mac.")
-        #endif
     }
+    #endif
 }

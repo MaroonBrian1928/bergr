@@ -11,6 +11,7 @@ struct ComposerField: UIViewRepresentable {
     var placeholderColor: UIColor
     var enabled = true
     var maxLines = 6
+    var onSubmit: (() -> Void)?
     var onPasteImages: ([UIImage]) -> Void
 
     func makeUIView(context: Context) -> PastingTextView {

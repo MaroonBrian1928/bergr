@@ -593,5 +593,37 @@ class PluginCommandsTests(unittest.TestCase):
             names = [n for n, _ in ns["plugin_commands"]()]
             self.assertEqual(sorted(names), ["/flat:delegating", "/nested:wait-what"])
 
+class LocalFeedStartup(Base):
+    def test_models_and_usage_arrive_through_local_process(self):
+        # The native Mac launches exactly this -I/-c bridge, without an SSH shell.
+        catalog = os.path.join(self.home, ".codex", "models_cache.json")
+        os.makedirs(os.path.dirname(catalog), exist_ok=True)
+        with open(catalog, "w") as fh:
+            json.dump({"models": [{"slug": "test-model", "display_name": "Test Model",
+                                   "visibility": "list"}]}, fh)
+        rollout = os.path.join(self.home, ".codex", "sessions", "2026", "11", "11", "rollout-test.jsonl")
+        write_jsonl(rollout, [
+            {"type": "session_meta", "payload": {"id": "test", "cwd": "/work", "source": "cli"}},
+            {"type": "turn_context", "payload": {"model": "test-model", "effort": "high"}},
+            {"type": "event_msg", "payload": {"type": "token_count", "info": {
+                "last_token_usage": {"total_tokens": 1234}, "model_context_window": 100000}}},
+        ])
+        encoded = base64.b64encode(SOURCE.encode()).decode()
+        command = "import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))"
+        environment = dict(os.environ, HOME=self.home)
+        process = subprocess.Popen([sys.executable, "-I", "-c", command, encoded, "codex", "0", "/work", "test"],
+                                   env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            stdout, stderr = process.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            stdout, stderr = process.communicate(timeout=3)
+        events = [json.loads(line) for line in stdout.splitlines()]
+        self.assertTrue(any(ev.get("t") == "models" and ev.get("items", [{}])[0].get("id") == "test-model"
+                            for ev in events), stderr)
+        self.assertTrue(any(ev.get("t") == "usage" and ev.get("used") == 1234
+                            and ev.get("model") == "test-model" for ev in events), stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
