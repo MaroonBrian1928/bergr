@@ -150,6 +150,17 @@ final class ComposerTextView: NSTextView {
         return ceil(layout.usedRect(for: container).height)
     }
 
+    // A plain-text view turns Paste off when the clipboard holds only an image (nothing it can read),
+    // so ⌘V never reached paste(_:) below. Keep it on when there's an image to attach.
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)), !ComposerPasteboard.images(from: .general).isEmpty { return isEditable }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        super.readablePasteboardTypes + [.png, .tiff, .fileURL]
+    }
+
     override func paste(_ sender: Any?) {
         let images = ComposerPasteboard.images(from: .general)
         if images.isEmpty { pasteAsPlainText(sender) } else { onPasteImages(images) }
