@@ -7,6 +7,9 @@ struct MacSettings: View {
     @Environment(HostStore.self) private var hosts
     @Environment(KeyLibrary.self) private var keys
     @State private var editing: Host?
+    @State private var creatingKey = false
+    @State private var importingKey = false
+    @State private var keyToDelete: SSHKeyInfo?
     @AppStorage(QuietAgents.key) private var hideAfter = QuietAgents.defaultSeconds
     @AppStorage(Delivery.notificationsKey) private var notifications = false
     @AppStorage(Appearance.key) private var appearance = Appearance.system
@@ -43,13 +46,46 @@ struct MacSettings: View {
                     }
                     Button("Add Machine…", systemImage: "plus") { editing = Host.new(key: keys.keys.last?.id) }
                 }
-                Section("SSH Keys") {
-                    NavigationLink("Manage Keys (\(keys.keys.count))") { KeysView() }
-                    Text("Private keys stay on this Mac.").foregroundStyle(.secondary)
+                // Inline, like a Mac settings pane: the keys themselves, with their actions on the
+                // row and Create / Import buttons that open sheets (no drill-down screen).
+                Section {
+                    if let reason = keys.unavailableReason {
+                        Label(reason, systemImage: "exclamationmark.triangle").foregroundStyle(.secondary)
+                    }
+                    ForEach(keys.keys) { key in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(key.label)
+                                Text(key.kind == .secureEnclave ? "Secure Enclave" : key.kind == .imported ? "Imported" : "On this Mac").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Copy Public Key") { Pasteboard.copy(key.authorizedKeysLine) }
+                            Button(role: .destructive) { keyToDelete = key } label: { Image(systemName: "trash") }
+                                .buttonStyle(.borderless)
+                                .help("Delete Key")
+                        }
+                    }
+                    HStack {
+                        Button("Create Key…") { creatingKey = true }
+                        Button("Import Key…") { importingKey = true }
+                    }
+                    .disabled(keys.unavailableReason != nil)
+                } header: {
+                    Text("SSH Keys")
+                } footer: {
+                    Text("Private keys stay on this Mac.")
                 }
             }
             .modifier(SettingsPane())
             .tabItem { Label("Machines & Keys", systemImage: "server.rack") }
+            .sheet(isPresented: $creatingKey) { NewKeyView() }
+            .sheet(isPresented: $importingKey) { ImportKeyView() }
+            .confirmationDialog("Delete \(keyToDelete?.label ?? "key")?", isPresented: Binding(
+                get: { keyToDelete != nil }, set: { if !$0 { keyToDelete = nil } })) {
+                Button("Delete", role: .destructive) { if let key = keyToDelete { keys.delete(key) } }
+            } message: {
+                Text("Machines that only accept this key won't let Bergr in anymore.")
+            }
 
             Form {
                 Section {
