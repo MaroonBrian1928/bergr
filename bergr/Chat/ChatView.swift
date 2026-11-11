@@ -407,9 +407,19 @@ struct ChatView: View {
             contextItem
         }
         #endif
-        // On the Mac the inspector shows context and limits all the time; the gauge would repeat it
-        // (Usage stays in the ⋯ menu, for Claude's status-line setup).
+        // On the Mac the inspector shows context, limits and the permission mode, which leaves only
+        // Search: its own button rather than a ⋯ menu of one.
+        #if os(macOS)
+            ToolbarItem(placement: .trailingAction) {
+                Button("Search", systemImage: "magnifyingglass") {
+                    withAnimation(motion) { searching = true }
+                    searchFocused = true
+                }
+                .help("Search Conversation (⌘F)")
+            }
+        #else
             ToolbarItem(placement: .trailingAction) { moreMenu }
+        #endif
     }
 
     /// The chat's buttons, for the system bar's items and for a pane's own header.
