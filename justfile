@@ -74,7 +74,7 @@ mac-native configuration="Debug":
     fi
     # Unsigned unless BERGR_MAC_SIGNED=1: signing needs a Mac provisioning profile (see
     # docs/mac-release.md). Unsigned, the keychain isn't available, so Secure Enclave keys are off.
-    sign=(CODE_SIGNING_ALLOWED=NO)
+    sign=(CODE_SIGNING_ALLOWED=NO BERGR_BUNDLE_ID_PREFIX={{bundle_prefix}})
     if [ -n "${BERGR_MAC_SIGNED:-}" ]; then sign=(-allowProvisioningUpdates{{signing}} ${auth[@]+"${auth[@]}"}); fi
     xcodebuild -project {{project}} -scheme bergrMac -derivedDataPath .build/xcode-mac-native "${sign[@]}" \
         -configuration {{configuration}} -destination 'platform=macOS,arch=arm64' build | xcbeautify --quiet
