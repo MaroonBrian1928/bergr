@@ -6,12 +6,21 @@ import SwiftUI
 @main
 struct BergrMacApp: App {
     @NSApplicationDelegateAdaptor private var delegate: MacAppDelegate
-    @State private var hosts = HostStore()
+    @State private var hosts: HostStore
     @State private var keys = KeyLibrary()
     @State private var sessions: SessionStore
     @State private var shell = MacShell()
 
     init() {
+        let hosts = HostStore()
+        // This Mac comes as a machine on its own when herdr-core is installed here: once, so
+        // removing it sticks.
+        let offered = "bergr.mac.localAdded"
+        if !UserDefaults.standard.bool(forKey: offered), !hosts.hasLocal, LocalCore.locate() != nil {
+            _ = hosts.addLocal()
+            UserDefaults.standard.set(true, forKey: offered)
+        }
+        _hosts = State(initialValue: hosts)
         let sessions = SessionStore()
         _sessions = State(initialValue: sessions)
         // Started at launch, so a notification clicked to open the app is delivered.
