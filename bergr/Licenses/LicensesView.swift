@@ -41,7 +41,7 @@ struct LicensesView: View {
             }
         }
         .navigationTitle("Open-Source Licenses")
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
     }
 }
 
@@ -61,7 +61,7 @@ struct LicenseView: View {
             .padding()
         }
         .navigationTitle(license.name)
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
     }
 }
 

@@ -87,14 +87,14 @@ struct MachinesView: View {
                     Button("Done") { dismiss() }
                 }
             } else {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .leadingAction) {
                     Button("Settings", systemImage: "gearshape") { showingSettings = true }
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .trailingAction) {
                 Button("Keys", systemImage: "key") { showingKeys = true }
             }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .trailingAction) {
                 Menu {
                     Button("Add Machine", systemImage: "server.rack") { editing = newHost() }
                 } label: {

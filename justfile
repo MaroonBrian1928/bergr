@@ -64,6 +64,20 @@ mac configuration="Debug":
     ln -s "Wrapper/{{scheme}}.app" "$dest/WrappedBundle"
     open "$dest"
 
+# Build and open the native Mac app (bundle id <prefix>.bergr.mac[.dev]); `just mac` is the iPad build
+mac-native configuration="Debug":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    auth=()
+    if [ -n "${BERGR_ASC_KEY_PATH:-}" ]; then
+        auth=(-authenticationKeyPath "${BERGR_ASC_KEY_PATH/#\~/$HOME}" -authenticationKeyID "$BERGR_ASC_KEY_ID" -authenticationKeyIssuerID "$BERGR_ASC_KEY_ISSUER")
+    fi
+    xcodebuild -project {{project}} -scheme bergrMac -derivedDataPath .build/xcode-mac-native -allowProvisioningUpdates{{signing}} ${auth[@]+"${auth[@]}"} \
+        -configuration {{configuration}} -destination 'platform=macOS,arch=arm64' build | xcbeautify --quiet
+    name="{{ if configuration == "Debug" { "Bergr Dev" } else { "Bergr" } }}"
+    osascript -e "tell application \"$name\" to quit" 2>/dev/null || true
+    open ".build/xcode-mac-native/Build/Products/{{configuration}}/$name.app"
+
 # Build and run in the simulator (BERGR_SIMULATOR, default "iPhone 17 Pro")
 sim:
     #!/usr/bin/env bash

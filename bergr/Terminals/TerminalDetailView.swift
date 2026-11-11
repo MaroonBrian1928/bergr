@@ -61,7 +61,7 @@ struct TerminalDetailView: View {
 
             }
             .navigationTitle(terminal.displayName)
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .textSelection(.enabled)
         } else {
             ContentUnavailableView(

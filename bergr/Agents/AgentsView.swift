@@ -55,7 +55,7 @@ struct AgentsView: View {
     @State private var showAllIdle = false
     @State private var showOlder = false
     private var byAttention: Bool {
-        groupingSetting.isEmpty ? UIDevice.current.userInterfaceIdiom == .phone : groupingSetting == "attention"
+        groupingSetting.isEmpty ? DeviceName.isPhone : groupingSetting == "attention"
     }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -310,7 +310,7 @@ struct AgentsView: View {
                     }
                 }
                 Button("Copy Address", systemImage: "doc.on.doc") {
-                    UIPasteboard.general.string = terminal.address
+                    Pasteboard.copy(terminal.address)
                 }
             }
     }

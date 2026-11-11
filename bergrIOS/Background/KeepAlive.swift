@@ -8,7 +8,7 @@ import UserNotifications
 @MainActor @Observable
 final class KeepAlive: NSObject, CLLocationManagerDelegate {
     static let shared = KeepAlive()
-    static let key = "bergr.keepConnectedInBackground"
+    static let key = KeepAliveKey.value
 
     var enabled: Bool {
         get { access(keyPath: \.enabled); return UserDefaults.standard.bool(forKey: Self.key) }

@@ -146,7 +146,7 @@ struct NewSessionView: View {
                 }
             }
             .navigationTitle("New Session")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -208,7 +208,7 @@ struct NewSessionView: View {
         return Section {
             TextField("Folder", text: $folder, prompt: Text(session.homeFolder.map { NewSession.display($0, home: $0) } ?? "Home folder"))
                 .font(.body.monospaced())
-                .textInputAutocapitalization(.never)
+                .noAutocapitalization()
                 .autocorrectionDisabled()
             ForEach(recent, id: \.self) { path in
                 Button {

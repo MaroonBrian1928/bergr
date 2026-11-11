@@ -87,14 +87,14 @@ struct UsageSheet: View {
                 }
             }
             .navigationTitle("Usage")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
         }
         .presentationDetents([.medium, .large])
         // Solid, so the conversation behind doesn't show through and dim the numbers.
-        .presentationBackground(Color(uiColor: .systemGroupedBackground))
+        .presentationBackground(Color.groupedBackground)
     }
 
     private var setupSection: some View {
@@ -126,7 +126,7 @@ struct UsageSheet: View {
                     Label(message, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.secondary)
                 }
                 Button(copied ? "Copied" : "Copy Setup Prompt", systemImage: copied ? "checkmark" : "doc.on.doc") {
-                    UIPasteboard.general.string = UsageSetup.prompt
+                    Pasteboard.copy(UsageSetup.prompt)
                     copied = true
                 }
             }

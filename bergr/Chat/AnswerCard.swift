@@ -417,14 +417,14 @@ struct LoginStepCard: View {
                 }
                 HStack(spacing: 8) {
                     TextField("Paste code", text: $code)
-                        .textInputAutocapitalization(.never)
+                        .noAutocapitalization()
                         .autocorrectionDisabled()
                         .font(.callout.monospaced())
                         .padding(.horizontal, 12)
                         .frame(minHeight: 44)
                         .background(palette.bubble, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     Button {
-                        if let pasted = UIPasteboard.general.string { code = pasted }
+                        if let pasted = Pasteboard.string { code = pasted }
                     } label: {
                         Image(systemName: "doc.on.clipboard").frame(width: 44, height: 44)
                     }

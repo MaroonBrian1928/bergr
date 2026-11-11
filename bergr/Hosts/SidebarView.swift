@@ -19,7 +19,7 @@ struct SidebarView: View {
             TerminalListView(session: sessions.session(for: host), selection: $selectedTerminal, sessions: sessions)
                 .id(host.id)
                 // iOS only shows a title menu (name + chevron) on an inline title.
-                .navigationBarTitleDisplayMode(.inline)
+                .inlineNavigationTitle()
                 // Settings lives in the title menu too: a gear in the toolbar left too little room
                 // for the machine's name in the narrow sidebar of the unfolded Duo.
                 .toolbarTitleMenu { switcher(current: host) }

@@ -39,7 +39,7 @@ struct TerminalListView: View {
         content
             .navigationTitle(session.host.name)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .trailingAction) {
                     Menu("New", systemImage: "plus") {
                         if sessions != nil, session.canRunCommands {
                             Button("New Agent Session", systemImage: "sparkles") { newSession = true }
@@ -595,9 +595,13 @@ struct TerminalActions: ViewModifier {
             if terminal.isLive {
                 content
                     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
+                    #if os(iOS)
                     .contextMenu { menu } preview: {
                         TerminalPeek(session: session, terminal: terminal, maxWidth: rowWidth)
                     }
+                    #else
+                    .contextMenu { menu }
+                    #endif
             } else {
                 content.contextMenu { menu }
             }
@@ -634,7 +638,7 @@ struct TerminalActions: ViewModifier {
             Button(title, systemImage: icon) { mark(terminal, labels) }
         }
         Button("Copy Address", systemImage: "doc.on.doc") {
-            UIPasteboard.general.string = terminal.address
+            Pasteboard.copy(terminal.address)
         }
         if let addToHerdrApp {
             Button("Add to herdr-app", systemImage: "square.stack.badge.plus") { addToHerdrApp(terminal) }

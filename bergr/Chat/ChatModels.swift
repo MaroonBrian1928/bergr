@@ -317,7 +317,7 @@ struct ModelSheet: View {
                                 .buttonStyle(.plain)
                             }
                             .navigationTitle("Effort")
-                            .navigationBarTitleDisplayMode(.inline)
+                            .inlineNavigationTitle()
                         } label: {
                             LabeledContent("Effort", value: effort.map(EffortName.display) ?? "Default")
                         }
@@ -325,7 +325,7 @@ struct ModelSheet: View {
                 }
             }
             .navigationTitle("Model")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close", systemImage: "xmark") { dismiss() }

@@ -5,7 +5,7 @@ import Foundation
 /// for what you get (notifications, the Live Activity).
 ///
 /// Stored in the keys the app already used: "Bergr stays running" is `KeepAlive.enabled`, the Live
-/// Activity is `LiveActivityController.pushKey`. Notifications got a key of their own. The helper
+/// Activity is `LiveActivityKeys.push`. Notifications got a key of their own. The helper
 /// registration (`PushRegistration.enabled`) follows from these via `apply()`.
 @MainActor
 enum Delivery {
@@ -20,8 +20,8 @@ enum Delivery {
 
     /// The Live Activity, from either source.
     static var lockScreen: Bool {
-        get { UserDefaults.standard.bool(forKey: LiveActivityController.pushKey) }
-        set { UserDefaults.standard.set(newValue, forKey: LiveActivityController.pushKey); apply() }
+        get { UserDefaults.standard.bool(forKey: LiveActivityKeys.push) }
+        set { UserDefaults.standard.set(newValue, forKey: LiveActivityKeys.push); apply() }
     }
 
     /// The helper on each machine is needed when it's the source and either switch is on.
@@ -31,7 +31,7 @@ enum Delivery {
 
     /// Registers or removes this phone with the helpers to match the switches.
     static func apply() {
-        let wanted = helperWanted(stayRunning: KeepAlive.shared.enabled, notifications: notifications,
+        let wanted = helperWanted(stayRunning: UserDefaults.standard.bool(forKey: KeepAliveKey.value), notifications: notifications,
                                   lockScreen: lockScreen)
         let push = PushRegistration.shared
         if push.enabled != wanted { push.enabled = wanted }
@@ -44,10 +44,10 @@ enum Delivery {
     static func migrate(_ defaults: UserDefaults = .standard) {
         guard !defaults.bool(forKey: migratedKey) else { return }
         defaults.set(true, forKey: migratedKey)
-        let stayRunning = defaults.bool(forKey: KeepAlive.key)
+        let stayRunning = defaults.bool(forKey: KeepAliveKey.value)
         let push = defaults.bool(forKey: PushRegistration.key)
-        let box = defaults.bool(forKey: LiveActivityController.pushKey)
+        let box = defaults.bool(forKey: LiveActivityKeys.push)
         defaults.set(stayRunning || push, forKey: notificationsKey)
-        defaults.set(stayRunning || (push && box), forKey: LiveActivityController.pushKey)
+        defaults.set(stayRunning || (push && box), forKey: LiveActivityKeys.push)
     }
 }

@@ -19,7 +19,7 @@ struct PaneChrome {
 struct PaneHeader<Trailing: View>: View {
     let chrome: PaneChrome
     /// The pane's own background: the header sits on it, so text scrolling up doesn't show through the title.
-    var backdrop: Color = Color(uiColor: .systemBackground)
+    var backdrop: Color = Color.systemBackground
     @ViewBuilder var trailing: Trailing
 
     var body: some View {

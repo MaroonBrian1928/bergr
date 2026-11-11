@@ -1,8 +1,10 @@
-import ActivityKit
 import Foundation
+#if os(iOS)
+import ActivityKit
+#endif
 
 /// The Live Activity's data. Compiled into the app and the widget extension; no other dependencies.
-nonisolated struct BergrActivityAttributes: ActivityAttributes {
+nonisolated struct BergrActivityAttributes {
     nonisolated struct Row: Codable, Hashable {
         /// "claude", "codex", "antigravity" or "shell".
         var kind: String
@@ -52,3 +54,7 @@ nonisolated struct BergrActivityAttributes: ActivityAttributes {
         var key: String
     }
 }
+
+#if os(iOS)
+extension BergrActivityAttributes: ActivityAttributes {}
+#endif

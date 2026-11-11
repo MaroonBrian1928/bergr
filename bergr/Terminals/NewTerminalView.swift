@@ -106,7 +106,7 @@ struct NewTerminalView: View {
                             .foregroundStyle(.red)
                     }
                 }
-                .textInputAutocapitalization(.never)
+                .noAutocapitalization()
                 .autocorrectionDisabled()
 
                 if machine == nil {
@@ -137,7 +137,7 @@ struct NewTerminalView: View {
                 }
             }
             .navigationTitle("New Terminal")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

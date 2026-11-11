@@ -113,12 +113,7 @@ final class LiveActivityController {
 
     /// `bergr://terminal?host=<uuid>&address=<t7>`
     nonisolated static func target(of url: URL) -> (host: UUID, address: String)? {
-        guard url.scheme == "bergr", url.host == "terminal",
-              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
-              let host = items.first(where: { $0.name == "host" })?.value.flatMap(UUID.init(uuidString:)),
-              let address = items.first(where: { $0.name == "address" })?.value, !address.isEmpty
-        else { return nil }
-        return (host, address)
+        AgentLink.target(of: url)
     }
 
     // MARK: Lifecycle
@@ -172,8 +167,8 @@ final class LiveActivityController {
     /// The Live Activity's settings for when Bergr isn't kept connected: updated by the machines
     /// through the push relay instead (Settings → Live Activity), showing counts only unless full
     /// content was chosen (that content passes through the relay and Apple readable).
-    nonisolated static let pushKey = "bergr.liveActivity.push"
-    nonisolated static let contentKey = "bergr.liveActivity.content"
+    nonisolated static let pushKey = LiveActivityKeys.push
+    nonisolated static let contentKey = LiveActivityKeys.content
     nonisolated static var pushEnabled: Bool { UserDefaults.standard.bool(forKey: pushKey) }
     nonisolated static var fullContent: Bool { UserDefaults.standard.string(forKey: contentKey) == "full" }
 
@@ -263,7 +258,7 @@ final class LiveActivityController {
 
     /// The last few things that happened to the Live Activity, with times (Settings shows them
     /// under Live Activity): when one closes early, this says whether Bergr ended it or iOS did.
-    nonisolated static let historyKey = "bergr.liveActivity.history"
+    nonisolated static let historyKey = LiveActivityKeys.history
     nonisolated static func note(_ what: String) {
         let line = Date.now.formatted(date: .omitted, time: .standard) + " " + what
         var lines = UserDefaults.standard.stringArray(forKey: historyKey) ?? []

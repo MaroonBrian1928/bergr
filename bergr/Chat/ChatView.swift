@@ -345,10 +345,12 @@ struct ChatView: View {
             UsageSheet(usage: feed.usage, agent: agent, machine: session?.host.name,
                        setUp: session.map { session in { try await session.setUpClaudeStatusLine() } })
         }
+        #if os(iOS)
         .sheet(item: $selecting) { SelectTextSheet(text: $0.text) }
+        #endif
         // Images open from here, not from their rows (see `showImage`).
         .environment(\.showImage) { viewing = ViewedImage(image: $0) }
-        .fullScreenCover(item: $viewing) { ImageViewer(image: $0.image) }
+        .platformCover(item: $viewing) { ImageViewer(image: $0.image) }
     }
 
     @ToolbarContentBuilder
@@ -356,12 +358,16 @@ struct ChatView: View {
             // The context gauge, with the other buttons. It's a custom view, so it says it can go
             // vertical: on the Duo the bar's buttons move to the side strip, and without this it
             // stayed behind alone in the title bar.
+        #if os(iOS)
         if #available(iOS 27.1, *) {
             contextItem.axisBehavior(.verticalPreferred)
         } else {
             contextItem
         }
-            ToolbarItem(placement: .topBarTrailing) { moreMenu }
+        #else
+        contextItem
+        #endif
+            ToolbarItem(placement: .trailingAction) { moreMenu }
     }
 
     /// The chat's buttons, for the system bar's items and for a pane's own header.
@@ -401,7 +407,7 @@ struct ChatView: View {
     }
 
     private var contextItem: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) { contextButton }
+        ToolbarItem(placement: .trailingAction) { contextButton }
     }
 
     private var contextButton: some View {
@@ -527,9 +533,11 @@ struct ChatView: View {
     @ViewBuilder
     private func copyButton(_ text: String) -> some View {
         // The copies together: the message, then each command in it, then Select Text.
-        Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+        Button("Copy", systemImage: "doc.on.doc") { Pasteboard.copy(text) }
         commandButtons(Commands.cachedIn(text))
+        #if os(iOS)
         Button("Select Text", systemImage: "selection.pin.in.out") { selecting = SelectableMessage(text: text) }
+        #endif
     }
 
     /// Copy and Run for each command: Run sends it as a `!` shell command, the way typing it would
@@ -539,7 +547,7 @@ struct ChatView: View {
         ForEach(commands, id: \.self) { command in
             let one = commands.count == 1
             Button(one ? "Copy Command" : "Copy “\(Commands.label(command))”", systemImage: "doc.on.clipboard") {
-                UIPasteboard.general.string = command
+                Pasteboard.copy(command)
             }
             if Commands.runnable(command) {
                 Button(one ? "Run Command" : "Run “\(Commands.label(command))”", systemImage: "terminal") {
@@ -831,7 +839,7 @@ struct ChatView: View {
                 .padding(.top, attachments.isEmpty ? 0 : 10)
             ComposerField(
                 text: $draft, placeholder: prompt,
-                textColor: UIColor(palette.text), placeholderColor: UIColor(palette.secondary),
+                textColor: PlatformColor(palette.text), placeholderColor: PlatformColor(palette.secondary),
                 enabled: canType
             ) { images in
                 for image in images where attachments.count < ChatAttachment.limit {
@@ -1488,9 +1496,9 @@ struct WorkingRow: View {
     /// The phrases that fit `width` alongside the mark and the elapsed time, in phrase order.
     static func fitting(_ width: CGFloat) -> [String] {
         guard width > 0 else { return phrases }
-        let base = UIFont.preferredFont(forTextStyle: .footnote)
-        let bold = UIFont.systemFont(ofSize: base.pointSize, weight: .semibold)
-        let plain = UIFont.monospacedDigitSystemFont(ofSize: base.pointSize, weight: .regular)
+        let base = PlatformFont.preferredFont(forTextStyle: .footnote)
+        let bold = PlatformFont.systemFont(ofSize: base.pointSize, weight: .semibold)
+        let plain = PlatformFont.monospacedDigitSystemFont(ofSize: base.pointSize, weight: .regular)
         // Mark (about 20 pt) and its 8 pt gap, and room for the longest likely timer.
         let reserved = 28 + (" · 59m 59s" as NSString).size(withAttributes: [.font: plain]).width
         let room = width - reserved

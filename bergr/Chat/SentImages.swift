@@ -50,7 +50,7 @@ enum SentImages {
         var out = Data()
         do { for try await chunk in pipe.output { out.append(chunk) } } catch { if out.isEmpty { return nil } }
         let text = String(decoding: out, as: UTF8.self).filter { !$0.isWhitespace }
-        guard let data = Data(base64Encoded: text), UIImage(data: data) != nil else { return nil }
+        guard let data = Data(base64Encoded: text), PlatformImage(data: data) != nil else { return nil }
         store(data, for: path)
         return data
     }

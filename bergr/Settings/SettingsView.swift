@@ -15,12 +15,12 @@ struct SettingsView: View {
     @AppStorage(TerminalTheme.darkKey) private var darkTheme = TerminalTheme.defaultDark
     @Environment(\.colorScheme) private var colorScheme
     @State private var keepAlive = KeepAlive.shared
-    @AppStorage(LiveActivityController.pushKey) private var liveActivityPush = false
+    @AppStorage(LiveActivityKeys.push) private var liveActivityPush = false
     @AppStorage(QuietAgents.key) private var hideAfter = QuietAgents.defaultSeconds
     private var liveActivityHistory: [String] {
-        UserDefaults.standard.stringArray(forKey: LiveActivityController.historyKey) ?? []
+        UserDefaults.standard.stringArray(forKey: LiveActivityKeys.history) ?? []
     }
-    @AppStorage(LiveActivityController.contentKey) private var liveActivityContent = "counts"
+    @AppStorage(LiveActivityKeys.content) private var liveActivityContent = "counts"
     @AppStorage(Delivery.notificationsKey) private var notifications = false
 
     /// "Updates come from": Bergr itself (kept running) or the helpers.
@@ -306,7 +306,7 @@ struct SettingsView: View {
         }
         .bergrTint()
         .navigationTitle("Settings")
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
         .sheet(item: $editing) { HostEditor(host: $0) }
     }
 
@@ -337,7 +337,7 @@ private struct TerminalPreview: View {
             Self.line([("7d03b1f ", theme.ansiColor(3)), ("Cache product images", nil)])
             Self.line([("✓ ", theme.ansiColor(2)), ("48 passed ", nil), ("✗ ", theme.ansiColor(1)), ("0 failed", nil)])
         }
-        .font(Font(fonts.regular))
+        .font(fonts.regularFont)
         .foregroundStyle(theme.color(theme.foreground))
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -382,7 +382,7 @@ private struct ThemePicker: View {
             .accessibilityAddTraits(theme.id == selection ? .isSelected : [])
         }
         .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
     }
 }
 

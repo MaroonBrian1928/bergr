@@ -97,7 +97,7 @@ struct KeyRow: View {
                 .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             HStack(spacing: 20) {
                 Button(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc") {
-                    UIPasteboard.general.string = key.authorizedKeysLine
+                    Pasteboard.copy(key.authorizedKeysLine)
                     copied = true
                 }
                 ShareLink(item: key.authorizedKeysLine) {
@@ -114,7 +114,7 @@ struct KeyRow: View {
 struct NewKeyView: View {
     @Environment(KeyLibrary.self) private var keys
     @Environment(\.dismiss) private var dismiss
-    @State private var label = UIDevice.current.name
+    @State private var label = DeviceName.current
     @State private var requireBiometry = false
 
     var body: some View {
@@ -138,7 +138,7 @@ struct NewKeyView: View {
                 }
             }
             .navigationTitle("New Key")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -175,7 +175,7 @@ struct ImportKeyView: View {
                 Section {
                     TextEditor(text: $text)
                         .font(.footnote.monospaced())
-                        .textInputAutocapitalization(.never)
+                        .noAutocapitalization()
                         .autocorrectionDisabled()
                         .frame(minHeight: 160)
                     Button("Choose File…", systemImage: "doc") { choosingFile = true }
@@ -195,7 +195,7 @@ struct ImportKeyView: View {
                 }
             }
             .navigationTitle("Import Key")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -242,7 +242,7 @@ struct KeyDetailView: View {
                     .font(.caption.monospaced())
                     .textSelection(.enabled)
                 Button(copied ? "Copied" : "Copy Public Key", systemImage: copied ? "checkmark" : "doc.on.doc") {
-                    UIPasteboard.general.string = key.authorizedKeysLine
+                    Pasteboard.copy(key.authorizedKeysLine)
                     copied = true
                 }
                 ShareLink(item: key.authorizedKeysLine) {

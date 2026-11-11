@@ -113,7 +113,7 @@ struct HostEditor: View {
             }
           }
             .navigationTitle(isExisting ? "Edit Machine" : "Add Machine")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .onAppear(perform: load)
             .onDisappear { stopTest() }
             .sheet(isPresented: $showingNewKey, onDismiss: {
@@ -151,14 +151,14 @@ struct HostEditor: View {
         Group {
             Section {
                 TextField("Address", text: $address, prompt: Text("me@192.168.1.20"))
-                    .keyboardType(.URL)
-                    .textInputAutocapitalization(.never)
+                    .urlKeyboard()
+                    .noAutocapitalization()
                     .autocorrectionDisabled()
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("address-field")
                     .onChange(of: address) { _, text in applyAddress(text) }
                 TextField("Name", text: $host.name, prompt: Text(host.target.host.isEmpty ? "My machine" : host.target.host))
-                    .textInputAutocapitalization(.words)
+                    .wordsAutocapitalization()
                     .frame(minHeight: 44)
             } header: {
                 Text("Where it is")
@@ -170,10 +170,10 @@ struct HostEditor: View {
                     .textContentType(.username)
                     .frame(minHeight: 44)
                 TextField("Hostname", text: $host.target.host, prompt: Text("server.example.com"))
-                    .keyboardType(.URL)
+                    .urlKeyboard()
                     .frame(minHeight: 44)
                 TextField("Port", text: $port, prompt: Text("22"))
-                    .keyboardType(.numberPad)
+                    .numberKeyboard()
                     .frame(minHeight: 44)
             } header: {
                 Text("Address details")
@@ -184,7 +184,7 @@ struct HostEditor: View {
                     Text("Filled in from the address above. You can also edit them here.")
                 }
             }
-            .textInputAutocapitalization(.never)
+            .noAutocapitalization()
             .autocorrectionDisabled()
         }
     }
@@ -238,7 +238,7 @@ struct HostEditor: View {
 
     private func copyButton(_ title: String, id: String, text: String) -> some View {
         Button(copied == id ? "Copied" : title, systemImage: copied == id ? "checkmark" : "doc.on.doc") {
-            UIPasteboard.general.string = text
+            Pasteboard.copy(text)
             copied = id
             Task {
                 try? await Task.sleep(for: .seconds(2))
@@ -317,7 +317,7 @@ struct HostEditor: View {
     private var sessionSection: some View {
         Section {
             TextField("Session", text: $session, prompt: Text("default"))
-                .textInputAutocapitalization(.never)
+                .noAutocapitalization()
                 .autocorrectionDisabled()
                 .frame(minHeight: 44)
         } header: {

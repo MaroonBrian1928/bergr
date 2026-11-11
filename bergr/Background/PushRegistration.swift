@@ -4,7 +4,11 @@ import HerdrKit
 import Observation
 import SSHTransport
 import SwiftUI
+#if os(iOS)
 import UIKit
+#else
+import AppKit
+#endif
 import UserNotifications
 
 /// Optional Apple push alerts: gets this device's APNs token and saves it on each connected
@@ -82,7 +86,11 @@ final class PushRegistration {
             let center = UNUserNotificationCenter.current()
             let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
             if !granted { lastError = "Notifications are off for Bergr. Turn them on in Settings." }
+            #if os(iOS)
             UIApplication.shared.registerForRemoteNotifications()
+            #else
+            NSApplication.shared.registerForRemoteNotifications()
+            #endif
         }
     }
 
@@ -445,7 +453,7 @@ final class PushRegistration {
     /// Script and payload both travel base64-encoded, so no shell quoting can break them.
     static func command(token: String, secret: String, enabled: Bool, alerts: Bool = true, host: UUID? = nil) -> String {
         command(payload: payload(token: token, secret: secret, enabled: enabled, alerts: alerts,
-                                 name: UIDevice.current.name, host: host))
+                                 name: DeviceName.current, host: host))
     }
 
     nonisolated static func command(payload: Data) -> String {
@@ -494,17 +502,6 @@ final class PushRegistration {
         let best = matches.first { $0.host.name.caseInsensitiveCompare(hostname) == .orderedSame }
             ?? matches.first { $0.state == .connected } ?? matches.first
         return best.map { ($0.host.id, address) }
-    }
-}
-
-/// Receives the APNs token callbacks.
-final class AppDelegate: NSObject, UIApplicationDelegate {
-    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        Task { @MainActor in PushRegistration.shared.didRegister(token: deviceToken) }
-    }
-
-    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        Task { @MainActor in PushRegistration.shared.didFail(error) }
     }
 }
 
