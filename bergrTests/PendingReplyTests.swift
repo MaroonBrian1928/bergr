@@ -29,3 +29,14 @@ struct PendingMatchTests {
         #expect(!ChatView.Pending(text: "yes", images: false).isIn(["yes please do the other thing"]))
     }
 }
+
+struct PendingArrivalTests {
+    private func user(_ id: String, _ text: String) -> ChatFeed.Item { .init(id: id, kind: .user(text)) }
+
+    @Test func anEarlierSameMessageDoesntConfirm() {
+        var reply = ChatView.Pending(text: "yes", images: false)
+        reply.known = ["u1"]
+        #expect(!reply.arrived(in: [user("u1", "yes")]))
+        #expect(reply.arrived(in: [user("u1", "yes"), user("u2", "yes")]))
+    }
+}

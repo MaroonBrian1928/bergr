@@ -343,11 +343,23 @@ final class LiveActivityController {
             }
             for await data in activity.pushTokenUpdates {
                 let token = PushRegistration.hex(data)
-                guard let self, await self.post(path: "v1/activity", method: "POST",
-                                                 body: ["token": token, "mode": Self.fullContent ? "full" : "counts",
-                                                        "hide_after": String(QuietAgents.seconds),
-                                                        "machines": self.relaySeed])
-                else { return }
+                guard let self else { return }
+                let body: [String: Any] = ["token": token, "mode": Self.fullContent ? "full" : "counts",
+                                           "hide_after": String(QuietAgents.seconds), "machines": self.relaySeed]
+                // A blip shouldn't cost the Lock Screen: try again shortly. Still failing, Bergr
+                // updates it itself (the early return in reconcile is for an activity the relay owns).
+                var posted = false
+                for wait in [0, 2, 5] {
+                    if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+                    if Task.isCancelled { return }
+                    if await self.post(path: "v1/activity", method: "POST", body: body) { posted = true; break }
+                }
+                guard posted else {
+                    Self.note("the relay didn't take it: updated by Bergr")
+                    self.tokenTask = nil
+                    self.reconcile()
+                    return
+                }
                 self.registeredForPush = true
                 app.endBackgroundTask(background)
                 background = .invalid

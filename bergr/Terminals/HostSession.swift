@@ -219,7 +219,15 @@ final class HostSession {
         runner = nil
         if forgetKey { signingKey = nil }
         answerHostKey(trust: false)
-        Task { await teardown() }
+        // What this connection holds, taken now: a teardown that ran later would close the
+        // connection a retry has opened in the meantime.
+        let (client, ssh) = (self.client, self.ssh)
+        self.client = nil
+        self.ssh = nil
+        Task {
+            await client?.close()
+            await ssh?.close()
+        }
         if case .failed = state {} else { state = .idle }
     }
 
@@ -239,6 +247,8 @@ final class HostSession {
             } catch is CancellationError {
                 break
             } catch {
+                // Stopped (or replaced by a retry): what's shared now belongs to the next run.
+                if Task.isCancelled { break }
                 await teardown()
                 if Task.isCancelled { break }
                 let retrying = Self.isRetryable(error)
@@ -271,10 +281,13 @@ final class HostSession {
             onUnknownHost: { [weak self] offered in
                 await self?.askToTrust(offered) ?? false
             })
+        // Stopped while connecting: don't hand a stale line to whatever runs now.
+        if Task.isCancelled { await ssh.close(); throw CancellationError() }
         self.ssh = ssh
 
         state = .connecting("Starting herdr-core…")
         let client = try await HerdrClient.connect(ssh: ssh, session: host.session)
+        if Task.isCancelled { await client.close(); await ssh.close(); throw CancellationError() }
         self.client = client
         let hello = await client.hello
         coreName = hello?.core.name

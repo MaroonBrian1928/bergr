@@ -77,15 +77,21 @@ final class KeyLibrary {
         if let running = unlocking[key.id] { return try await running.value }
         let task = Task { try await self.unlock(key) }
         unlocking[key.id] = task
-        defer { unlocking[key.id] = nil }
+        let generation = lockGeneration
+        defer { if unlocking[key.id] == task { unlocking[key.id] = nil } }
         let signing = try await task.value
-        unlocked[key.id] = signing
+        // Locked again while it was unlocking: this caller may use it, the cache doesn't keep it.
+        if generation == lockGeneration { unlocked[key.id] = signing }
         return signing
     }
+
+    @ObservationIgnored private var lockGeneration = 0
 
     /// Locks the keys again (the app went to the background without staying connected).
     func forgetUnlocked() {
         unlocked = [:]
+        unlocking = [:]
+        lockGeneration += 1
     }
 
     private func unlock(_ key: SSHKeyInfo) async throws -> SigningKey {

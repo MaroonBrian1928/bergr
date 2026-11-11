@@ -42,4 +42,12 @@ struct AgentNotifierTests {
         #expect(AgentNotifier.alerts(host: host, old: [try terminal("working")], new: [try terminal("idle")]).isEmpty)
         #expect(AgentNotifier.alerts(host: host, old: [try terminal("working")], new: [try terminal("done", turn: 2, seen: 2)]).isEmpty)
     }
+
+    @Test func doneBeforeTheTurnGoesUpStillAlerts() throws {
+        // "done" arrives with the old turn (already seen), then the turn goes up: unread now.
+        let early = try terminal("done", turn: 1, seen: 1)
+        #expect(AgentNotifier.alerts(host: host, old: [try terminal("working", turn: 1, seen: 1)], new: [early]).isEmpty)
+        let alerts = AgentNotifier.alerts(host: host, old: [early], new: [try terminal("done", turn: 2, seen: 1)])
+        #expect(alerts.map(\.title) == ["api is done"])
+    }
 }

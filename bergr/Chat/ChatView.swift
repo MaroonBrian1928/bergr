@@ -72,6 +72,18 @@ struct ChatView: View {
         var pushed = false
         /// Waiting in the agent's queue: sent while it worked.
         var queued = false
+        /// The user messages the conversation already had when this was sent: an earlier "yes"
+        /// mustn't confirm a new one.
+        var known: Set<String> = []
+
+        /// Whether the conversation has this reply as a message that came after it was sent.
+        func arrived(in items: [ChatFeed.Item]) -> Bool {
+            let said = Set(items.suffix(20).compactMap { item -> String? in
+                guard !known.contains(item.id), case .user(let text) = item.kind else { return nil }
+                return text.trimmingCharacters(in: .whitespacesAndNewlines)
+            })
+            return isIn(said)
+        }
 
         /// Whether the conversation has this reply. With images it comes back with the image
         /// paths (or "[Image #1]") in front of the words, so the words only have to end it.
@@ -624,10 +636,7 @@ struct ChatView: View {
     private var shownPending: [Pending] {
         // A reply the conversation already has is drawn as the real message from the same update:
         // never both for a frame.
-        let said = Set(feed.items.suffix(20).compactMap { item -> String? in
-            if case .user(let text) = item.kind { text.trimmingCharacters(in: .whitespacesAndNewlines) } else { nil }
-        })
-        let waiting = pending.filter { !$0.isIn(said) }
+        let waiting = pending.filter { !$0.arrived(in: feed.items) }
         guard let search else { return waiting }
         return waiting.filter { $0.text.localizedStandardContains(search) }
     }
@@ -1034,11 +1043,13 @@ struct ChatView: View {
         if session?.host.isDemo == true { feed.demoUserSaid(text) }
         var reply = Pending(text: text.isEmpty ? "\(images.count) image\(images.count == 1 ? "" : "s")" : text,
                             images: !images.isEmpty)
+        reply.known = Set(feed.items.compactMap { if case .user = $0.kind { $0.id } else { nil } })
         if state == "working" {
             if interrupting { reply.pushed = true; pushes += 1 } else { reply.queued = true }
         }
         pending.append(reply)
-        watchDelivery(of: reply.id)
+        let replyID = reply.id
+        watchDelivery(of: replyID)
         if reply.images {
             // The 20 s fallback must not wait for the conversation to change again.
             Task { @MainActor in
@@ -1061,9 +1072,12 @@ struct ChatView: View {
                 } catch {
                     // Nothing is sent; the reply comes back so it can be sent again.
                     sendError = "Couldn't send the image: \(error.localizedDescription)"
-                    draft = text
-                    attachments = images
-                    pending.removeLast()
+                    // Back in the box only if nothing new was typed there meanwhile.
+                    if draft.isEmpty && attachments.isEmpty {
+                        draft = text
+                        attachments = images
+                    }
+                    pending.removeAll { $0.id == replyID }
                     return
                 }
             }
@@ -1091,11 +1105,8 @@ struct ChatView: View {
     /// A sent reply is confirmed once the conversation has a message with its text.
     private func confirmPending() {
         guard !pending.isEmpty else { return }
-        let said = Set(feed.items.suffix(20).compactMap { item -> String? in
-            if case .user(let text) = item.kind { text.trimmingCharacters(in: .whitespacesAndNewlines) } else { nil }
-        })
         // A reply with images comes back worded differently ("[Image #1] …"): it goes after a while.
-        pending.removeAll { $0.isIn(said) || ($0.images && $0.at.timeIntervalSinceNow < -20) }
+        pending.removeAll { $0.arrived(in: feed.items) || ($0.images && $0.at.timeIntervalSinceNow < -20) }
     }
 
     /// Ten seconds without the reply in the conversation, without the agent working, and without

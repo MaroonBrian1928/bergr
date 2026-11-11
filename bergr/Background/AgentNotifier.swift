@@ -28,8 +28,12 @@ final class AgentNotifier {
         var result: [Alert] = []
         for terminal in new {
             guard terminal.isLive, terminal.address != focused,
-                  let old = before[terminal.address], let state = terminal.status?.state,
-                  state != old.status?.state else { continue }
+                  let old = before[terminal.address], let state = terminal.status?.state else { continue }
+            // A change of state, or a done that became unread: "done" can arrive before the turn
+            // goes up, and then looks already read until it does, with the state word unchanged.
+            let becameUnread = state == "done" && old.status?.state == "done"
+                && old.agentState != .done && terminal.agentState == .done
+            guard state != old.status?.state || becameUnread else { continue }
             let kind: Kind
             switch state {
             case "blocked": kind = .needsYou

@@ -112,6 +112,8 @@ final class PushRegistration {
     /// Registers this token with the relay once and keeps the secret it hands out; machines get
     /// only that secret, never the token or a signing key.
     private func registerWithRelay(token: String) async {
+        // Turned off and on again quickly: the removal goes first, or it would remove this one.
+        await unregistering?.value
         let saved = UserDefaults.standard.dictionary(forKey: Self.secretKey) as? [String: String]
         if saved?["token"] == token, saved?["relay"] == Self.relayURL.absoluteString, saved?["secret"] != nil {
             deviceToken = token
@@ -149,16 +151,16 @@ final class PushRegistration {
         guard let saved = UserDefaults.standard.dictionary(forKey: Self.secretKey) as? [String: String],
               let secret = saved["secret"] else { return }
         let relay = saved["relay"].flatMap(URL.init(string:)) ?? Self.relayURL
-        Task {
+        // Forgotten now, not when the relay answers: turning push back on registers fresh.
+        UserDefaults.standard.removeObject(forKey: Self.secretKey)
+        unregistering = Task {
             var request = URLRequest(url: relay.appending(path: "v1/register"))
             request.httpMethod = "DELETE"
             request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
             do {
                 let (_, response) = try await URLSession.shared.data(for: request)
                 let status = (response as? HTTPURLResponse)?.statusCode
-                if status == 204 || status == 401 {
-                    UserDefaults.standard.removeObject(forKey: Self.secretKey)
-                } else {
+                if status != 204 && status != 401 {
                     lastError = "The push relay didn't confirm removing this device (status \(status ?? 0))."
                 }
             } catch {
@@ -166,6 +168,8 @@ final class PushRegistration {
             }
         }
     }
+
+    private var unregistering: Task<Void, Never>?
 
     func didFail(_ error: Error) { lastError = error.localizedDescription }
 
