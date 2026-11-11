@@ -49,6 +49,8 @@ private struct ChatWindowContent: View {
     @AppStorage(TerminalTheme.darkKey) private var darkTheme = TerminalTheme.defaultDark
     @Environment(\.colorScheme) private var colorScheme
     @State private var appearsActive = false
+    /// The right-hand inspector, open or not, remembered for every chat.
+    @AppStorage("bergr.mac.inspector") private var showingInspector = true
 
     var body: some View {
         let terminal = session.terminal(address)
@@ -102,11 +104,21 @@ private struct ChatWindowContent: View {
             launchError = TerminalLauncher.open(host: session.host, address: address)
         })
         .focusedSceneValue(\.interruptAgent, { model.press(.escape) })
+        .inspector(isPresented: $showingInspector) {
+            if let agent = terminal.flatMap(ChatAgent.detect) {
+                ChatInspector(feed: feed, agent: agent, terminal: terminal, machine: session.host.name)
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Open in Terminal", systemImage: "terminal") {
                     launchError = TerminalLauncher.open(host: session.host, address: address)
                 }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button("Inspector", systemImage: "sidebar.right") { showingInspector.toggle() }
+                    .keyboardShortcut("i", modifiers: [.command, .option])
+                    .help(showingInspector ? "Hide Inspector" : "Show Inspector")
             }
         }
         .alert("Couldn’t Open Terminal", isPresented: Binding(get: { launchError != nil }, set: { if !$0 { launchError = nil } })) {

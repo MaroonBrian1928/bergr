@@ -71,7 +71,11 @@ struct ChatView: View {
         var mine = ours.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
         return feed.queued.filter { text in
             let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let i = mine.firstIndex(of: t) { mine.remove(at: i); return false }
+            // Ours with an image comes back with the image's path in front: the words end it.
+            if let i = mine.firstIndex(where: { $0 == t || (!$0.isEmpty && t.hasSuffix($0)) }) {
+                mine.remove(at: i)
+                return false
+            }
             return true
         }
     }
