@@ -390,9 +390,9 @@ struct ChatView: View {
         } else {
             contextItem
         }
-        #else
-        contextItem
         #endif
+        // On the Mac the inspector shows context and limits all the time; the gauge would repeat it
+        // (Usage stays in the ⋯ menu, for Claude's status-line setup).
             ToolbarItem(placement: .trailingAction) { moreMenu }
     }
 
@@ -1904,6 +1904,8 @@ private struct MoreMenu: View, Equatable {
         } label: {
             Label("More", systemImage: "ellipsis")
         }
+        // One glyph in the toolbar: the Mac's menu chevron beside it read as a second control.
+        .menuIndicator(.hidden)
     }
 }
 

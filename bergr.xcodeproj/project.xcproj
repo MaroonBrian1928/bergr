@@ -14,8 +14,7 @@
     {
       "kind": "local",
       "path": "HerdrKit",
-    },
-    {
+    }, {
       "kind": "local",
       "path": "MacKit",
     },
@@ -118,8 +117,7 @@
         {
           "product-name": "HerdrKit",
           "build-phase": { "build-phase": "frameworks" },
-        },
-        {
+        }, {
           "product-name": "MacKit",
           "build-phase": { "build-phase": "frameworks" },
         },
