@@ -21,7 +21,6 @@ final class LiveActivityController {
     typealias Row = BergrActivityAttributes.Row
 
     static let maxRows = 3
-    static let minInterval: TimeInterval = 2
 
     private static var retained: LiveActivityController?
     /// One line for RootView: creates and starts the controller once.
@@ -127,10 +126,7 @@ final class LiveActivityController {
     let sessions: SessionStore
     private var started = false
     private var inBackground = false
-    private var activity: Activity<BergrActivityAttributes>?
-    private var lastSent: State?
-    private var lastSentAt = Date.distantPast
-    private var pending: Task<Void, Never>?
+    let session = LiveActivitySession()
     /// Screens of blocked terminals (by `screenKey`), read headless, for the answer buttons.
     private var screens: [String: [String]] = [:]
     private var fetching: Set<String> = []
@@ -154,10 +150,10 @@ final class LiveActivityController {
         // the app itself, now gone) end.
         let inForeground = UIApplication.shared.applicationState == .active
         for old in Activity<BergrActivityAttributes>.activities {
-            if old.pushToken != nil, !inForeground, activity == nil {
-                activity = old
+            if old.pushToken != nil, !inForeground, session.mode == .none {
                 inBackground = true
-                registerForPush(old)
+                refreshSeed()
+                session.adopt(LiveActivityHandle(old, note: Self.note), registration: registration)
                 Self.note("adopted on launch")
             } else {
                 Task { await old.end(nil, dismissalPolicy: .immediate) }
@@ -253,56 +249,16 @@ final class LiveActivityController {
     }
 
     private func reconcile() {
-        pending?.cancel()
-        pending = nil
         if inBackground, KeepAlive.shared.enabled { prefetchScreens() }
-        // Updated by push: once started it belongs to the machines and the relay. The app lets go
-        // of its machines in the background (they'd look empty), so it neither updates nor ends
-        // the activity until it's back in the foreground.
-        if inBackground, activity != nil, tokenTask != nil { return }
-        guard inBackground, let state = current() else {
-            end()
+        // Updated by push: once started it belongs to the machines and the relay (the session
+        // ignores us). The app lets go of its machines in the background (they'd look empty).
+        guard inBackground else {
+            session.end(reason: "ended: Bergr opened")
             return
         }
-        if activity == nil {
-            do {
-                let pushed = byPush
-                let started = try Activity.request(
-                    attributes: BergrActivityAttributes(),
-                    content: ActivityContent(state: state, staleDate: nil), pushType: pushed ? .token : nil)
-                activity = started
-                lastSent = state
-                lastSentAt = Date()
-                if pushed { registerForPush(started) }
-                Self.note(pushed ? "started, updated by the machines" : "started, updated by Bergr")
-            } catch {
-                activity = nil
-            }
-            return
-        }
-        guard state != lastSent else { return }
-        let wait = Self.minInterval - Date().timeIntervalSince(lastSentAt)
-        if wait > 0 {
-            pending = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(wait))
-                guard !Task.isCancelled else { return }
-                self?.reconcile()
-            }
-            return
-        }
-        lastSent = state
-        lastSentAt = Date()
-        let activity = activity
-        Task { await activity?.update(ActivityContent(state: state, staleDate: nil)) }
-    }
-
-    private func end() {
-        guard let activity else { return }
-        Self.note(inBackground ? "ended in the background (nothing to show)" : "ended: Bergr opened")
-        self.activity = nil
-        lastSent = nil
-        Task { await activity.end(nil, dismissalPolicy: .immediate) }
-        if registeredForPush { unregisterFromPush() }
+        let pushed = byPush
+        if session.mode == .none, pushed { refreshSeed() }
+        session.show(current(), pushed: pushed, registration: registration)
     }
 
     /// The last few things that happened to the Live Activity, with times (Settings shows them
@@ -317,74 +273,19 @@ final class LiveActivityController {
 
     // MARK: Updated through the relay
 
-    private var tokenTask: Task<Void, Never>?
-    private var registeredForPush = false
     /// The machines' counts as the activity shows them now, sent with the token (see `seed`).
     private var relaySeed: [String: Any] = [:]
 
-    /// Hands the activity's push token to the relay as soon as iOS gives it, with the time the
-    /// app gets to finish that in the background; the machines' helpers then keep it current.
-    private func registerForPush(_ activity: Activity<BergrActivityAttributes>) {
-        tokenTask?.cancel()
-        // Only machines whose list is live: a paused or reconnecting one would seed zeros that its
-        // helper, seeing no change of its own, would never correct. Left out, it posts on its next change.
+    /// Only machines whose list is live: a paused or reconnecting one would seed zeros that its
+    /// helper, seeing no change of its own, would never correct. Left out, it posts on its next change.
+    private func refreshSeed() {
         let live = machines().filter { sessions.existing($0.host)?.state == .connected }
         relaySeed = Self.seed(machines: live, fullContent: Self.fullContent)
-        let app = UIApplication.shared
-        var background = UIBackgroundTaskIdentifier.invalid
-        background = app.beginBackgroundTask { app.endBackgroundTask(background) }
-        tokenTask = Task { [weak self] in
-            defer { app.endBackgroundTask(background) }
-            // iOS ending it (dismissed from the Lock Screen, its time up) goes in the history too.
-            Task {
-                for await state in activity.activityStateUpdates where state == .dismissed || state == .ended {
-                    Self.note(state == .dismissed ? "dismissed by iOS or from the Lock Screen" : "ended by iOS")
-                }
-            }
-            for await data in activity.pushTokenUpdates {
-                let token = PushRegistration.hex(data)
-                guard let self else { return }
-                let body: [String: Any] = ["token": token, "mode": Self.fullContent ? "full" : "counts",
-                                           "hide_after": String(QuietAgents.seconds), "machines": self.relaySeed]
-                // A blip shouldn't cost the Lock Screen: try again shortly. Still failing, Bergr
-                // updates it itself (the early return in reconcile is for an activity the relay owns).
-                var posted = false
-                for wait in [0, 2, 5] {
-                    if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
-                    if Task.isCancelled { return }
-                    if await self.post(path: "v1/activity", method: "POST", body: body) { posted = true; break }
-                }
-                guard posted else {
-                    Self.note("the relay didn't take it: updated by Bergr")
-                    self.tokenTask = nil
-                    self.reconcile()
-                    return
-                }
-                self.registeredForPush = true
-                app.endBackgroundTask(background)
-                background = .invalid
-            }
-        }
     }
 
-    private func unregisterFromPush() {
-        tokenTask?.cancel()
-        tokenTask = nil
-        registeredForPush = false
-        Task { [weak self] in _ = await self?.post(path: "v1/activity", method: "DELETE", body: nil) }
-    }
-
-    private func post(path: String, method: String, body: [String: Any]?) async -> Bool {
-        guard let secret = PushRegistration.shared.relaySecret else { return false }
-        var request = URLRequest(url: PushRegistration.relayURL.appending(path: path))
-        request.httpMethod = method
-        request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
-        if let body {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        }
-        let status = (try? await URLSession.shared.data(for: request))
-            .flatMap { ($0.1 as? HTTPURLResponse)?.statusCode }
-        return status.map { (200..<300).contains($0) } ?? false
+    /// The POST body for the relay; the session adds the token.
+    private func registration() -> [String: Any] {
+        ["mode": Self.fullContent ? "full" : "counts", "hide_after": String(QuietAgents.seconds),
+         "machines": relaySeed]
     }
 }
