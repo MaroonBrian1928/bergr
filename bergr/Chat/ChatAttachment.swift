@@ -85,6 +85,8 @@ struct AttachmentStrip: View {
                                         .frame(width: 32, height: 32)
                                         .contentShape(Rectangle())
                                 }
+                                // Plain: on the Mac the default style draws its own bordered box.
+                                .buttonStyle(.plain)
                                 .offset(x: 8, y: -8)
                                 .accessibilityLabel("Remove image")
                             }
