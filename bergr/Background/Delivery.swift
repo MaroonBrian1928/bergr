@@ -24,13 +24,25 @@ enum Delivery {
         set { UserDefaults.standard.set(newValue, forKey: LiveActivityKeys.push); apply() }
     }
 
+    /// Whether this platform registers with the helpers (APNs). iOS does; the Mac v1 uses local
+    /// notifications only (plan 2.8 option A), so it never asks for remote notifications.
+    nonisolated static var helperSupported: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }
+
     /// The helper on each machine is needed when it's the source and either switch is on.
-    static func helperWanted(stayRunning: Bool, notifications: Bool, lockScreen: Bool) -> Bool {
-        !stayRunning && (notifications || lockScreen)
+    static func helperWanted(stayRunning: Bool, notifications: Bool, lockScreen: Bool,
+                             helperSupported: Bool = Delivery.helperSupported) -> Bool {
+        helperSupported && !stayRunning && (notifications || lockScreen)
     }
 
     /// Registers or removes this phone with the helpers to match the switches.
     static func apply() {
+        guard helperSupported else { return }
         let wanted = helperWanted(stayRunning: UserDefaults.standard.bool(forKey: KeepAliveKey.value), notifications: notifications,
                                   lockScreen: lockScreen)
         let push = PushRegistration.shared

@@ -22,7 +22,8 @@ final class PushRegistration {
         get { access(keyPath: \.enabled); return UserDefaults.standard.bool(forKey: Self.key) }
         set {
             withMutation(keyPath: \.enabled) { UserDefaults.standard.set(newValue, forKey: Self.key) }
-            if newValue { register() } else { unregisterFromRelay() }
+            // macOS (Delivery.helperSupported is false there) keeps the flag but never registers.
+            if newValue { if Delivery.helperSupported { register() } } else { unregisterFromRelay() }
         }
     }
     /// Whether the helpers send this phone notifications (Settings → Notifications). Off, they
@@ -185,7 +186,7 @@ final class PushRegistration {
 
     /// Starts following the sessions: saves (or removes) this device on each machine once it connects.
     func run(sessions: SessionStore) {
-        guard !started else { return }
+        guard Delivery.helperSupported, !started else { return }
         started = true
         self.sessions = sessions
         if enabled { register() }
