@@ -64,7 +64,7 @@ import Testing
 }
 
 /// Lets the session's tasks run until they wait again.
-@MainActor func settle() async { for _ in 0..<60 { await Task.yield() } }
+@MainActor private func settle() async { for _ in 0..<60 { await Task.yield() } }
 
 @MainActor final class Rig {
     let relay = FakeRelay()

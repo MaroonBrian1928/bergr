@@ -32,13 +32,18 @@ final class HostSession {
     var watchNext: String?
     private var hostKeyDecision: CheckedContinuation<Bool, Never>?
 
-    private var runner: Task<Void, Never>?
-    private var ssh: SSHConnection?
-    private var client: HerdrClient?
+    enum Intent: Equatable { case stopped, running, paused }
+
+    /// What the user wants: `stopped` until started, `paused` while the app is in the background.
+    private(set) var intent: Intent = .stopped
+    /// The current start or retry. It owns the SSH line and the client; nothing else does.
+    private var attempt: ConnectionAttempt?
+    private var generation: UInt64 = 0
     /// Kept for the session so reconnects do not ask for Face ID again.
     private var signingKey: SigningKey?
-    private var lastHeard = Date.distantPast
     private let knownHosts: any KnownHostsStore
+    private let connector: HostConnector
+    private let timing: ConnectionTiming
 
     /// Terminals on screen now (the terminal screen, a peek), counted: both can show one at once.
     private var looking: [String: Int] = [:]
@@ -46,15 +51,19 @@ final class HostSession {
     /// from another client isn't overruled by a screen nobody watches.
     private var seenWritten: [String: UInt64] = [:]
 
-    /// herdr-core sends a heartbeat every 15 s; this much silence means the line is dead.
-    private static let silenceLimit: TimeInterval = 40
-
-    init(host: Host, knownHosts: any KnownHostsStore = UserDefaultsKnownHosts()) {
+    init(
+        host: Host, knownHosts: any KnownHostsStore = UserDefaultsKnownHosts(),
+        connector: HostConnector? = nil, timing: ConnectionTiming = .init()
+    ) {
         self.host = host
         self.knownHosts = knownHosts
+        self.connector = connector ?? .live(host: host, knownHosts: knownHosts)
+        self.timing = timing
     }
 
-    var isActive: Bool { runner != nil }
+    var isActive: Bool { attempt != nil }
+
+    private var client: HerdrClient? { attempt?.connection?.client }
 
     var terminals: [Terminal] { snapshot?.terminals ?? [] }
 
@@ -188,11 +197,11 @@ final class HostSession {
     }
 
     /// Whether a command can run on this machine over SSH (not the demo).
-    var canRunCommands: Bool { ssh != nil && !host.isDemo }
+    var canRunCommands: Bool { attempt?.connection?.ssh != nil && !host.isDemo }
 
     /// Runs a long-lived command on the machine, beside herdr-core (the chat feed).
     func openExec(_ command: String) async throws -> ExecPipe {
-        guard let ssh, state == .connected else { throw SessionError.connectionLost }
+        guard let ssh = attempt?.connection?.ssh, state == .connected else { throw SessionError.connectionLost }
         return try await ssh.openExec(command)
     }
 
@@ -208,26 +217,40 @@ final class HostSession {
 
     /// Connects and keeps the connection up until `stop()`.
     func start(keys: KeyLibrary) {
-        guard runner == nil else { return }
-        runner = Task { await run(keys: keys) }
+        guard attempt == nil else { return }
+        intent = .running
+        generation += 1
+        let generation = generation
+        let context = HostConnector.Context(
+            reconnecting: snapshot != nil,
+            progress: { _ in },
+            signingKey: { [weak self] in
+                guard let self else { throw CancellationError() }
+                guard let info = keys.key(id: self.host.keyID) else { throw SessionError.noKey }
+                if let key = self.signingKey { return key }
+                let key = try await keys.signingKey(for: info)
+                // A replaced attempt's unlock is still good, but only the current one may keep it.
+                if self.generation == generation, self.attempt != nil { self.signingKey = key }
+                return key
+            },
+            askToTrust: { [weak self] offered in await self?.askToTrust(offered) ?? false })
+        let attempt = ConnectionAttempt(
+            generation: generation, owner: self, connector: connector, context: context,
+            isRetryable: Self.isRetryable, timing: timing)
+        self.attempt = attempt
+        attempt.start()
     }
 
     /// `forgetKey: false` keeps the unlocked key, so resuming from the background skips Face ID.
     func stop(forgetKey: Bool = true) {
+        intent = .stopped
         stopFeeds()
-        runner?.cancel()
-        runner = nil
+        // The attempt takes and closes what it holds now: a teardown that ran later would close
+        // the connection a retry has opened in the meantime.
+        attempt?.cancel()
+        attempt = nil
         if forgetKey { signingKey = nil }
         answerHostKey(trust: false)
-        // What this connection holds, taken now: a teardown that ran later would close the
-        // connection a retry has opened in the meantime.
-        let (client, ssh) = (self.client, self.ssh)
-        self.client = nil
-        self.ssh = nil
-        Task {
-            await client?.close()
-            await ssh?.close()
-        }
         if case .failed = state {} else { state = .idle }
     }
 
@@ -236,92 +259,16 @@ final class HostSession {
         start(keys: keys)
     }
 
-    private func run(keys: KeyLibrary) async {
-        var delay: Duration = .seconds(1)
-        while !Task.isCancelled {
-            do {
-                try await connectOnce(keys: keys)
-                delay = .seconds(1)
-                try await followEvents()
-                throw SessionError.connectionLost
-            } catch is CancellationError {
-                break
-            } catch {
-                // Stopped (or replaced by a retry): what's shared now belongs to the next run.
-                if Task.isCancelled { break }
-                await teardown()
-                if Task.isCancelled { break }
-                let retrying = Self.isRetryable(error)
-                state = .failed(Self.describe(error, host: host), retrying: retrying)
-                guard retrying else { break }
-            }
-            try? await Task.sleep(for: delay)
-            delay = min(delay * 2, .seconds(30))
-        }
-        if !Task.isCancelled { runner = nil }
+    /// The app went to the background. Pausing twice, or a session nobody started, changes nothing.
+    func pause() {
+        guard intent == .running, isActive else { return }
+        stop(forgetKey: false)
+        intent = .paused
     }
 
-    private func connectOnce(keys: KeyLibrary) async throws {
-        if host.isDemo {
-            state = .connecting("Starting the demo…")
-            let client = try await HerdrClient.connectDemo()
-            self.client = client
-            coreName = "Demo"
-            coreVersion = await client.hello?.version
-            return
-        }
-        guard let keyInfo = keys.key(id: host.keyID) else { throw SessionError.noKey }
-        if signingKey == nil {
-            state = .connecting("Unlocking key…")
-            signingKey = try await keys.signingKey(for: keyInfo)
-        }
-        state = .connecting(snapshot == nil ? "Connecting to \(host.target.host)…" : "Reconnecting…")
-        let ssh = try await SSHConnection.connect(
-            to: host.target, key: signingKey!, knownHosts: knownHosts,
-            onUnknownHost: { [weak self] offered in
-                await self?.askToTrust(offered) ?? false
-            })
-        // Stopped while connecting: don't hand a stale line to whatever runs now.
-        if Task.isCancelled { await ssh.close(); throw CancellationError() }
-        self.ssh = ssh
-
-        state = .connecting("Starting herdr-core…")
-        let client = try await HerdrClient.connect(ssh: ssh, session: host.session)
-        if Task.isCancelled { await client.close(); await ssh.close(); throw CancellationError() }
-        self.client = client
-        let hello = await client.hello
-        coreName = hello?.core.name
-        coreVersion = hello?.version
-    }
-
-    /// Applies events until the stream ends, errors, or goes quiet.
-    private func followEvents() async throws {
-        guard let client else { throw SessionError.connectionLost }
-        // Subscribe first, then read anything else, as the protocol asks.
-        let subscription = try await client.subscribeEvents()
-        snapshot = subscription.snapshot
-        machines = (try? await client.listTerminals().machines) ?? []
-        layout = try? await client.herdrAppLayout()
-        lastHeard = .now
-        state = .connected
-        markLookedAt()
-
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                for try await message in subscription.messages {
-                    await self.apply(message)
-                }
-            }
-            group.addTask {
-                while true {
-                    try await Task.sleep(for: .seconds(5))
-                    if await self.silentTooLong() { throw SessionError.timedOut }
-                }
-            }
-            // The first child to finish (stream ended, error, silence) ends both.
-            try await group.next()
-            group.cancelAll()
-        }
+    func resume(keys: KeyLibrary) {
+        guard intent == .paused else { return }
+        start(keys: keys)
     }
 
     /// The snapshot after one message, or nil when it changes nothing the screens show. Every
@@ -334,37 +281,6 @@ final class HostSession {
         next.apply(message)
         if case .missed = message { return next }
         return next.terminals == current.terminals ? nil : next
-    }
-
-    private func apply(_ message: EventMessage) async {
-        lastHeard = .now
-        if let current = snapshot, let next = Self.snapshot(after: message, from: current) { snapshot = next }
-        markLookedAt()
-        guard let client else { return }
-        switch message {
-        case .missed:
-            // Documents are not in snapshots: read them again.
-            machines = (try? await client.listTerminals().machines) ?? machines
-            layout = (try? await client.herdrAppLayout()) ?? layout
-        case .event(let event):
-            if case .doc(let name) = event.change, name == HerdrAppLayout.documentName {
-                layout = (try? await client.herdrAppLayout()) ?? layout
-            }
-        case .heartbeat:
-            break
-        }
-    }
-
-    private func silentTooLong() -> Bool {
-        Date.now.timeIntervalSince(lastHeard) > Self.silenceLimit
-    }
-
-    private func teardown() async {
-        let (client, ssh) = (self.client, self.ssh)
-        self.client = nil
-        self.ssh = nil
-        await client?.close()
-        await ssh?.close()
     }
 
     /// Forget the stored host key, e.g. after a server was reinstalled.
@@ -390,7 +306,7 @@ final class HostSession {
     // MARK: Errors
 
     /// Network trouble is retried; problems a person must fix are not.
-    private static func isRetryable(_ error: Error) -> Bool {
+    static func isRetryable(_ error: Error) -> Bool {
         switch error {
         case is SessionError: return error as? SessionError != .noKey
         case SSHTransportError.commandFailed, SSHTransportError.authenticationFailed,
@@ -478,6 +394,64 @@ final class HostSession {
     }
 }
 
+extension HostSession: ConnectionAttemptOwner {
+    func isCurrent(_ a: ConnectionAttempt) -> Bool { attempt === a }
+
+    func attempt(_ a: ConnectionAttempt, progress: String) {
+        guard isCurrent(a) else { return }
+        state = .connecting(progress)
+    }
+
+    func attempt(
+        _ a: ConnectionAttempt, connected c: HostConnection, snapshot: TerminalSnapshot,
+        machines: [MachineView], layout: HerdrAppLayout?
+    ) {
+        guard isCurrent(a) else { return }
+        self.snapshot = snapshot
+        self.machines = machines
+        self.layout = layout
+        coreName = c.coreName
+        coreVersion = c.coreVersion
+        state = .connected
+        markLookedAt()
+    }
+
+    func attempt(_ a: ConnectionAttempt, received message: EventMessage) async {
+        guard isCurrent(a) else { return }
+        if let current = snapshot, let next = Self.snapshot(after: message, from: current) { snapshot = next }
+        markLookedAt()
+        guard let client = a.connection?.client else { return }
+        switch message {
+        case .missed:
+            // Documents are not in snapshots: read them again.
+            let read = try? await client.listTerminals().machines
+            guard isCurrent(a) else { return }
+            if let read { machines = read }
+            let doc = try? await client.herdrAppLayout()
+            guard isCurrent(a) else { return }
+            if let doc { layout = doc }
+        case .event(let event):
+            if case .doc(let name) = event.change, name == HerdrAppLayout.documentName {
+                let doc = try? await client.herdrAppLayout()
+                guard isCurrent(a) else { return }
+                if let doc { layout = doc }
+            }
+        case .heartbeat:
+            break
+        }
+    }
+
+    func attempt(_ a: ConnectionAttempt, failed error: Error, retrying: Bool) {
+        guard isCurrent(a) else { return }
+        state = .failed(Self.describe(error, host: host), retrying: retrying)
+    }
+
+    func attemptFinished(_ a: ConnectionAttempt) {
+        guard isCurrent(a) else { return }
+        attempt = nil
+    }
+}
+
 enum SessionError: LocalizedError, Equatable {
     case noKey
     case connectionLost
@@ -496,8 +470,6 @@ enum SessionError: LocalizedError, Equatable {
 @Observable
 final class SessionStore {
     private var sessions: [UUID: HostSession] = [:]
-    /// Sessions paused for the background, to resume when the app is back.
-    private var paused: Set<UUID> = []
 
     func session(for host: Host) -> HostSession {
         if let session = sessions[host.id], session.host == host { return session }
@@ -523,12 +495,10 @@ final class SessionStore {
 
     /// iOS suspends the app soon after it leaves the screen; close lines cleanly.
     func pauseAll() {
-        paused = Set(sessions.filter { $0.value.isActive }.map(\.key))
-        for id in paused { sessions[id]?.stop(forgetKey: false) }
+        for session in sessions.values { session.pause() }
     }
 
     func resumePaused(keys: KeyLibrary) {
-        for id in paused { sessions[id]?.start(keys: keys) }
-        paused = []
+        for session in sessions.values { session.resume(keys: keys) }
     }
 }
