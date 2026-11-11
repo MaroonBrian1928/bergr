@@ -94,6 +94,10 @@ struct ChatView: View {
     }
 
     private var palette: ChatPalette { .of(colorScheme) }
+    private var draftKey: String? {
+        guard let session, let address = terminal?.address else { return nil }
+        return "\(session.host.id.uuidString)|\(address)"
+    }
     private var state: String? {
         if feed.demoWorking { return "working" }
         #if DEBUG
@@ -299,6 +303,9 @@ struct ChatView: View {
             }
         }
         .scrollDismissesKeyboard(.interactively)
+        // A reply being written stays with its agent: switching away and back finds it again.
+        .onChange(of: draftKey, initial: true) { _, key in draft = ReplyDrafts.text(for: key) }
+        .onChange(of: draft) { _, text in ReplyDrafts.set(text, for: draftKey) }
         // Where the conversation meets the floating bars, it softens under them instead of a hard cut.
         .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
         // A problem is felt as well as read; a change that went through is felt as done.

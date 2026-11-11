@@ -222,6 +222,29 @@ def plan_event(steps):
     return {"t": "plan", "id": "plan", "steps": out}
 
 
+CODE_CALL = re.compile(r"tools\.(\w+)\(\s*\{")
+CODE_ARG = re.compile(r'(\w+)\s*:\s*"((?:\\.|[^"\\])*)"')
+
+
+def code_mode_call(src):
+    """Codex's code mode runs a script (`text(await tools.exec_command({cmd:"ls"}))`) through one
+    "exec" tool: the first tool it calls and that call's string arguments, or None."""
+    if not isinstance(src, str):
+        return None
+    m = CODE_CALL.search(src)
+    if not m:
+        return None
+    args = {}
+    for k, v in CODE_ARG.findall(src[m.end():m.end() + 20000]):
+        if k in args:
+            break
+        try:
+            args[k] = json.loads('"' + v + '"')
+        except Exception:
+            args[k] = v
+    return m.group(1), args
+
+
 def tool_summary(args):
     if isinstance(args, str):
         try:
@@ -861,7 +884,10 @@ class Codex:
                         yield {"t": "question", "id": f"{pid}-q{i}", "title": q["title"], "options": [o for o in opts if o]}
                 if qs:
                     return
-            yield {"t": "tool", "id": pid, "name": p.get("name") or "shell", "summary": tool_summary(args)}
+            name = p.get("name") or "shell"
+            if name == "exec" and (inner := code_mode_call(args)):
+                name, args = inner
+            yield {"t": "tool", "id": pid, "name": name, "summary": tool_summary(args)}
         elif t in ("function_call_output", "custom_tool_call_output"):
             out = p.get("output")
             if isinstance(out, str) and out.lstrip().startswith("{"):

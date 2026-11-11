@@ -341,6 +341,15 @@ class ToolOutput(Base):
             "type": "function_call_output", "call_id": "call_1", "output": json.dumps({"output": "a\nb"})}}))
         self.assertEqual(out, [{"t": "toolout", "id": "fc_1", "text": "a\nb"}])
 
+    def test_codex_code_mode_call_shows_the_command(self):
+        ns = load("codex", self.home)
+        src = 'text(await tools.exec_command({cmd:"python3 - <<\'PY\'\\nprint(1)\\nPY", yield_time_ms:1000}))'
+        ev = list(ns["Codex"]().parse({"type": "response_item", "payload": {
+            "type": "custom_tool_call", "id": "ct1", "call_id": "c1", "name": "exec", "input": src}}))
+        self.assertEqual(ev[0]["name"], "exec_command")
+        self.assertTrue(ev[0]["summary"].startswith("python3 - <<'PY'"), ev[0]["summary"])
+        self.assertNotIn("tools.", ev[0]["summary"])
+
     def test_codex_custom_output_plain(self):
         ns = load("codex", self.home)
         out = list(ns["Codex"]().parse({"type": "response_item", "payload": {
