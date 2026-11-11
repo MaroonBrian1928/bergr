@@ -128,8 +128,9 @@ struct ChatView: View {
                     } label: {
                         Label("Earlier messages", systemImage: "arrow.up")
                             .font(.footnote.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .frame(maxWidth: .infinity, minHeight: PlatformMetrics.controlHeight)
                     }
+                    .macPlainButton()
                     .foregroundStyle(palette.secondary)
                     .accessibilityHint("\(hidden) more")
                 }
@@ -182,14 +183,14 @@ struct ChatView: View {
                                     .font(.footnote).foregroundStyle(palette.secondary)
                                 Button("Retry") { prepared().retry(reply.id) }
                                     .font(.footnote.weight(.semibold))
-                                    .frame(minHeight: 44)
+                                    .frame(minHeight: PlatformMetrics.controlHeight)
                                 Button("Discard", systemImage: "xmark") {
                                     withAnimation(motion) { outbox.discard(reply.id) }
                                 }
                                 .labelStyle(.iconOnly)
                                 .font(.footnote)
                                 .foregroundStyle(palette.secondary)
-                                .frame(minWidth: 44, minHeight: 44)
+                                .frame(minWidth: PlatformMetrics.controlHeight, minHeight: PlatformMetrics.controlHeight)
                             }
                         }
                     }
@@ -307,10 +308,11 @@ struct ChatView: View {
                     .padding(.horizontal, unseen > 0 ? 14 : 0)
                     .frame(minWidth: 40, minHeight: 40)
                     .glassEffect(.regular, in: Capsule())
-                    .frame(minWidth: 44, minHeight: 44)
+                    .frame(minWidth: PlatformMetrics.controlHeight, minHeight: PlatformMetrics.controlHeight)
                     .contentShape(Capsule())
                     .animation(motion, value: unseen)
                 }
+                .macPlainButton()
                 .accessibilityLabel(unseen > 0 ? "\(unseen) new message\(unseen == 1 ? "" : "s"), jump to latest" : "Jump to latest")
                 .padding(.trailing, 16)
                 .padding(.bottom, 8)
@@ -326,6 +328,8 @@ struct ChatView: View {
         // Where the conversation meets the floating bars, it softens under them instead of a hard cut.
         #if os(iOS)
         .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+        #else
+        .scrollEdgeEffectStyle(.hard, for: .top)
         #endif
         // A problem is felt as well as read; a change that went through is felt as done.
         .sensoryFeedback(.error, trigger: sendError) { _, new in new != nil }
@@ -432,6 +436,7 @@ struct ChatView: View {
         Button { showingUsage = true } label: {
             UsageRing(fraction: feed.usage?.fraction ?? 0, palette: palette)
         }
+        .macPlainButton()
         // Claude without numbers opens the sheet too: it offers to set them up.
         .disabled(feed.usage == nil && agent != .claude)
         .accessibilityLabel("Context")
@@ -451,9 +456,10 @@ struct ChatView: View {
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(palette.secondary)
-                    .frame(width: 44, height: 44)
+                    .frame(width: PlatformMetrics.controlHeight, height: PlatformMetrics.controlHeight)
                     .contentShape(Rectangle())
             }
+            .macPlainButton()
             .accessibilityLabel("Close search")
         }
         .padding(.leading, 14)
@@ -526,7 +532,11 @@ struct ChatView: View {
     }
 
     /// The conversation's and reply bar's widest, so lines stay readable on wide screens.
+    #if os(macOS)
+    static let readableWidth: CGFloat = 820
+    #else
     static let readableWidth: CGFloat = 720
+    #endif
 
     /// Hardware keyboard: ⌘↩ sends, Esc stops a working agent, ⌘F searches.
     private var shortcuts: some View {
@@ -892,9 +902,9 @@ struct ChatView: View {
                         .font(stops ? .footnote : .body.weight(.semibold))
                         .foregroundStyle(stops ? palette.text : ready ? palette.onAccent : palette.secondary)
                         .contentTransition(.symbolEffect(.replace))
-                        .frame(width: 34, height: 34)
+                        .frame(width: PlatformMetrics.sendButtonSize, height: PlatformMetrics.sendButtonSize)
                         .background(ready && !stops ? palette.accent : palette.bubble, in: Circle())
-                        .frame(width: 44, height: 44)
+                        .frame(width: PlatformMetrics.controlHeight, height: PlatformMetrics.controlHeight)
                         .contentShape(Circle())
                 }
                 .buttonStyle(PressStyle())
@@ -1160,7 +1170,7 @@ struct SubagentGroup: View {
                             ProgressView().controlSize(.mini).frame(width: 16)
                         }
                     }
-                    .frame(minHeight: 44)
+                    .frame(minHeight: PlatformMetrics.controlHeight)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1176,7 +1186,7 @@ struct SubagentGroup: View {
             }
         }
         .foregroundStyle(palette.secondary)
-        .padding(.vertical, -10) // the 44 pt row shouldn't add air between messages
+        .padding(.vertical, -max(0, (PlatformMetrics.controlHeight - 24) / 2)) // Keep the control from adding air between messages.
     }
 }
 
@@ -1210,7 +1220,7 @@ private struct SubagentLine: View {
             }
             .frame(width: 16)
         }
-        .frame(minHeight: 44)
+        .frame(minHeight: PlatformMetrics.controlHeight)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Sub-agent \(agent.name), \(agent.state.rawValue)\(detail)")
     }
@@ -1292,7 +1302,7 @@ private struct ToolRun: View {
             if running && !waiting {
                 live
                     .foregroundStyle(palette.secondary)
-                    .padding(.vertical, -10)
+                    .padding(.vertical, -max(0, (PlatformMetrics.controlHeight - 24) / 2))
                     // Swapped, not cross-faded: both at once made the row taller, then it snapped.
                     .transition(.asymmetric(insertion: .opacity, removal: .identity))
             } else {
@@ -1309,9 +1319,9 @@ private struct ToolRun: View {
                         withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { height = new }
                     }
                     .frame(height: height, alignment: .top)
-                    // The live run's -10 vertical padding lets its lines hang past the measured box; a plain
+                    // The live run's negative vertical padding lets its lines hang past the measured box; a plain
                     // clip cut the newest line's descenders, so the clip reaches that far too.
-                    .mask(Rectangle().padding(.vertical, -10))
+                    .mask(Rectangle().padding(.vertical, -max(0, (PlatformMetrics.controlHeight - 24) / 2)))
             } else {
                 content
             }
@@ -1445,7 +1455,7 @@ private struct ToolRun: View {
                         .rotationEffect(.degrees(open ? 90 : 0))
                     Spacer(minLength: 0)
                 }
-                .frame(minHeight: 44)
+                .frame(minHeight: PlatformMetrics.controlHeight)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1475,7 +1485,7 @@ private struct ToolRun: View {
             }
         }
         .foregroundStyle(palette.secondary)
-        .padding(.vertical, -10) // the 44 pt row shouldn't add air between messages
+        .padding(.vertical, -max(0, (PlatformMetrics.controlHeight - 24) / 2)) // Keep the control from adding air between messages.
     }
 }
 
@@ -1788,7 +1798,7 @@ private struct QuestionCard: View {
                     .foregroundStyle(picked ? Color.white : palette.text)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    .frame(minHeight: 44)
+                    .frame(minHeight: PlatformMetrics.controlHeight)
                     .background(picked ? palette.accent : palette.bubble,
                                 in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -2035,6 +2045,7 @@ private struct UpdateBanner: View {
                 .labelStyle(.iconOnly)
                 .font(.footnote)
                 .foregroundStyle(palette.secondary)
+                .macPlainButton()
                 .frame(width: 32, height: 32)
                 .contentShape(Rectangle())
         }

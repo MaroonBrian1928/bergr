@@ -148,6 +148,9 @@ struct NewKeyView: View {
                     }
                 }
             }
+            #if os(macOS)
+            .formStyle(.grouped)
+            #endif
             .navigationTitle("New Key")
             .inlineNavigationTitle()
             .toolbar {
@@ -174,6 +177,9 @@ struct NewKeyView: View {
                 }
             }
         }
+        #if os(macOS)
+        .frame(width: 500, height: 340)
+        #endif
     }
 }
 
@@ -210,6 +216,7 @@ struct ImportKeyView: View {
                                     }
                                 }
                             }
+                            .macPlainButton()
                             .disabled({ if case .importable = item.status { false } else { true } }())
                         }
                     } header: {
@@ -240,6 +247,9 @@ struct ImportKeyView: View {
                     Section { Text(error).foregroundStyle(.red) }
                 }
             }
+            #if os(macOS)
+            .formStyle(.grouped)
+            #endif
             .navigationTitle("Import Key")
             .inlineNavigationTitle()
             .onAppear { found = keys.discoverSSHFolder() }
@@ -276,6 +286,9 @@ struct ImportKeyView: View {
                 }
             }
         }
+        #if os(macOS)
+        .frame(width: 560, height: 580)
+        #endif
     }
 }
 

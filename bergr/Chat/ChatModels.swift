@@ -299,6 +299,17 @@ struct ModelSheet: View {
                 }
                 if let current, !current.efforts.isEmpty {
                     Section {
+                        #if os(macOS)
+                        Picker("Effort", selection: Binding(
+                            get: { effort ?? "" },
+                            set: { apply(current, $0.isEmpty ? nil : $0); dismiss() }
+                        )) {
+                            Text("Default").tag("")
+                            ForEach(current.efforts, id: \.self) { level in
+                                Text(EffortName.display(level)).tag(level)
+                            }
+                        }
+                        #else
                         NavigationLink {
                             List(current.efforts, id: \.self) { level in
                                 Button {
@@ -321,6 +332,7 @@ struct ModelSheet: View {
                         } label: {
                             LabeledContent("Effort", value: effort.map(EffortName.display) ?? "Default")
                         }
+                        #endif
                     }
                 }
             }

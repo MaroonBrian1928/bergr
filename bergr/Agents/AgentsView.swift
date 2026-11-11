@@ -50,6 +50,30 @@ struct AgentsView: View {
     /// The row picked, "<host>|<address>". On a phone the split view moves to the terminal when
     /// the sidebar list's selection changes, so rows are selected, not buttons.
     @State private var picked: String?
+    #if os(macOS)
+    private var macSelection: Binding<AgentRef?>?
+    private var listSelection: Binding<String?> {
+        Binding(get: {
+            macSelection?.wrappedValue.map { "\($0.host.uuidString)|\($0.address)" }
+        }, set: { value in
+            guard let value, let bar = value.firstIndex(of: "|"),
+                  let host = UUID(uuidString: String(value[..<bar])) else {
+                macSelection?.wrappedValue = nil
+                return
+            }
+            macSelection?.wrappedValue = AgentRef(host: host, address: String(value[value.index(after: bar)...]))
+        })
+    }
+
+    init(sessions: SessionStore, selection: Binding<AgentRef?>,
+         open: @escaping (_ host: Host.ID, _ address: String) -> Void) {
+        self.sessions = sessions
+        self.macSelection = selection
+        self.open = open
+    }
+    #else
+    private var listSelection: Binding<String?> { $picked }
+    #endif
     /// "machine" or "attention"; empty is the device's default (attention on a phone).
     @AppStorage("agents.grouping") private var groupingSetting = ""
     @State private var showAllIdle = false
@@ -69,9 +93,10 @@ struct AgentsView: View {
     var body: some View {
         // Worked out once per body, and read by the sections, the animation and the attention lists.
         let lists = machineLists
-        List(selection: $picked) {
+        List(selection: listSelection) {
             if byAttention { attentionSections(lists) } else { machineSections(lists) }
         }
+        #if os(iOS)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Menu {
@@ -92,6 +117,7 @@ struct AgentsView: View {
                 .accessibilityLabel("Agents, grouped by \(byAttention ? "attention" : "machine")")
             }
         }
+        #endif
         .modifier(AgentsListBehavior(view: self, orderKey: lists.flatMap { $0.ordered.map(\.address) }))
     }
 
@@ -160,7 +186,12 @@ struct AgentsView: View {
 
     fileprivate func applyBehavior<V: View>(_ list: V, orderKey: [String]) -> some View {
         list
+        #if os(macOS)
+        .listStyle(.sidebar)
+        .environment(\.defaultMinListRowHeight, 40)
+        #else
         .listStyle(.plain)
+        #endif
         // Rows glide to their new place when an agent's state re-sorts them; Reduce Motion fades.
         .animation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.35), value: orderKey)
         .sensoryFeedback(.selection, trigger: picked) { _, new in new != nil }
@@ -172,6 +203,7 @@ struct AgentsView: View {
                 session.retry(keys: keys)
             }
         }
+        #if os(iOS)
         .onChange(of: picked) { _, value in
             guard let value, let bar = value.firstIndex(of: "|"),
                   let host = UUID(uuidString: String(value[..<bar])) else { return }
@@ -179,6 +211,7 @@ struct AgentsView: View {
         }
         // Back on the list: nothing stays picked, so the same row opens again.
         .onAppear { picked = nil }
+        #endif
         .navigationTitle("Agents")
         .overlay {
             if hosts.hosts.isEmpty {

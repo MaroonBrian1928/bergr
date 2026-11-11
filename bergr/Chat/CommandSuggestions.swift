@@ -67,7 +67,7 @@ struct CommandSuggestions: View {
                 }
                 .padding(.vertical, 4)
             }
-            .frame(maxHeight: min(CGFloat(found.count) * 44 + 8, 5.5 * 44 + 8))
+            .frame(maxHeight: min(CGFloat(found.count) * PlatformMetrics.controlHeight + 8, 5.5 * PlatformMetrics.controlHeight + 8))
             .scrollBounceBehavior(.basedOnSize)
             .scrollIndicators(.visible)
             .foregroundStyle(palette.text)
@@ -93,7 +93,7 @@ struct CommandSuggestions: View {
                     .foregroundStyle(palette.secondary)
                     .lineLimit(1)
             }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: PlatformMetrics.controlHeight, alignment: .leading)
             .padding(.horizontal, 16)
             .contentShape(Rectangle())
         }

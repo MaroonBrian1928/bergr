@@ -12,22 +12,30 @@ struct MacRootView: View {
 
     var body: some View {
         NavigationSplitView {
-            VStack(spacing: 0) {
-                AgentsView(sessions: sessions) { host, address in shell.selection = AgentRef(host: host, address: address) }
-                Divider()
-                Button("Add Machine…", systemImage: "plus") { shell.showingAddMachine = true }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
+            AgentsView(sessions: sessions, selection: $shell.selection) { host, address in
+                shell.selection = AgentRef(host: host, address: address)
             }
-                .navigationSplitViewColumnWidth(min: 300, ideal: 360, max: 480)
-                .toolbar {
-                    ToolbarItem(placement: .automatic) {
-                        Button("Add Machine…", systemImage: "plus.rectangle") { shell.showingAddMachine = true }
+            .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 400)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    Divider()
+                    HStack {
+                        Menu {
+                            Button("Add Machine…") { shell.showingAddMachine = true }
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("Add Machine")
+                        .accessibilityLabel("Add Machine")
+                        Spacer()
                     }
-                    ToolbarItem(placement: .primaryAction) {
-                        Button("New Session", systemImage: "plus") { shell.showingNewSession = true }
-                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
                 }
+                .background(.bar)
+            }
         } detail: {
             if let selected = shell.selection, let host = hosts.hosts.first(where: { $0.id == selected.host }) {
                 ChatWindow(session: sessions.session(for: host), address: selected.address)
@@ -42,6 +50,12 @@ struct MacRootView: View {
                 }
             }
         }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("New Session", systemImage: "square.and.pencil") { shell.showingNewSession = true }
+                    .help("New Session (⌘N)")
+            }
+        }
         .sheet(isPresented: $shell.showingAddMachine) {
             HostEditor(host: Host.new(key: keys.keys.last?.id))
                 .frame(width: 620, height: 640)
@@ -50,7 +64,7 @@ struct MacRootView: View {
             NewSessionView(sessions: sessions) { host, address in
                 shell.selection = AgentRef(host: host, address: address)
             }
-            .frame(minWidth: 440, minHeight: 420)
+            .frame(width: 540, height: 560)
         }
         .modifier(TrustPrompt(sessions: sessions))
         .focusedSceneValue(\.agentRef, shell.selection)

@@ -7,6 +7,8 @@ struct MacCommands: SwiftUI.Commands {
     let hosts: HostStore
     let shell: MacShell
 
+    @AppStorage("agents.grouping") private var grouping = ""
+
     @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.agentRef) private var current
     @FocusedValue(\.showAgent) private var showAgent
@@ -60,6 +62,14 @@ struct MacCommands: SwiftUI.Commands {
 
         CommandGroup(after: .appInfo) {
             Button("Check for Updates…") { Updater.shared.checkForUpdates() }
+        }
+
+        SidebarCommands()
+        CommandGroup(after: .sidebar) {
+            Picker("Group Agents by", selection: Binding(get: { grouping.isEmpty ? "machine" : grouping }, set: { grouping = $0 })) {
+                Text("Machine").tag("machine")
+                Text("Attention").tag("attention")
+            }
         }
 
         CommandMenu("Agent") {

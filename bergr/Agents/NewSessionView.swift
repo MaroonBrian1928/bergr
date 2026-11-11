@@ -145,6 +145,9 @@ struct NewSessionView: View {
                     }
                 }
             }
+            #if os(macOS)
+            .formStyle(.grouped)
+            #endif
             .navigationTitle("New Session")
             .inlineNavigationTitle()
             .toolbar {
@@ -167,6 +170,9 @@ struct NewSessionView: View {
             }
             .task(id: hostID) { await locate() }
         }
+        #if os(macOS)
+        .frame(width: 540, height: 560)
+        #endif
     }
 
     @ViewBuilder
@@ -226,6 +232,7 @@ struct NewSessionView: View {
                         }
                     }
                 }
+                .macPlainButton()
             }
         } header: {
             Text("Folder")

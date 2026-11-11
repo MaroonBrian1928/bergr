@@ -18,6 +18,9 @@ struct AgentRow: View {
     private var dimmed: Bool { !terminal.isLive || state == nil }
 
     var body: some View {
+        #if os(macOS)
+        macRow
+        #else
         HStack(spacing: 10) {
             AgentLogo(kind: kind, size: 20)
             VStack(alignment: .leading, spacing: 2) {
@@ -67,7 +70,33 @@ struct AgentRow: View {
         .animation(.smooth(duration: 0.3), value: state)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier(terminal.address)
+        #endif
     }
+
+    #if os(macOS)
+    private var macRow: some View {
+        HStack(spacing: 8) {
+            AgentLogo(kind: kind, size: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(AgentsOrdering.title(terminal))
+                    .font(.body.weight(state == .needsYou ? .semibold : .regular))
+                    .lineLimit(1)
+                Text([machine, AgentsOrdering.info(terminal),
+                      subagents > 0 ? "\(subagents) sub-agents running" : nil]
+                    .compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if let state { StatusMark(state: state) }
+        }
+        .frame(height: 34)
+        .opacity(dimmed ? 0.6 : 1)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(terminal.address)
+    }
+    #endif
 }
 
 /// Spinning ring = working, green dot = done (unread), hollow ring = idle, hand = blocked.

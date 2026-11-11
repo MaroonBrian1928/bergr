@@ -248,3 +248,24 @@ enum DeviceName {
         #endif
     }
 }
+
+/// Compact pointer controls on Mac; retain touch targets on iOS.
+enum PlatformMetrics {
+    #if os(macOS)
+    static let controlHeight: CGFloat = 28
+    static let sendButtonSize: CGFloat = 26
+    #else
+    static let controlHeight: CGFloat = 44
+    static let sendButtonSize: CGFloat = 34
+    #endif
+}
+
+extension View {
+    func macPlainButton() -> some View {
+        #if os(macOS)
+        buttonStyle(.plain)
+        #else
+        self
+        #endif
+    }
+}

@@ -251,7 +251,7 @@ struct AnswerCard: View {
                 Text("Run /login")
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(palette.onAccent)
-                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .frame(maxWidth: .infinity, minHeight: PlatformMetrics.controlHeight)
                     .background(palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .buttonStyle(PressStyle())
@@ -279,7 +279,7 @@ struct AnswerCard: View {
                 Text("Close Rewind")
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(palette.onAccent)
-                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .frame(maxWidth: .infinity, minHeight: PlatformMetrics.controlHeight)
                     .background(palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .buttonStyle(PressStyle())
@@ -338,7 +338,7 @@ struct AnswerCard: View {
                     .foregroundStyle(primary ? palette.onAccent : palette.text)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    .frame(minHeight: 44)
+                    .frame(minHeight: PlatformMetrics.controlHeight)
                     .background(primary ? palette.accent : palette.bubble, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
@@ -355,7 +355,7 @@ struct AnswerCard: View {
                     model.press(.escape)
                     tapped += 1
                 } label: {
-                    Text("esc").font(.callout.monospaced()).padding(.horizontal, 12).frame(minHeight: 44)
+                    Text("esc").font(.callout.monospaced()).padding(.horizontal, 12).frame(minHeight: PlatformMetrics.controlHeight)
                 }
                 .buttonStyle(PressStyle())
                 .foregroundStyle(palette.secondary)
@@ -416,7 +416,7 @@ struct LoginStepCard: View {
                 if let url {
                     Button { openURL(url) } label: {
                         Label("Open Sign-In Page", systemImage: "safari")
-                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .frame(maxWidth: .infinity, minHeight: PlatformMetrics.controlHeight)
                     }
                     .buttonStyle(.bordered)
                 }
@@ -426,13 +426,14 @@ struct LoginStepCard: View {
                         .autocorrectionDisabled()
                         .font(.callout.monospaced())
                         .padding(.horizontal, 12)
-                        .frame(minHeight: 44)
+                        .frame(minHeight: PlatformMetrics.controlHeight)
                         .background(palette.bubble, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     Button {
                         if let pasted = Pasteboard.string { code = pasted }
                     } label: {
-                        Image(systemName: "doc.on.clipboard").frame(width: 44, height: 44)
+                        Image(systemName: "doc.on.clipboard").frame(width: PlatformMetrics.controlHeight, height: PlatformMetrics.controlHeight)
                     }
+                    .macPlainButton()
                     .accessibilityLabel("Paste")
                 }
                 Button {
@@ -451,7 +452,7 @@ struct LoginStepCard: View {
                     Text("Sign In")
                         .font(.callout.weight(.semibold))
                         .foregroundStyle(palette.onAccent)
-                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .frame(maxWidth: .infinity, minHeight: PlatformMetrics.controlHeight)
                         .background(palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 .buttonStyle(PressStyle())
@@ -466,7 +467,7 @@ struct LoginStepCard: View {
                     Text("Continue")
                         .font(.callout.weight(.semibold))
                         .foregroundStyle(palette.onAccent)
-                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .frame(maxWidth: .infinity, minHeight: PlatformMetrics.controlHeight)
                         .background(palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 .buttonStyle(PressStyle())

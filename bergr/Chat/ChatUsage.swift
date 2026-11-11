@@ -124,6 +124,7 @@ struct UsageSheet: View {
                             if setupState == .running { ProgressView() }
                         }
                     }
+                    .macPlainButton()
                     .disabled(setupState == .running)
                 }
                 if case .failed(let message) = setupState {

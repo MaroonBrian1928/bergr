@@ -109,7 +109,7 @@ struct HostEditor: View {
                 if isExisting {
                     Section {
                         Button("Delete Machine", role: .destructive) { confirmDelete = true }
-                            .frame(minHeight: 44)
+                            .frame(minHeight: PlatformMetrics.controlHeight)
                             .accessibilityIdentifier("delete-machine")
                     }
                 }
@@ -170,12 +170,12 @@ struct HostEditor: View {
                     .urlKeyboard()
                     .noAutocapitalization()
                     .autocorrectionDisabled()
-                    .frame(minHeight: 44)
+                    .frame(minHeight: PlatformMetrics.controlHeight)
                     .accessibilityIdentifier("address-field")
                     .onChange(of: address) { _, text in applyAddress(text) }
                 TextField("Name", text: $host.name, prompt: Text(host.target.host.isEmpty ? "My machine" : host.target.host))
                     .wordsAutocapitalization()
-                    .frame(minHeight: 44)
+                    .frame(minHeight: PlatformMetrics.controlHeight)
             } header: {
                 Text("Where it is")
             } footer: {
@@ -184,13 +184,13 @@ struct HostEditor: View {
             Section {
                 TextField("Username", text: $host.target.username, prompt: Text("me"))
                     .textContentType(.username)
-                    .frame(minHeight: 44)
+                    .frame(minHeight: PlatformMetrics.controlHeight)
                 TextField("Hostname", text: $host.target.host, prompt: Text("server.example.com"))
                     .urlKeyboard()
-                    .frame(minHeight: 44)
+                    .frame(minHeight: PlatformMetrics.controlHeight)
                 TextField("Port", text: $port, prompt: Text("22"))
                     .numberKeyboard()
-                    .frame(minHeight: 44)
+                    .frame(minHeight: PlatformMetrics.controlHeight)
             } header: {
                 Text("Address details")
             } footer: {
@@ -211,9 +211,9 @@ struct HostEditor: View {
                 Text("None").tag(UUID?.none)
                 ForEach(keys.keys) { Text($0.label).tag(Optional($0.id)) }
             }
-            .frame(minHeight: 44)
+            .frame(minHeight: PlatformMetrics.controlHeight)
             Button("New Key…", systemImage: "plus.circle") { showingNewKey = true }
-                .frame(minHeight: 44)
+                .frame(minHeight: PlatformMetrics.controlHeight)
         } header: {
             Text("Key")
         } footer: {
@@ -236,14 +236,14 @@ struct HostEditor: View {
                 Spacer()
                 ShareLink(item: line) { Label("Share Public Key", systemImage: "square.and.arrow.up") }
             }
-            .frame(minHeight: 44)
+            .frame(minHeight: PlatformMetrics.controlHeight)
             .buttonStyle(.borderless)
             Text(command)
                 .font(.caption.monospaced())
                 .textSelection(.enabled)
                 .padding(.vertical, 4)
             copyButton("Copy Command", id: "command", text: command)
-                .frame(minHeight: 44)
+                .frame(minHeight: PlatformMetrics.controlHeight)
                 .buttonStyle(.borderless)
         } header: {
             Text("Let this phone in")
@@ -270,7 +270,7 @@ struct HostEditor: View {
                     if isTesting { ProgressView().padding(.trailing, 4) }
                     Text(isTesting ? "Testing…" : "Test Connection").fontWeight(.semibold)
                 }
-                .frame(maxWidth: .infinity, minHeight: 44)
+                .frame(maxWidth: .infinity, minHeight: PlatformMetrics.controlHeight)
             }
             .buttonStyle(.borderedProminent)
             .tint(palette.accent)
@@ -354,7 +354,7 @@ struct HostEditor: View {
                     Button("Trust") { test.answerHostKey(trust: true) }.buttonStyle(.borderedProminent)
                     Button("Don't Trust", role: .destructive) { test.answerHostKey(trust: false) }.buttonStyle(.bordered)
                 }
-                .frame(minHeight: 44)
+                .frame(minHeight: PlatformMetrics.controlHeight)
             }
         } else {
             switch test.state {
@@ -380,7 +380,7 @@ struct HostEditor: View {
             TextField("Session", text: $session, prompt: Text("default"))
                 .noAutocapitalization()
                 .autocorrectionDisabled()
-                .frame(minHeight: 44)
+                .frame(minHeight: PlatformMetrics.controlHeight)
         } header: {
             Text("herdr-core")
         } footer: {

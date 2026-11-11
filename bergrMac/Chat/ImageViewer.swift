@@ -35,7 +35,7 @@ struct ImageViewer: View {
             }
             .padding(8)
         }
-        .frame(minWidth: 480, minHeight: 360)
+        .frame(width: 800, height: 600)
         .accessibilityIdentifier("image-viewer")
     }
 }

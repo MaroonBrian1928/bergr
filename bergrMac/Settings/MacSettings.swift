@@ -6,6 +6,7 @@ struct MacSettings: View {
     let sessions: SessionStore
     @Environment(HostStore.self) private var hosts
     @Environment(KeyLibrary.self) private var keys
+    @State private var showingLicenses = false
     @State private var editing: Host?
     @State private var creatingKey = false
     @State private var importingKey = false
@@ -29,7 +30,7 @@ struct MacSettings: View {
                 Section("About Bergr") {
                     LabeledContent("Version", value: SettingsView.version)
                     Link("Source Code", destination: URL(string: "https://github.com/MaroonBrian1928/bergr")!)
-                    NavigationLink("Open-Source Licenses") { LicensesView() }
+                    Button("Open-Source Licenses…") { showingLicenses = true }
                 }
             }
             .modifier(SettingsPane())
@@ -125,13 +126,46 @@ struct MacSettings: View {
                 .tabItem { Label("Terminal", systemImage: "terminal") }
         }
         .frame(width: 660, height: 540)
+        .sheet(isPresented: $showingLicenses) { MacLicensesSheet() }
         .sheet(item: $editing) { HostEditor(host: $0).frame(width: 620, height: 640) }
     }
 }
 
 private struct SettingsPane: ViewModifier {
     func body(content: Content) -> some View {
-        NavigationStack { content.formStyle(.grouped) }
-            .padding(.top, 8)
+        content.formStyle(.grouped)
+    }
+}
+
+private struct MacLicensesSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var selection: License.ID?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HSplitView {
+                List(License.all, selection: $selection) { license in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(license.name)
+                        Text(license.license).font(.caption).foregroundStyle(.secondary)
+                    }
+                    .tag(license.id)
+                }
+                .frame(minWidth: 180, idealWidth: 220, maxWidth: 280)
+                if let license = License.all.first(where: { $0.id == selection }) {
+                    LicenseView(license: license).frame(minWidth: 360)
+                } else {
+                    ContentUnavailableView("Select a License", systemImage: "doc.text")
+                }
+            }
+            Divider()
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            .padding(12)
+        }
+        .frame(width: 780, height: 560)
+        .onAppear { selection = License.all.first?.id }
     }
 }
