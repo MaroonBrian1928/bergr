@@ -50,13 +50,14 @@ struct TerminalScreenView: View {
     private struct LinkedMachine { let name: String; let host: String?; let target: String? }
 
     private func linkedMachine(_ terminal: Terminal?) -> LinkedMachine? {
-        guard let terminal, !session.host.isDemo, let slash = address.firstIndex(of: "/"),
-              ChatAgent.detect(terminal) != nil else { return nil }
+        guard terminal != nil, !session.host.isDemo, let slash = address.firstIndex(of: "/") else { return nil }
         let name = String(address[..<slash])
         guard !terminalOnly.split(separator: ",").contains(Substring(name)) else { return nil }
         let known = session.machines.first { $0.name == name }
         return LinkedMachine(name: name, host: known?.host, target: known?.target)
     }
+
+    private func agentDetected(_ terminal: Terminal?) -> Bool { terminal.flatMap(ChatAgent.detect) != nil }
 
     private func hasDirectHost(_ machine: LinkedMachine) -> Bool {
         let names = Set([machine.name, machine.host, machine.target].compactMap { $0?.lowercased() })
@@ -132,7 +133,8 @@ struct TerminalScreenView: View {
                 overlay(terminal)
             }
             if !chat, let linked = linkedMachine(terminal) {
-                LinkedChatPrompt(machine: linked.name, alreadyAdded: hasDirectHost(linked), working: settingUp) {
+                LinkedChatPrompt(machine: linked.name, isAgent: agentDetected(terminal), alreadyAdded: hasDirectHost(linked),
+                                 working: settingUp) {
                     Task { await prepareDirectHost(linked) }
                 } terminalOnly: {
                     withAnimation { terminalOnly = (terminalOnly.split(separator: ",").map(String.init) + [linked.name]).joined(separator: ",") }
@@ -401,17 +403,30 @@ struct NeedsYouBar: View {
 /// transcripts are there); through this one, only the terminal comes.
 private struct LinkedChatPrompt: View {
     let machine: String
+    /// An agent gains a chat from connecting directly; a shell, a connection of its own.
+    let isAgent: Bool
     let alreadyAdded: Bool
     let working: Bool
     let add: () -> Void
     let terminalOnly: () -> Void
 
+    private var message: String {
+        let via = "Bergr reaches \(machine) through another computer"
+        if alreadyAdded {
+            return isAgent
+                ? "You've added \(machine) as its own machine: open this agent from there for the chat. \(via), which only carries the terminal."
+                : "You've added \(machine) as its own machine: open it from there for a direct connection. \(via)."
+        }
+        let setup = "Bergr allows this phone's SSH key in on \(machine) for you, through that computer, and fills in its address."
+        return isAgent
+            ? "\(via), which only carries the terminal. Add \(machine) as its own machine to get the chat: \(setup)"
+            : "\(via). Add \(machine) as its own machine to connect to it directly: \(setup)"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Chat with this agent?").font(.headline)
-            Text(alreadyAdded
-                 ? "You've added \(machine) as its own machine: open this agent from there for the chat. From here, Bergr reaches \(machine) through another computer, which only carries the terminal."
-                 : "Bergr reaches \(machine) through another computer, which only carries the terminal. Add \(machine) as its own machine to get the chat: Bergr allows this phone's SSH key in on \(machine) for you, through that computer, and fills in its address.")
+            Text(isAgent ? "Chat with this agent?" : "Connect to \(machine) directly?").font(.headline)
+            Text(message)
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
@@ -426,7 +441,7 @@ private struct LinkedChatPrompt: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(working)
                 }
-                Button(alreadyAdded ? "OK" : "Terminal only", action: terminalOnly).buttonStyle(.bordered)
+                Button(alreadyAdded ? "OK" : isAgent ? "Terminal only" : "Don't ask again", action: terminalOnly).buttonStyle(.bordered)
             }
             .controlSize(.large)
         }
