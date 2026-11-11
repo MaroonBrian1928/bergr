@@ -18,10 +18,12 @@ final class NotificationService: UNNotificationServiceExtension {
             content.title = alert.title
             content.body = alert.body
         }
+        handler = nil  // delivered: iOS running out of time afterwards mustn't deliver it again
         contentHandler(content)
     }
 
     override func serviceExtensionTimeWillExpire() {
         if let handler, let best { handler(best) }
+        handler = nil
     }
 }
