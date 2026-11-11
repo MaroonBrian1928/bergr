@@ -80,7 +80,11 @@ mac-native configuration="Debug":
         -configuration {{configuration}} -destination 'platform=macOS,arch=arm64' build | xcbeautify --quiet
     git checkout -q -- bergr.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved 2>/dev/null || true
     name="{{ if configuration == "Debug" { "Bergr Dev" } else { "Bergr" } }}"
-    osascript -e "tell application \"$name\" to quit" 2>/dev/null || true
+    # By bundle id: the iPad build has the same name.
+    app=".build/xcode-mac-native/Build/Products/{{configuration}}/$name.app"
+    id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")"
+    osascript -e "tell application id \"$id\" to quit" 2>/dev/null || true
+    sleep 1  # opening while it quits fails (-609)
     open ".build/xcode-mac-native/Build/Products/{{configuration}}/$name.app"
 
 # Build and run in the simulator (BERGR_SIMULATOR, default "iPhone 17 Pro")

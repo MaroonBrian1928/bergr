@@ -53,7 +53,7 @@ struct ComposerField: NSViewRepresentable {
         textView.setAccessibilityIdentifier("reply-field")
         textView.registerForDraggedTypes([.fileURL, .tiff, .png])
 
-        let scroll = NSScrollView()
+        let scroll = ComposerScrollView()
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = false
         scroll.borderType = .noBorder
@@ -67,6 +67,9 @@ struct ComposerField: NSViewRepresentable {
         view.delegate = context.coordinator
         view.textColor = textColor
         view.insertionPointColor = textColor
+        // New typing takes its look from the typing attributes, not textColor: without them it
+        // came out in the default color, white on the light bubble.
+        view.typingAttributes = [.foregroundColor: textColor, .font: view.font ?? .preferredFont(forTextStyle: .body)]
         view.placeholder = placeholder
         view.placeholderColor = placeholderColor
         view.isEditable = enabled
@@ -76,6 +79,11 @@ struct ComposerField: NSViewRepresentable {
         if view.string != text, !view.hasMarkedText() {
             view.string = text
             view.textColor = textColor
+        }
+        // The text view spans the whole box, so a click anywhere in it lands in the text.
+        let width = scroll.contentSize.width
+        if width > 0, abs(view.frame.width - width) > 0.5 {
+            view.setFrameSize(NSSize(width: width, height: max(view.frame.height, scroll.contentSize.height)))
         }
         view.needsDisplay = true
         scroll.hasVerticalScroller = view.contentHeight() > view.maxHeight
@@ -170,5 +178,21 @@ final class ComposerTextView: NSTextView {
                 .font: font ?? NSFont.preferredFont(forTextStyle: .body), .foregroundColor: placeholderColor,
             ])
         }
+    }
+}
+
+/// Clicks anywhere in the box (the text view can be shorter than the box) put the cursor in it.
+final class ComposerScrollView: NSScrollView {
+    override func mouseDown(with event: NSEvent) {
+        guard let text = documentView as? NSTextView, text.isEditable else { return super.mouseDown(with: event) }
+        window?.makeFirstResponder(text)
+        let point = text.convert(event.locationInWindow, from: nil)
+        if text.bounds.contains(point) { text.mouseDown(with: event) } else { text.moveToEndOfDocument(nil) }
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+    override func becomeFirstResponder() -> Bool {
+        if let text = documentView as? NSTextView { return window?.makeFirstResponder(text) ?? false }
+        return super.becomeFirstResponder()
     }
 }
