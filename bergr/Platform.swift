@@ -254,18 +254,32 @@ enum PlatformMetrics {
     #if os(macOS)
     static let controlHeight: CGFloat = 28
     static let sendButtonSize: CGFloat = 26
+    static let composerSpacing: CGFloat = 6
     #else
     static let controlHeight: CGFloat = 44
     static let sendButtonSize: CGFloat = 34
+    static let composerSpacing: CGFloat = 2
     #endif
 }
 
 extension View {
     func macPlainButton() -> some View {
         #if os(macOS)
-        buttonStyle(.plain)
+        buttonStyle(MacPlainButtonStyle())
         #else
         self
         #endif
     }
 }
+
+#if os(macOS)
+/// `.plain` without its catch: with `.plain` only the drawn pixels take clicks, so a thin ring or an
+/// icon with holes could barely be clicked. The whole frame takes them here, and a press dims it.
+struct MacPlainButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(.rect)
+            .opacity(configuration.isPressed ? 0.6 : 1)
+    }
+}
+#endif

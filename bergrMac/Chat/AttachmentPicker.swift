@@ -81,9 +81,17 @@ struct AttachButton: View {
             .disabled(!Pasteboard.hasImage)
         } label: {
             Image(systemName: "plus")
+                .font(.body.weight(.medium))
+                .foregroundStyle(palette.secondary)
+                .frame(width: PlatformMetrics.controlHeight, height: PlatformMetrics.controlHeight)
+                .contentShape(.rect)
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        // One glyph, like the send button: the menu's own chevron beside it read as a second control.
+        .menuIndicator(.hidden)
         .fixedSize()
+        .help("Attach Image")
         .disabled(!enabled)
         .accessibilityLabel("Attach image")
     }

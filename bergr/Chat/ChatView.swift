@@ -436,7 +436,12 @@ struct ChatView: View {
         Button { showingUsage = true } label: {
             UsageRing(fraction: feed.usage?.fraction ?? 0, palette: palette)
         }
+        // In the Mac toolbar the system's toolbar style does the hit testing: with a plain style the
+        // thin ring barely took clicks, and a full-frame shape stole the next button's.
+        #if os(iOS)
         .macPlainButton()
+        #endif
+        .help("Context")
         // Claude without numbers opens the sheet too: it offers to set them up.
         .disabled(feed.usage == nil && agent != .claude)
         .accessibilityLabel("Context")
@@ -877,7 +882,7 @@ struct ChatView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 4)
                 .padding(.horizontal, 16)
-            HStack(spacing: 2) {
+            HStack(spacing: PlatformMetrics.composerSpacing) {
                 if session != nil {
                     AttachButton(attachments: $attachments, palette: palette, enabled: canType)
                         .padding(.leading, 2)

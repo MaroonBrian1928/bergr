@@ -59,7 +59,7 @@ struct UsageSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            UsageList {
                 if let usage, usage.used > 0 || usage.limit != nil { Section("Context") {
                     meter(title: "Context window", fraction: usage.fraction ?? 0,
                           detail: usage.limit.map { "\(Self.tokens(usage.used)) of \(Self.tokens($0)) tokens" }
@@ -93,7 +93,7 @@ struct UsageSheet: View {
             }
         }
         #if os(macOS)
-        .frame(width: 540, height: 520)
+        .frame(width: 480, height: 540)
         #else
         .presentationDetents([.medium, .large])
         #endif
@@ -263,5 +263,19 @@ enum UsageSetup {
 
         Change nothing else, and tell me what you changed.
         """
+    }
+}
+
+/// The usage sheet's container: a list on iOS, a grouped form on the Mac (rounded inset sections,
+/// like a settings sheet, instead of full-width dividers).
+private struct UsageList<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        #if os(macOS)
+        Form { content }.formStyle(.grouped)
+        #else
+        List { content }
+        #endif
     }
 }
