@@ -125,11 +125,35 @@ archive upload="false":
     # BERGR_ARCHIVE_WITH_ACCOUNT=1 signs and uploads with the Apple account in Xcode's settings
     # instead (when the API key can't create the release profiles).
     if [ -n "${BERGR_ARCHIVE_WITH_ACCOUNT:-}" ]; then auth=(); fi
+    # Hand signing: when an "Apple Distribution" identity is in the keychain and App Store profiles
+    # named "Bergr AppStore <bundle ID>" are installed (made with the API key; xcodebuild's own
+    # provisioning rejects the key), sign with those instead of letting Xcode fetch profiles.
+    profiles="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+    manual=()
+    if security find-identity -v -p codesigning | grep -q "Apple Distribution" &&
+        grep -lqa "Bergr AppStore {{bundle_prefix}}.bergr<" "$profiles"/*.mobileprovision 2>/dev/null; then
+        # Each profile goes only to its own target: a variable named after the bundle ID, empty
+        # (no profile) for the packages' resource bundles.
+        manual=(CODE_SIGN_STYLE=Manual "CODE_SIGN_IDENTITY=Apple Distribution"
+            'PROVISIONING_PROFILE_SPECIFIER=$(BERGR_PROFILE_$(PRODUCT_BUNDLE_IDENTIFIER:identifier))')
+        for id in {{bundle_prefix}}.bergr {{bundle_prefix}}.bergr.NotificationService {{bundle_prefix}}.bergr.LiveActivity; do
+            manual+=("BERGR_PROFILE_${id//[.-]/_}=Bergr AppStore $id")
+        done
+        echo "Signing by hand with the Bergr AppStore profiles."
+    fi
     {{xcodebuild}} -configuration Release -destination "generic/platform=iOS" \
-        -archivePath .build/Bergr.xcarchive ${auth[@]+"${auth[@]}"} archive | xcbeautify --quiet
+        -archivePath .build/Bergr.xcarchive ${auth[@]+"${auth[@]}"} ${manual[@]+"${manual[@]}"} archive | xcbeautify --quiet
     options=.build/ExportOptions.plist
     cp scripts/ExportOptions.plist "$options"
     if [ -n "{{team}}" ]; then plutil -replace teamID -string "{{team}}" "$options"; fi
+    if [ ${#manual[@]} -gt 0 ]; then
+        plutil -replace signingStyle -string manual "$options"
+        plutil -replace signingCertificate -string "Apple Distribution" "$options"
+        plutil -replace provisioningProfiles -dictionary "$options"
+        for id in {{bundle_prefix}}.bergr {{bundle_prefix}}.bergr.NotificationService {{bundle_prefix}}.bergr.LiveActivity; do
+            plutil -replace "provisioningProfiles.${id//./\\.}" -string "Bergr AppStore $id" "$options"
+        done
+    fi
     if [ "{{upload}}" = "true" ]; then plutil -insert destination -string upload "$options"; fi
     # Xcode's /usr/bin/rsync (openrsync) starts `rsync` from PATH as its peer; a newer rsync
     # from pixi or Homebrew rejects its flags ("Copy failed"), so put the system one first.
