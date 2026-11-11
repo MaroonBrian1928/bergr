@@ -56,7 +56,21 @@ private struct ChatWindowContent: View {
         let terminal = session.terminal(address)
         let agent = terminal.flatMap(ChatAgent.detect)
         Group {
-            if let agent {
+            if let linked = linkedMachine {
+                // Its conversation is on that machine: through this one there's only the terminal.
+                ContentUnavailableView {
+                    Label(agent == nil ? "Terminal on \(linked)" : "\(agent!.displayName) on \(linked)",
+                          systemImage: "point.3.connected.trianglepath.dotted")
+                } description: {
+                    Text("Bergr reaches \(linked) through \(session.host.name), which carries only the terminal. "
+                         + "Open it in your terminal, or add \(linked) as its own machine to get the chat.")
+                } actions: {
+                    Button("Open in Terminal") {
+                        launchError = TerminalLauncher.open(host: session.host, address: address)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            } else if let agent {
                 ChatView(feed: feed, agent: agent, terminal: terminal, model: model, session: session)
                     .task(id: "\(agent.rawValue) \(session.state == .connected)") {
                         guard session.state == .connected, let terminal else { return }
@@ -75,8 +89,9 @@ private struct ChatWindowContent: View {
                     }
             } else {
                 ContentUnavailableView(
-                    terminal == nil ? "Connecting…" : "Not an agent", systemImage: "bubble.left.and.text.bubble.right",
-                    description: Text(terminal == nil ? "Waiting for \(session.host.name)." : "This terminal has no chat."))
+                    terminal == nil ? "Connecting…" : "No chat for this terminal", systemImage: "terminal",
+                    description: Text(terminal == nil ? "Waiting for \(session.host.name)."
+                                      : "It isn't running an agent. Open it in your terminal to use it."))
             }
         }
         .onChange(of: colorScheme, initial: true) { _, scheme in
@@ -105,9 +120,20 @@ private struct ChatWindowContent: View {
         })
         .focusedSceneValue(\.interruptAgent, { model.press(.escape) })
         .inspector(isPresented: $showingInspector) {
-            if let agent = terminal.flatMap(ChatAgent.detect) {
-                ChatInspector(feed: feed, agent: agent, terminal: terminal, machine: session.host.name,
+            if let agent = terminal.flatMap(ChatAgent.detect), linkedMachine == nil {
+                ChatInspector(feed: feed, agent: agent, terminal: terminal, machine: machineName,
                               model: model, canSetMode: terminal?.isLive == true)
+            } else {
+                // No chat to describe: where it runs, still.
+                Form {
+                    Section("Environment") {
+                        LabeledContent("Machine", value: machineName)
+                        if let cwd = terminal?.cwd { LabeledContent("Folder", value: ChatInspector.abbreviate(cwd)) }
+                        if let program = terminal?.foreground?.name { LabeledContent("Running", value: program) }
+                    }
+                }
+                .formStyle(.grouped)
+                .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
             }
         }
         .toolbar {
@@ -126,7 +152,16 @@ private struct ChatWindowContent: View {
             Button("OK") { launchError = nil }
         } message: { Text(launchError ?? "") }
         .navigationTitle(terminal?.nameInSpace ?? address)
-        .navigationSubtitle(session.host.name)
+        .navigationSubtitle(machineName)
+    }
+
+    /// The machine this terminal runs on: a linked machine's name (`popos/t3`), or this connection's.
+    private var linkedMachine: String? {
+        address.firstIndex(of: "/").map { String(address[..<$0]) }
+    }
+
+    private var machineName: String {
+        linkedMachine.map { "\($0) · via \(session.host.name)" } ?? session.host.name
     }
 
     private func setReading(_ active: Bool) {

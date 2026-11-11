@@ -122,7 +122,9 @@ struct ChatView: View {
             // back (a jump on every arrival), and a conversation about one screen tall doesn't flip
             // between estimated and real heights (the list drifting by itself).
             ChatRows(alignment: .leading, spacing: 18) {
+                #if os(iOS)
                 if search == nil { placeholder }
+                #endif
                 if hidden > 0 {
                     Button {
                         let first = shown.first?.id
@@ -334,6 +336,14 @@ struct ChatView: View {
         .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
         #else
         .scrollEdgeEffectStyle(.hard, for: .top)
+        // None below: the Mac draws the edge as a lighter band across the whole window behind the
+        // reply bar, which floats on its own.
+        .scrollEdgeEffectHidden(true, for: .bottom)
+        #endif
+        #if os(macOS)
+        // An empty chat's message in the middle of the window; in the list it sat at the bottom,
+        // where the list's anchoring holds the newest message.
+        .overlay { if search == nil { placeholder } }
         #endif
         // A problem is felt as well as read; a change that went through is felt as done.
         .sensoryFeedback(.error, trigger: sendError) { _, new in new != nil }
