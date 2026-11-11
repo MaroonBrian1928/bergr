@@ -1,19 +1,25 @@
 import HerdrKit
 import SwiftUI
 
-/// Stub (chunk A refines): the main window. Sidebar: every agent on every machine (the shared
-/// `AgentsView`); detail: the selected agent's chat.
+/// The main window. Sidebar: every agent on every machine (the shared `AgentsView`); detail: the
+/// selected agent's chat. Other agents open in windows of their own (⌥⌘N, the menu-bar item).
 struct MacRootView: View {
     @Environment(HostStore.self) private var hosts
+    @Environment(KeyLibrary.self) private var keys
     let sessions: SessionStore
-    @State private var selected: AgentRef?
+    @Bindable var shell: MacShell
 
     var body: some View {
         NavigationSplitView {
-            AgentsView(sessions: sessions) { host, address in selected = AgentRef(host: host, address: address) }
+            AgentsView(sessions: sessions) { host, address in shell.selection = AgentRef(host: host, address: address) }
                 .navigationSplitViewColumnWidth(min: 300, ideal: 360, max: 480)
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("New Session", systemImage: "plus") { shell.showingNewSession = true }
+                    }
+                }
         } detail: {
-            if let selected, let host = hosts.hosts.first(where: { $0.id == selected.host }) {
+            if let selected = shell.selection, let host = hosts.hosts.first(where: { $0.id == selected.host }) {
                 ChatWindow(session: sessions.session(for: host), address: selected.address)
                     .id(selected)
             } else {
@@ -21,7 +27,15 @@ struct MacRootView: View {
                                        description: Text("Pick an agent from the list."))
             }
         }
+        .sheet(isPresented: $shell.showingNewSession) {
+            NewSessionView(sessions: sessions) { host, address in
+                shell.selection = AgentRef(host: host, address: address)
+            }
+            .frame(minWidth: 440, minHeight: 420)
+        }
         .modifier(TrustPrompt(sessions: sessions))
+        .focusedSceneValue(\.agentRef, shell.selection)
+        .focusedSceneValue(\.showAgent, { shell.selection = $0 })
         .frame(minWidth: 760, minHeight: 480)
     }
 }

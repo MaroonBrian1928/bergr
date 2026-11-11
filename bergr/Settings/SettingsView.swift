@@ -119,6 +119,7 @@ struct SettingsView: View {
                 Text("Finished and idle agents untouched for longer don't count on the Lock Screen and widget, and fold away under Older in the list. Agents that need you or are working always show.")
             }
 
+            #if os(iOS)
             // When Bergr isn't open: where updates come from, then what you get (either source).
             Section {
                 Picker(selection: stayRunning) {
@@ -140,6 +141,7 @@ struct SettingsView: View {
                      ? "Bergr keeps running in the background and watches your computers itself. Agents' questions appear on the Lock Screen with buttons to answer them. Uses more battery, and needs \"Always\" location access to keep running. Bergr never stores or sends your location."
                      : "A small helper on each computer tells your phone what its agents are doing. Easy on the battery. You can see what agents are doing, but you can't answer them from the Lock Screen.")
             }
+            #endif
 
             Section {
                 Toggle(isOn: deliverySwitch($notifications)) {
@@ -150,6 +152,7 @@ struct SettingsView: View {
                     }
                 }
                 .frame(minHeight: 44)
+                #if os(iOS)
                 Toggle(isOn: deliverySwitch($liveActivityPush)) {
                     Label {
                         Text("Live Activity")
@@ -181,12 +184,17 @@ struct SettingsView: View {
                     .font(.subheadline)
                     .frame(minHeight: 44)
                 }
+                #endif
             } footer: {
                 VStack(alignment: .leading, spacing: 6) {
+                    #if os(iOS)
                     Text("Notifications: when an agent needs you or finishes. Live Activity: how many agents need you, are working or are done.")
                     if liveActivityPush, !keepAlive.enabled, liveActivityContent == "full" {
                         Text("Names and status can be read by Apple and Bergr's push service on the way.")
                     }
+                    #else
+                    Text("Notifications: when an agent needs you or finishes.")
+                    #endif
                 }
             }
 
