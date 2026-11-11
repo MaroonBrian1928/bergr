@@ -19,6 +19,13 @@ enum ModelSwitcher {
     /// nil when it went through; otherwise what went wrong.
     static func apply(agent: ChatAgent, model: TerminalScreenModel, option: ChatFeed.ModelOption,
                       effort: String?) async -> String? {
+        var result: String?
+        await model.automate { result = await applyKeys(agent: agent, model: model, option: option, effort: effort) }
+        return result
+    }
+
+    private static func applyKeys(agent: ChatAgent, model: TerminalScreenModel, option: ChatFeed.ModelOption,
+                                  effort: String?) async -> String? {
         if model.watching { model.setWatching(false) }
         switch agent {
         case .claude:
@@ -184,6 +191,12 @@ enum PermissionModes {
 
     /// nil when it went through; otherwise what went wrong.
     static func set(_ mode: String, agent: ChatAgent, model: TerminalScreenModel, saved: String? = nil) async -> String? {
+        var result: String?
+        await model.automate { result = await setKeys(mode, agent: agent, model: model, saved: saved) }
+        return result
+    }
+
+    private static func setKeys(_ mode: String, agent: ChatAgent, model: TerminalScreenModel, saved: String?) async -> String? {
         if model.watching { model.setWatching(false) }
         let all = modes(agent)
         guard let target = all.firstIndex(of: mode) else { return nil }

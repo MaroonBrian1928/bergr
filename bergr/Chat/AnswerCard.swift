@@ -233,12 +233,14 @@ struct AnswerCard: View {
                 Task { @MainActor in
                     // Close whatever menu is open (Rewind, say) so the keys reach the prompt, then
                     // clear the line and run /login. One Esc only: two would open Rewind.
-                    model.press(.escape)
-                    try? await Task.sleep(for: .milliseconds(400))
-                    model.press(.letter("u"), modifiers: .control)
-                    model.type("/login")
-                    try? await Task.sleep(for: .milliseconds(150))
-                    model.press(.enter)
+                    await model.automate {
+                        model.press(.escape)
+                        try? await Task.sleep(for: .milliseconds(400))
+                        model.press(.letter("u"), modifiers: .control)
+                        model.type("/login")
+                        try? await Task.sleep(for: .milliseconds(150))
+                        model.press(.enter)
+                    }
                 }
             } label: {
                 Text("Run /login")
@@ -379,8 +381,12 @@ struct AnswerCard: View {
         let question = ([AnswerParser.question(in: lines)].compactMap { $0 } + context.suffix(1)).joined(separator: " — ")
         onAnswer?(question.isEmpty ? (status?.title ?? "Question") : question, choice.label)
         let steps = AnswerParser.steps(to: choice, in: AnswerParser.choices(in: lines))
-        for _ in 0..<abs(steps) { model.press(steps > 0 ? .down : .up) }
-        model.press(.enter)
+        Task { @MainActor in
+            await model.automate {
+                for _ in 0..<abs(steps) { model.press(steps > 0 ? .down : .up) }
+                model.press(.enter)
+            }
+        }
     }
 }
 
@@ -430,9 +436,11 @@ struct LoginStepCard: View {
                     code = ""
                     Task { @MainActor in
                         // Let the paste land before Enter, or the prompt can take Enter first.
-                        model.paste(text)
-                        try? await Task.sleep(for: .milliseconds(300))
-                        model.press(.enter)
+                        await model.automate {
+                            model.paste(text)
+                            try? await Task.sleep(for: .milliseconds(300))
+                            model.press(.enter)
+                        }
                     }
                 } label: {
                     Text("Sign In")

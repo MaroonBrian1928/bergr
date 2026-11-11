@@ -231,6 +231,19 @@ final class TerminalScreenModel {
 
     // MARK: Input
 
+    private var automationTail: Task<Void, Never>?
+
+    /// Runs one automated key sequence after the ones started before it have finished.
+    func automate(_ steps: @escaping @MainActor () async -> Void) async {
+        let previous = automationTail
+        let task = Task { @MainActor in
+            await previous?.value
+            await steps()
+        }
+        automationTail = task
+        await task.value
+    }
+
     func type(_ text: String) {
         if text == "\n" || text == "\r" {
             press(.enter)

@@ -567,14 +567,17 @@ struct ChatView: View {
         guard let at = options.firstIndex(of: choice), at < 9, canType else { return }
         if model.watching { model.setWatching(false) }
         questionPicks[id] = choice
-        model.type(String(at + 1))
-        guard info.index == info.count - 1 else { return }
+        let last = info.index == info.count - 1
         Task { @MainActor in
-            await waitForScreen(upTo: .seconds(3)) { lines in
-                lines.contains { $0.contains("Ready to submit your answers?") }
-            }
-            if model.frame.textLines.contains(where: { $0.contains("Ready to submit your answers?") }) {
-                model.press(.enter)
+            await model.automate {
+                model.type(String(at + 1))
+                guard last else { return }
+                await waitForScreen(upTo: .seconds(3)) { lines in
+                    lines.contains { $0.contains("Ready to submit your answers?") }
+                }
+                if model.frame.textLines.contains(where: { $0.contains("Ready to submit your answers?") }) {
+                    model.press(.enter)
+                }
             }
         }
     }
@@ -933,19 +936,23 @@ struct ChatView: View {
             ?? ["claude"]
         let command = RestartCommand.make(argv: argv, conversation: id)
         withAnimation(motion) { feed.restartedIntoNewest() }
-        typeLine("/exit")
         // Unstructured: it outlives this chat, which goes away while Claude isn't running.
         Task { @MainActor in
-            let deadline = Date.now.addingTimeInterval(15)
-            while Date.now < deadline {
-                try? await Task.sleep(for: .milliseconds(300))
-                let fg = session.terminal(address)?.foreground
-                if let fg, ChatAgent.detect(name: fg.name, argv: fg.argv) != .claude { break }
+            await model.automate {
+                model.type("/exit")
+                try? await Task.sleep(for: .milliseconds(150))
+                model.press(.enter)
+                let deadline = Date.now.addingTimeInterval(15)
+                while Date.now < deadline {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    let fg = session.terminal(address)?.foreground
+                    if let fg, ChatAgent.detect(name: fg.name, argv: fg.argv) != .claude { break }
+                }
+                try? await Task.sleep(for: .milliseconds(400))
+                model.type(command)
+                try? await Task.sleep(for: .milliseconds(150))
+                model.press(.enter)
             }
-            try? await Task.sleep(for: .milliseconds(400))
-            model.type(command)
-            try? await Task.sleep(for: .milliseconds(150))
-            model.press(.enter)
         }
     }
 
@@ -953,10 +960,12 @@ struct ChatView: View {
     private func typeLine(_ text: String) {
         guard canType else { return }
         if model.watching { model.setWatching(false) }
-        model.type(text)
         Task {
-            try? await Task.sleep(for: .milliseconds(150))
-            model.press(.enter)
+            await model.automate {
+                model.type(text)
+                try? await Task.sleep(for: .milliseconds(150))
+                model.press(.enter)
+            }
         }
     }
 
@@ -969,17 +978,19 @@ struct ChatView: View {
         pushes += 1
         let waiting = pending.filter(\.queued).map(\.text)
         Task {
-            model.press(.escape)
-            // Return only once the queued text is back in the prompt: Claude Code takes a moment
-            // to stop, and a Return before then lands on an empty prompt (a second tap was needed).
-            await waitForScreen(upTo: .seconds(3)) { lines in
-                let bottom = lines.suffix(12).joined(separator: " ")
-                return waiting.contains { bottom.contains(String($0.prefix(24))) }
+            await model.automate {
+                model.press(.escape)
+                // Return only once the queued text is back in the prompt: Claude Code takes a moment
+                // to stop, and a Return before then lands on an empty prompt (a second tap was needed).
+                await waitForScreen(upTo: .seconds(3)) { lines in
+                    let bottom = lines.suffix(12).joined(separator: " ")
+                    return waiting.contains { bottom.contains(String($0.prefix(24))) }
+                }
+                // An agent that sends its queue by itself once stopped: nothing to press.
+                if waiting.allSatisfy({ text in !model.frame.textLines.suffix(12).joined(separator: " ")
+                    .contains(String(text.prefix(24))) }) { return }
+                model.press(.enter)
             }
-            // An agent that sends its queue by itself once stopped: nothing to press.
-            if waiting.allSatisfy({ text in !model.frame.textLines.suffix(12).joined(separator: " ")
-                .contains(String(text.prefix(24))) }) { return }
-            model.press(.enter)
         }
     }
 
@@ -1081,13 +1092,14 @@ struct ChatView: View {
                     return
                 }
             }
+            let message = (paths + (text.isEmpty ? [] : [text])).joined(separator: " ")
+            await model.automate {
             if interrupting {
                 model.press(.escape)
                 // Type only once the agent has stopped (its screen says so), or it's queued again.
                 await waitUntilStopped(upTo: .seconds(3))
             }
             // Image paths go first, pasted as the terminal would get them; the agents attach them.
-            let message = (paths + (text.isEmpty ? [] : [text])).joined(separator: " ")
             if paths.isEmpty, !message.contains("\n"), message.hasPrefix("!"), message.count > 1 {
                 // A shell command: `!` on its own switches the agent's input to shell mode first
                 // (as typing it does), then the command.
@@ -1098,6 +1110,7 @@ struct ChatView: View {
             // Return on its own, a moment later, so the agent sees it as "send" and not as part of the text.
             try? await Task.sleep(for: .milliseconds(150))
             model.press(.enter)
+            }
             await confirmEnter(for: reply.id, text: message)
         }
     }
@@ -1149,11 +1162,13 @@ struct ChatView: View {
             }
             // The words may already be in the prompt, typed before the line died with Enter lost:
             // typing them again would send them twice in one message. Submit what's there.
-            if !Pending.onScreen(reply.text, lines: model.textLines) {
-                model.type(reply.text)
-                try? await Task.sleep(for: .milliseconds(150))
+            await model.automate {
+                if !Pending.onScreen(reply.text, lines: model.textLines) {
+                    model.type(reply.text)
+                    try? await Task.sleep(for: .milliseconds(150))
+                }
+                model.press(.enter)
             }
-            model.press(.enter)
             watchDelivery(of: reply.id)
         }
     }
