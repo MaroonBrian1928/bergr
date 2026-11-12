@@ -696,7 +696,8 @@ def user_text(text):
     if "<pasted_content" in text:
         text = PASTED.sub("", text).strip("\n")
     s = text.strip()
-    if s.startswith("<command-name>"):
+    # A slash command; a skill's is stored as <command-message>…</command-message> first.
+    if (s.startswith("<command-name>") or s.startswith("<command-message>")) and "<command-name>" in s:
         name = s.split("<command-name>", 1)[1].split("</command-name>", 1)[0]
         args = ""
         if "<command-args>" in s:

@@ -286,6 +286,15 @@ class PastedMessages(Base):
             "content": 'Look at this:\n\n<pasted_content id="1">\nerror X\n</pasted_content id="1">\n'}}))
         self.assertEqual(evs[0]["text"], "Look at this:\n\nerror X")
 
+    def test_skill_command_is_the_users_message(self):
+        # A skill's slash command starts with <command-message>; dropping it left the reply
+        # "queued" in the chat forever, below the answers to it.
+        ns = load("claude", self.home)
+        evs = list(ns["Claude"]().parse({"type": "user", "uuid": "s1", "message": {"content":
+            "<command-message>tools:review</command-message>\n<command-name>/tools:review</command-name>\n"
+            "<command-args>do all of these</command-args>"}}))
+        self.assertEqual(evs[0]["text"], "/tools:review do all of these")
+
 
 class ShellCommands(Base):
     def test_bang_command_and_output(self):
