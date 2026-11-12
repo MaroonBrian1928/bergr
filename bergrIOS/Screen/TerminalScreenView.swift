@@ -147,8 +147,17 @@ struct TerminalScreenView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if !chat, let chrome = paneChrome(terminal, extra: AnyView(EmptyView())) {
-                PaneHeader(chrome: chrome, backdrop: Color(uiColor: UIColor(theme.backgroundRGB))) { terminalButtons(agent: agent, chat: chat) }
+            VStack(spacing: 0) {
+                if !chat, let chrome = paneChrome(terminal, extra: AnyView(EmptyView())) {
+                    PaneHeader(chrome: chrome, backdrop: Color(uiColor: UIColor(theme.backgroundRGB))) { terminalButtons(agent: agent, chat: chat) }
+                }
+                // A dead line says so here too: the terminal would otherwise look live and take keys.
+                if !chat, session.state != .connected, !session.host.isDemo {
+                    ConnectionBar(session: session, text: theme.color(theme.foreground),
+                                  secondary: theme.color(theme.foreground).opacity(0.6),
+                                  background: theme.color(theme.background)) { session.retry(keys: keys) }
+                        .transition(.opacity)
+                }
             }
         }
         .navigationTitle(pane == nil ? terminal?.nameInSpace ?? address : "")

@@ -365,7 +365,8 @@ struct ChatView: View {
             VStack(spacing: 0) {
                 if let pane { PaneHeader(chrome: pane, backdrop: palette.background) { chatButtons } }
                 if let session, session.state != .connected, !session.host.isDemo {
-                    ChatConnectionBar(session: session, palette: palette) { session.retry(keys: keys) }
+                    ConnectionBar(session: session, text: palette.text, secondary: palette.secondary,
+                                  background: palette.bubble) { session.retry(keys: keys) }
                         .transition(.opacity)
                 }
                 if searching { searchBar.transition(.opacity) }
@@ -2428,50 +2429,3 @@ private struct ArriveIn: ViewModifier {
 /// bounced on opening a chat: rows realized near the bottom changed the estimated height, the
 /// bottom anchor moved, more rows realized… The Mac shows fewer rows at a time instead (`rowPage`).
 typealias ChatRows<Content: View> = VStack<Content>
-
-/// Above the chat while its machine's line is down: what the app is doing about it and how old
-/// what's on screen is, so a frozen chat says so instead of looking current.
-struct ChatConnectionBar: View {
-    let session: HostSession
-    let palette: ChatPalette
-    let retry: () -> Void
-
-    var body: some View {
-        HStack(spacing: 8) {
-            if case .failed(_, retrying: false) = session.state {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            } else {
-                ProgressView().controlSize(.small)
-            }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(Self.title(session.state, machine: session.host.name))
-                    .font(.footnote.weight(.semibold)).foregroundStyle(palette.text)
-                if let heard = session.lastHeardAt {
-                    // Ticks by itself: "last update 2 min ago" stays true while the line is down.
-                    TimelineView(.periodic(from: .now, by: 15)) { _ in
-                        Text("Last update \(heard, format: .relative(presentation: .named))")
-                            .font(.caption).foregroundStyle(palette.secondary)
-                    }
-                }
-            }
-            Spacer(minLength: 8)
-            if case .failed(_, retrying: false) = session.state {
-                Button("Retry", action: retry).font(.footnote.weight(.semibold))
-            }
-        }
-        .padding(.horizontal, 14).padding(.vertical, 8)
-        .frame(maxWidth: .infinity)
-        .background(palette.bubble)
-        .accessibilityElement(children: .combine)
-    }
-
-    static func title(_ state: HostSession.State, machine: String) -> String {
-        switch state {
-        case .connected: "Connected"
-        case .idle: "Not connected to \(machine)"
-        case .connecting: "Reconnecting to \(machine)…"
-        case .failed(let why, retrying: true): "Reconnecting to \(machine)… (\(why))"
-        case .failed(let why, retrying: false): why
-        }
-    }
-}
