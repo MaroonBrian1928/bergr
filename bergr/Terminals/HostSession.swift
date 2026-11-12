@@ -321,7 +321,10 @@ final class HostSession {
         let attempt = self.attempt
         Task { @MainActor in
             defer { probing = false }
-            let alive = await Deadline.answers(within: .seconds(3)) { _ = try await client.listTerminals() }
+            let known = await client.roundTrip
+            let limit = known.map { max(Duration.seconds(3), $0.timeout * 2) } ?? .seconds(3)
+            let alive = await Deadline.answers(within: limit) { _ = try await client.listTerminals() }
+            roundTrip = await client.roundTrip
             // Still the same line, and it didn't answer: replace it.
             guard !alive, self.attempt === attempt, state == .connected else { return }
             retry(keys: keys)
@@ -329,6 +332,9 @@ final class HostSession {
     }
 
     @ObservationIgnored private var probing = false
+
+    /// The line's smoothed round trip as of the last probe; nil until a call has been answered.
+    private(set) var roundTrip: RoundTrip?
 
     func resumeAfterBackground(keys: KeyLibrary) {
         if intent == .paused {

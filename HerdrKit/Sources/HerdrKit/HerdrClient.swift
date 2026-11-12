@@ -174,6 +174,13 @@ public actor HerdrClient {
         return ExecOutput(code: r.code, stdout: text(r.stdout), stderr: text(r.stderr))
     }
 
+    /// The line's smoothed round trip, from answered calls (not `hello` or `machine.exec`).
+    public private(set) var roundTrip: RoundTrip?
+
+    private func record(_ sample: Duration) {
+        if roundTrip == nil { roundTrip = RoundTrip(first: sample) } else { roundTrip?.add(sample) }
+    }
+
     /// Calls any method by name.
     public func call<Params: Encodable & Sendable, Result: Decodable & Sendable>(
         _ method: String, _ params: Params
@@ -185,6 +192,7 @@ public actor HerdrClient {
         // Hello is the one plain line; everything after it is a frame on channel 0.
         let wire = framed ? Frame(channel: 0, kind: .data, payload: message).encoded() : message + Data([0x0A])
 
+        let sentAt = ContinuousClock.now
         let response: Data = try await withCheckedThrowingContinuation { continuation in
             if let closedError {
                 continuation.resume(throwing: closedError)
@@ -193,15 +201,21 @@ public actor HerdrClient {
             pending[id] = continuation
             Task { await self.send(wire, id: id) }
         }
+        let elapsed = ContinuousClock.now - sentAt
         let envelope = try JSONDecoder().decode(Envelope.self, from: response)
         if let error = envelope.error {
             throw HerdrError.rpc(code: error.code, message: error.message, kind: error.data?.kind, hint: error.data?.hint)
         }
+        let result: Result
         do {
-            return try JSONDecoder().decode(ResultEnvelope<Result>.self, from: response).result
+            result = try JSONDecoder().decode(ResultEnvelope<Result>.self, from: response).result
         } catch {
             throw HerdrError.invalidResponse("\(method): \(error)")
         }
+        // Not hello, and not a call whose answer waits for work on the machine (a command run):
+        // only the line's own delay belongs in the estimate.
+        if method != "hello", method != "machine.exec", elapsed < .seconds(10) { record(elapsed) }
+        return result
     }
 
     // MARK: Channels
