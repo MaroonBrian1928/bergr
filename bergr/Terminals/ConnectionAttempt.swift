@@ -97,9 +97,10 @@ struct ConnectionTiming {
 protocol ConnectionAttemptOwner: AnyObject {
     func isCurrent(_ attempt: ConnectionAttempt) -> Bool
     func attempt(_ a: ConnectionAttempt, progress: String)
-    func attempt(
-        _ a: ConnectionAttempt, connected c: HostConnection, snapshot: TerminalSnapshot,
-        machines: [MachineView], layout: HerdrAppLayout?)
+    func attempt(_ a: ConnectionAttempt, connected c: HostConnection, snapshot: TerminalSnapshot)
+    /// The machines and herdr-app layout, read after `connected` (they can arrive in either order).
+    func attempt(_ a: ConnectionAttempt, machines: [MachineView])
+    func attempt(_ a: ConnectionAttempt, layout: HerdrAppLayout?)
     func attempt(_ a: ConnectionAttempt, received message: EventMessage) async
     func attempt(_ a: ConnectionAttempt, failed error: Error, retrying: Bool)
     /// The loop ended without being cancelled (a non-retryable failure).
@@ -123,6 +124,8 @@ final class ConnectionAttempt {
     private let isRetryable: (Error) -> Bool
     private let timing: ConnectionTiming
     private var runner: Task<Void, Never>?
+    /// The sleep between reconnect rounds; `retryNow()` ends it early.
+    private var backoff: Task<Void, Never>?
     private var lastHeard = ContinuousClock.now
     private var hasConnected = false
 
@@ -155,6 +158,12 @@ final class ConnectionAttempt {
         return Task { await taken?.close() }
     }
 
+    /// The network is back: if this attempt is waiting out a backoff, retry now.
+    func retryNow() {
+        guard phase == .backingOff else { return }
+        backoff?.cancel()
+    }
+
     private func run() async {
         var delay = timing.firstDelay
         while !isCancelled {
@@ -180,7 +189,10 @@ final class ConnectionAttempt {
                 }
                 phase = .backingOff
             }
-            try? await Task.sleep(for: delay)
+            let nap = Task<Void, Never> { try? await Task.sleep(for: delay) }
+            backoff = nap
+            await withTaskCancellationHandler { await nap.value } onCancel: { nap.cancel() }
+            backoff = nil
             delay = min(delay * 2, timing.maxDelay)
         }
         if !isCancelled { owner?.attemptFinished(self) }
@@ -212,14 +224,22 @@ final class ConnectionAttempt {
         // Subscribe first, then read anything else, as the protocol asks.
         let subscription = try await client.subscribeEvents()
         try checkCurrent()
-        let machines = (try? await client.listTerminals().machines) ?? []
-        let layout = try? await client.herdrAppLayout()
-        try checkCurrent()
         lastHeard = .now
         hasConnected = true
         phase = .live
-        owner?.attempt(
-            self, connected: connection, snapshot: subscription.snapshot, machines: machines, layout: layout)
+        owner?.attempt(self, connected: connection, snapshot: subscription.snapshot)
+        // Usable now; the documents follow, each when it arrives.
+        let machinesTask = Task { [weak self] in
+            let machines = (try? await client.listTerminals().machines) ?? []
+            guard let self, !self.isCancelled, !Task.isCancelled else { return }
+            self.owner?.attempt(self, machines: machines)
+        }
+        let layoutTask = Task { [weak self] in
+            let layout = try? await client.herdrAppLayout()
+            guard let self, !self.isCancelled, !Task.isCancelled else { return }
+            self.owner?.attempt(self, layout: layout)
+        }
+        defer { machinesTask.cancel(); layoutTask.cancel() }
 
         let (check, limit) = (timing.silenceCheck, timing.silenceLimit)
         try await withThrowingTaskGroup(of: Void.self) { group in

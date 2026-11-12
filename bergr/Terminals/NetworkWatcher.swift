@@ -10,6 +10,10 @@ final class NetworkWatcher {
 
     private let monitor = NWPathMonitor()
     private var last: String?
+    private var pathExpensive = false
+    /// Cellular, a hotspot, Low Data Mode or Low Power Mode: terminals should spend less data.
+    var isExpensive: Bool { pathExpensive || ProcessInfo.processInfo.isLowPowerModeEnabled }
+
     private var onChange: (() -> Void)?
 
     /// What identifies a path for our purpose: usable or not, over which interfaces.
@@ -25,7 +29,11 @@ final class NetworkWatcher {
                 satisfied: path.status == .satisfied,
                 interfaces: path.availableInterfaces.map { "\($0.type)-\($0.name)" })
             let usable = path.status == .satisfied
-            Task { @MainActor in NetworkWatcher.shared.pathChanged(signature, usable: usable) }
+            let expensive = path.isExpensive || path.isConstrained
+            Task { @MainActor in
+                NetworkWatcher.shared.pathExpensive = expensive
+                NetworkWatcher.shared.pathChanged(signature, usable: usable)
+            }
         }
         monitor.start(queue: DispatchQueue(label: "bergr.network"))
     }

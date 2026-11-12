@@ -140,16 +140,21 @@ final class TerminalScreenModel {
     }
 
     /// Lines of earlier output to ask for when attaching, so there is something to scroll back to.
-    static let historyLines = 1000
+    /// How much history to ask for: a little for a terminal hidden under a chat (switching to it
+    /// shouldn't mean attaching again, which blanks it), and on an expensive connection.
+    nonisolated static func historyLines(shown: Bool, expensive: Bool) -> Int {
+        shown && !expensive ? 1000 : 200
+    }
 
     private func run() async {
         guard let session, let address, let size = preferredSize else { return }
         let observe = watching
+        let history = Self.historyLines(shown: drawing, expensive: NetworkWatcher.shared.isExpensive)
         do {
             // Attaching as a viewer makes us the active one: the core resizes the terminal to our
             // size. An observer leaves it at the size the active viewer (or nobody) set.
             let attached = try await session.attach(
-                address: address, cols: size.cols, rows: size.rows, history: Self.historyLines, observe: observe,
+                address: address, cols: size.cols, rows: size.rows, history: history, observe: observe,
                 display: theme.displayFacts)
             guard !Task.isCancelled else { return await attached.detach() }
             self.attached = attached

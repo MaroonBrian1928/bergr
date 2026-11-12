@@ -317,6 +317,8 @@ final class HostSession {
     /// it's gone, so reconnect at once instead of waiting out the 40 s silence limit. herdr-core's
     /// heartbeat comes every 15 s, so silence alone can't be judged any faster than that.
     func probe(keys: KeyLibrary) {
+        // Waiting out a backoff and the network is back: don't sleep up to 30 s more.
+        if case .failed(_, retrying: true) = state { attempt?.retryNow(); return }
         guard state == .connected, !probing, let client = try? connectedClient() else { return }
         probing = true
         lastProbe = .now
@@ -340,9 +342,12 @@ final class HostSession {
     /// While a chat or terminal is on screen and the app active: check the line every 3 s, like
     /// Mosh. A line that dies without a network change (tunnel, host asleep, VPN) otherwise looks
     /// live until herdr-core's 40 s silence limit, and takes keys meanwhile.
+    /// Twice as slow on cellular, Low Power Mode or Low Data Mode: every check wakes the radio.
+    nonisolated static func checkInterval(expensive: Bool) -> Duration { .seconds(expensive ? 6 : 3) }
+
     func keepChecking() async {
         while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(3))
+            try? await Task.sleep(for: Self.checkInterval(expensive: NetworkWatcher.shared.isExpensive))
             guard !Task.isCancelled else { return }
             checkLine()
         }
@@ -513,14 +518,19 @@ extension HostSession: ConnectionAttemptOwner {
         state = .connecting(progress)
     }
 
-    func attempt(
-        _ a: ConnectionAttempt, connected c: HostConnection, snapshot: TerminalSnapshot,
-        machines: [MachineView], layout: HerdrAppLayout?
-    ) {
+    func attempt(_ a: ConnectionAttempt, machines: [MachineView]) {
+        guard isCurrent(a) else { return }
+        self.machines = machines
+    }
+
+    func attempt(_ a: ConnectionAttempt, layout: HerdrAppLayout?) {
+        guard isCurrent(a) else { return }
+        self.layout = layout
+    }
+
+    func attempt(_ a: ConnectionAttempt, connected c: HostConnection, snapshot: TerminalSnapshot) {
         guard isCurrent(a) else { return }
         self.snapshot = snapshot
-        self.machines = machines
-        self.layout = layout
         coreName = c.coreName
         coreVersion = c.coreVersion
         connectionRevision &+= 1

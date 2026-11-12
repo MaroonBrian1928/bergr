@@ -15,17 +15,17 @@ struct AgentsListPerfTests {
 
     @Test func explicitSecondsGiveTheSameAnswersAsTheSetting() throws {
         let now = Date(timeIntervalSince1970: 2_000_000_000)
-        let saved = UserDefaults.standard.object(forKey: QuietAgents.key)
-        defer { UserDefaults.standard.set(saved, forKey: QuietAgents.key) }
-        let cases: [(state: String, minutesAgo: Double)] = [
-            ("done", 30), ("done", 25 * 60), ("idle", 9 * 1440), ("blocked", 9 * 1440), ("working", 9 * 1440),
-        ]
-        for seconds in [0, 3600, 86400] {
-            UserDefaults.standard.set(seconds, forKey: QuietAgents.key)
-            #expect(QuietAgents.seconds == seconds)
-            for (state, minutes) in cases {
-                let t = try terminal("t1", state: state, minutesAgo: minutes, now: now)
-                #expect(QuietAgents.isQuiet(t, now: now) == QuietAgents.isQuiet(t, now: now, after: seconds))
+        try QuietAgentsSetting.with {
+            let cases: [(state: String, minutesAgo: Double)] = [
+                ("done", 30), ("done", 25 * 60), ("idle", 9 * 1440), ("blocked", 9 * 1440), ("working", 9 * 1440),
+            ]
+            for seconds in [0, 3600, 86400] {
+                UserDefaults.standard.set(seconds, forKey: QuietAgents.key)
+                #expect(QuietAgents.seconds == seconds)
+                for (state, minutes) in cases {
+                    let t = try terminal("t1", state: state, minutesAgo: minutes, now: now)
+                    #expect(QuietAgents.isQuiet(t, now: now) == QuietAgents.isQuiet(t, now: now, after: seconds))
+                }
             }
         }
     }

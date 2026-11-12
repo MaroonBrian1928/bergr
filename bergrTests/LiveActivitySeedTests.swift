@@ -98,12 +98,11 @@ struct LiveActivitySeedTests {
     }
 
     @Test func hiddenFinishedAgentsAreLeftOut() throws {
-        let key = QuietAgents.key
-        let previous = UserDefaults.standard.object(forKey: key)
-        UserDefaults.standard.set(3600, forKey: key)
-        defer {
-            if let previous { UserDefaults.standard.set(previous, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
-        }
+        try QuietAgentsSetting.with { try hiddenFinishedAgentsAreLeftOutBody() }
+    }
+
+    private func hiddenFinishedAgentsAreLeftOutBody() throws {
+        UserDefaults.standard.set(3600, forKey: QuietAgents.key)
         let twoHoursAgo = UInt64((Date.now.timeIntervalSince1970 - 2 * 3600) * 1000)
         let now = UInt64(Date.now.timeIntervalSince1970 * 1000)
         let machines = [

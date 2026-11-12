@@ -183,6 +183,9 @@ import UIKit
         // A newer queued reply and a second tap while the first push still runs.
         let second = rig.send("beta reply")
         rig.outbox.pushNow()
+        // Wait for the push itself (a fixed pause was too short on a busy machine), then make
+        // sure no second escape follows.
+        await rig.until("escaped") { rig.terminal.count("escape") >= 1 }
         await rig.pause(40)
         #expect(rig.terminal.count("escape") == 1)
         #expect(first.phase == .pushed)
