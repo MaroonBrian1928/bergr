@@ -101,7 +101,7 @@ Push alerts are optional (Settings → Push alerts). When they're on, Bergr offe
 helper, `bergr-notify`, on each machine: a Python script that runs as a user service (systemd on
 Linux, a LaunchAgent on macOS, a Scheduled Task on Windows), follows `hc events`, and sends an alert when an agent finishes a
 turn, hits an error or needs you; titles name the machine, and alerts that need you are
-time-sensitive while finished ones are passive. The alert text is encrypted on the machine (Python
+ordinary notifications while finished ones are passive. The alert text is encrypted on the machine (Python
 standard library only, HMAC-SHA256 keystream plus tag) with a key only your phone holds, kept in its
 keychain;
 the relay in [`relay/`](relay) (a Cloudflare Worker) and Apple only pass an opaque blob along.

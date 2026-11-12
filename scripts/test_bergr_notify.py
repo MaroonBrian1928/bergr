@@ -396,7 +396,7 @@ class RelayTests(unittest.TestCase):
             notify.encrypt_alert(self.KEY, "T", "B")
 
     def test_relay_request_carries_state(self):
-        for state, level in (("blocked", "time-sensitive"), ("error", "time-sensitive"), ("done", "passive")):
+        for state, level in (("blocked", "active"), ("error", "active"), ("done", "passive")):
             _, _, data = notify.relay_request(self.DEVICE, "T", "B", "t1", "pop", state)
             self.assertEqual(json.loads(data)["state"], state)
             self.assertEqual(notify.URGENCY[state], level)
@@ -404,7 +404,7 @@ class RelayTests(unittest.TestCase):
         self.assertNotIn("state", json.loads(data))
 
     def test_apns_payload_interruption_level(self):
-        self.assertEqual(notify.apns_payload("T", "B", "t1", "m", "error")["aps"]["interruption-level"], "time-sensitive")
+        self.assertEqual(notify.apns_payload("T", "B", "t1", "m", "error")["aps"]["interruption-level"], "active")
         self.assertEqual(notify.apns_payload("T", "B", "t1", "m", "done")["aps"]["interruption-level"], "passive")
 
     def test_relay_request_encrypted(self):

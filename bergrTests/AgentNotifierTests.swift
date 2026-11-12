@@ -57,7 +57,7 @@ struct AgentNotifierTests {
         let alerts = AgentNotifier.alerts(host: host, old: old, new: new, machine: "pop")
         #expect(alerts.map(\.title) == ["api hit an error on pop"])
         #expect(alerts[0].kind == .error)
-        #expect(alerts[0].kind.interruptionLevel == .timeSensitive)
+        #expect(alerts[0].kind.interruptionLevel == .active)
         #expect(AgentNotifier.Kind.finished.interruptionLevel == .passive)
         #expect(AgentNotifier.alerts(host: host, old: old, new: new, delivered: Set(alerts.map(\.key))).isEmpty)
     }

@@ -10,6 +10,9 @@ final class NotificationService: UNNotificationServiceExtension {
                              withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
         handler = contentHandler
         let content = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
+        // Older installed helpers or relay versions may still mark alerts time-sensitive.
+        // Keep those as ordinary notifications without requiring the optional entitlement.
+        if content.interruptionLevel == .timeSensitive { content.interruptionLevel = .active }
         best = content
         if let e = request.content.userInfo["e"] as? String,
            let blob = Data(base64Encoded: e),

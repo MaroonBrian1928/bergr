@@ -162,7 +162,7 @@ final class MachineHealthMonitor {
         let content = UNMutableNotificationContent()
         content.title = "\(name) went offline"
         content.sound = .default
-        content.interruptionLevel = .timeSensitive
+        content.interruptionLevel = .active
         content.threadIdentifier = id.uuidString
         let request = UNNotificationRequest(identifier: "offline|\(id.uuidString)|\(UUID().uuidString)", content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)

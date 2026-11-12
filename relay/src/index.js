@@ -359,7 +359,7 @@ const LIMITS = { title: 100, body: 400, address: 64, host: 100 };
 const E_MAX = 3000;
 // How urgent an alert is, from the state the helper sends in the clear (the text is encrypted).
 // Old helpers send none: no level, the system default.
-const INTERRUPTION = { blocked: "time-sensitive", error: "time-sensitive", done: "passive" };
+const INTERRUPTION = { blocked: "active", error: "active", done: "passive" };
 const E_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 async function apnsReason(res) {

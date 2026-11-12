@@ -10,8 +10,8 @@ final class AgentNotifier {
     enum Kind: String {
         case needsYou, finished, error
 
-        /// Time-sensitive when the user has to act, passive for a finished agent.
-        var interruptionLevel: UNNotificationInterruptionLevel { self == .finished ? .passive : .timeSensitive }
+        /// Ordinary alerts when the user has to act, passive for a finished agent.
+        var interruptionLevel: UNNotificationInterruptionLevel { self == .finished ? .passive : .active }
     }
 
     struct Alert: Equatable {

@@ -26,7 +26,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 11
+VERSION = 12
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 
 
@@ -42,8 +42,8 @@ def default_config_path():
 
 
 ALERT_STATES = ("blocked", "error", "done")
-# Passive for a finished agent, time-sensitive when someone has to act.
-URGENCY = {"blocked": "time-sensitive", "error": "time-sensitive", "done": "passive"}
+# Passive for a finished agent, ordinary alerts when someone has to act.
+URGENCY = {"blocked": "active", "error": "active", "done": "passive"}
 KINDS = ("permission", "question", "auth")
 APP_NAMES = {"claude-code": "Claude", "codex": "Codex", "antigravity": "Antigravity"}
 BODY_MAX = 180

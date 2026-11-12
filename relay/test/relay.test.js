@@ -226,10 +226,10 @@ test("encrypted push forwards opaque blob with placeholder alert", async () => {
   });
 });
 
-test("push sets interruption-level from state: time-sensitive for blocked/error, passive for done", async () => {
+test("push sets interruption-level from state: active for blocked/error, passive for done", async () => {
   const { env } = await makeEnv();
   const { secret } = await (await reg(env)).json();
-  for (const [state, level] of [["blocked", "time-sensitive"], ["error", "time-sensitive"], ["done", "passive"]]) {
+  for (const [state, level] of [["blocked", "active"], ["error", "active"], ["done", "passive"]]) {
     calls.length = 0;
     assert.equal((await doPush(env, secret, { state })).status, 200);
     assert.equal(JSON.parse(calls[0].init.body).aps["interruption-level"], level);

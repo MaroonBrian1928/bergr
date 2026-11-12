@@ -38,8 +38,15 @@ App tests: `xcodebuild … -only-testing:bergrTests test` (unit) or `-only-testi
 - **The project file** is `bergr.xcodeproj/project.xcproj` (a JSON-like format, not `project.pbxproj`).
   Per-configuration keys (`KEY[config=Debug]`) only work in the project-level `build-settings`, not in
   a target's. `bergr/` is a synchronized folder: new files there are in the target automatically.
-- **Build numbers**: `CURRENT_PROJECT_VERSION`, 1, 2, 3… per `MARKETING_VERSION`. A successful
-  `just archive true` raises it; commit that.
+- **Version every published batch.** Before pushing a new set of commits to `main` or distributing
+  a new build (including local Mac/phone installs and TestFlight), increment `MARKETING_VERSION` in
+  every target. Use the next patch version by default (for example `0.3.0` → `0.3.1`); an explicit
+  version requested by the user takes precedence. Bump once for the batch: its commit push, Mac and
+  phone installs, and TestFlight upload all share that version. Bookkeeping commits for the same
+  batch, including the post-upload build-number update, do not trigger another version bump.
+- **Build numbers**: `CURRENT_PROJECT_VERSION`, 1, 2, 3… per `MARKETING_VERSION`. Reset all targets
+  to build 1 when the marketing version changes. A successful `just archive true` raises the next
+  build number; commit and push that update as part of the same release batch.
 - **Generated files**: `bergr/Licenses/licenses.json` (`just licenses`, after changing Swift packages,
   bundled fonts or the Ghostty pin; it fails if a package has no license entry),
   `bergr/Settings/themes.json` (`just themes`), the app icons (`just icon` from `assets/logo-*.png`).
