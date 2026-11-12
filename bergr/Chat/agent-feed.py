@@ -765,7 +765,10 @@ class Codex:
         # The first look retries briefly: Codex has its rollout open most, not all, of the time,
         # and the fallback below can pick another session in the same folder (a wrong first
         # conversation that's replaced seconds later).
-        for attempt in range(1 if self.found else 4):
+        hinted = None
+        if HINT and not self.found:
+            hinted = [f for f in glob.glob(os.path.join(HOME, ".codex", "sessions", "*", "*", "*", f"rollout-*{HINT}.jsonl"))]
+        for attempt in range(1 if self.found or hinted else 4):
             for f in open_files(descendants(PID)):
                 if "/.codex/sessions/" in f and os.path.basename(f).startswith("rollout-") and f.endswith(".jsonl") \
                         and codex_is_main(codex_meta(f)):
@@ -1451,6 +1454,7 @@ def follow_jsonl(source):
         refresh_models()
         emit({"t": "ping"})
         flush()
+        intro()
         time.sleep(1)
 
 
@@ -1510,13 +1514,24 @@ def follow_antigravity(source):
         refresh_models()
         emit({"t": "ping"})
         flush()
+        intro()
         time.sleep(1)
+
+
+INTRO = [False]
+
+
+def intro():
+    """The slash commands and model list: once, after the first ping, so the conversation shows
+    first (listing commands walks the skill and plugin folders)."""
+    if not INTRO[0]:
+        INTRO[0] = True
+        emit({"t": "commands", "items": list_commands()})
+        refresh_models(force=True)
 
 
 def main():
     try:
-        emit({"t": "commands", "items": list_commands()})
-        refresh_models(force=True)
         if AGENT == "claude":
             follow_jsonl(Claude())
         elif AGENT == "codex":

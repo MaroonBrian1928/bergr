@@ -9,7 +9,12 @@ struct ChatHelperLaunchTests {
         let plan = try ChatHelperLaunch.make(script: script, agent: "claude", pid: 123,
             cwd: cwd, sessionHint: "abc", windows: true)
         #expect(plan.command.utf8.count < 2048)
-        #expect(plan.command.hasPrefix("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "))
+        #expect(plan.command.hasPrefix(#"cmd /d /s /c "set PATH="#))
+        // One quoted argument for cmd, safe under PowerShell as the default shell too.
+        #expect(plan.command.filter { $0 == "\"" }.count == 2)
+        #expect(!plan.command.contains("$"))
+        let python = try #require(plan.command.range(of: " -c ")).upperBound
+        #expect(!plan.command[python...].dropLast().contains(" "))
         #expect(!plan.command.contains(cwd))
         let data = try #require(Data(base64Encoded: String(decoding: plan.input, as: UTF8.self).trimmingCharacters(in: .newlines)))
         let decoded = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])

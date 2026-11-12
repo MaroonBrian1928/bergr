@@ -187,6 +187,7 @@ final class ChatFeed {
     private(set) var questionInfo: [String: QuestionInfo] = [:]
     /// The backlog is in: items that arrive from now on are live.
     private(set) var caughtUp = false
+    @ObservationIgnored private var trace: FirstPaintTrace?
     private(set) var usage: Usage?
 
     /// Puts an answer given from the chat into the conversation, where it was given.
@@ -241,22 +242,27 @@ final class ChatFeed {
             phase = .failed("The chat helper is missing from the app.")
             return
         }
-        let launch: ChatHelperLaunch.Plan
-        do {
-            launch = try ChatHelperLaunch.make(script: script, agent: agent.rawValue, pid: pid,
-                cwd: cwd, sessionHint: sessionHint, windows: session.isWindowsHost)
-        } catch {
-            phase = .failed(error.localizedDescription)
-            return
-        }
         while !Task.isCancelled {
             stalled = false
+            trace = FirstPaintTrace(label: "\(session.host.name) \(agent.rawValue)")
+            // On a reconnect, name the conversation already shown: the helper then finds it at
+            // once instead of searching (Codex retries for ~0.5 s when its file isn't open).
+            let launch: ChatHelperLaunch.Plan
+            do {
+                launch = try ChatHelperLaunch.make(script: script, agent: agent.rawValue, pid: pid,
+                    cwd: cwd, sessionHint: conversationID ?? sessionHint, windows: session.isWindowsHost)
+            } catch {
+                phase = .failed(error.localizedDescription)
+                return
+            }
             do {
                 // Bounded: on a connection that died quietly, opening a channel never answers.
                 // The loop below tries again; the session's own watchdog replaces the connection.
                 let pipe = try await Self.openExec(timeout: .seconds(10)) { try await session.openExec(launch.command) }
                 defer { pipe.close() }
+                trace?.mark("opened")
                 try await pipe.write(launch.input)
+                trace?.mark("sent")
                 // The helper pings every second. A channel that died quietly (the phone or the
                 // machine slept) sends nothing and never errors, so without pings for a while,
                 // close it and follow the conversation again; otherwise the chat and its
@@ -343,7 +349,10 @@ final class ChatFeed {
         let parser = ChatChunkParser()
         for try await chunk in pipe.output {
             lastHeard = .now
+            trace?.mark("first byte")
+            let parseStart = ContinuousClock.now
             let events = await parser.feed(chunk)
+            trace?.count(bytes: chunk.count, events: events.count, parse: ContinuousClock.now - parseStart)
             for parsed in events {
                 let event = parsed.event
                 let type = parsed.type
@@ -389,6 +398,7 @@ final class ChatFeed {
                         return Command(name: name, description: $0["description"] as? String ?? "")
                     }
                 case "msg", "tool", "toolout", "plan", "image", "question":
+                    trace?.mark("first event")
                     apply(event, type: type, prepared: parsed)
                 case "subagent":
                     applySubagent(event)
@@ -410,6 +420,8 @@ final class ChatFeed {
                         caughtUp = true
                         items = building
                         building = []
+                        trace?.mark("caught up")
+                        Task { @MainActor [trace] in trace?.mark("next main turn") }
                     }
                     pings += 1
                     if !sawConversation && pings >= 2 { phase = .noConversation }

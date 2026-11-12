@@ -17,21 +17,21 @@ enum ChatHelperLaunch {
         let code = "import base64,json,sys;d=json.loads(base64.b64decode(sys.stdin.buffer.readline()));"
             + "sys.argv=d['argv'];sys.stdout.reconfigure(encoding='utf-8',newline=chr(10));"
             + "sys.stderr.reconfigure(encoding='utf-8');exec(compile(d['script'],'agent-feed.py','exec'))"
-        let args = "-I -u -c \"\(code)\""
         let command: String
         if windows {
-            // A fresh SSH session may still have the pre-install PATH. Prefer the standard
-            // per-user runtime when present, then an existing python.exe on PATH.
-            let bootstrap = "$ErrorActionPreference='Stop';"
-                + "$p=Join-Path $env:LOCALAPPDATA 'Programs\\Python\\Python313\\python.exe';"
-                + "if (!(Test-Path -LiteralPath $p)) {$p='python.exe'};"
-                + "& $p -I -u -c \"\(code)\";exit $LASTEXITCODE"
-            // EncodedCommand avoids a second round of parsing by either cmd or PowerShell
-            // as the SSH default shell. The helper's output is JSON text, not binary frames.
-            command = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
-                + Data(bootstrap.utf16.flatMap { [UInt8(truncatingIfNeeded: $0), UInt8($0 >> 8)] }).base64EncodedString()
+            // Through cmd, not a second powershell.exe: starting PowerShell to launch Python took
+            // 1.5-2 s on a ThinkPad, cmd ~0.05 s. The line must survive cmd and PowerShell as the
+            // SSH default shell alike: one double-quoted argument to `cmd /s /c` (no `$`, no inner
+            // double quotes), and Python code without spaces, since cmd passes it unquoted. The
+            // standard per-user runtime goes first on PATH (a fresh SSH session may still have the
+            // pre-install PATH), then any python.exe on PATH.
+            let compact = "J=__import__('json');B=__import__('base64');S=__import__('sys');"
+                + "d=J.loads(B.b64decode(S.stdin.buffer.readline()));S.argv=d['argv'];"
+                + "S.stdout.reconfigure(encoding='utf-8',newline=chr(10));S.stderr.reconfigure(encoding='utf-8');"
+                + "exec(compile(d['script'],'agent-feed.py','exec'))"
+            command = "cmd /d /s /c \"set PATH=%LOCALAPPDATA%\\Programs\\Python\\Python313;%PATH%&& python.exe -I -u -c \(compact)\""
         } else {
-            command = "python3 \(args)"
+            command = "python3 -I -u -c \"\(code)\""
         }
         return Plan(command: command, input: Data((payload.base64EncodedString() + "\n").utf8))
     }
