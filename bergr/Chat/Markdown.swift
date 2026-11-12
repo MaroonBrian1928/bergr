@@ -110,7 +110,10 @@ struct MarkdownTable: Hashable, ExpressibleByArrayLiteral {
 
 /// One block of an agent's markdown reply: enough for prose, lists, code and tables. The payloads
 /// are parsed when the block is made, so drawing one does no parsing.
-struct MarkdownBlock: Hashable {
+///
+/// A class, so a block that stays the same while its message streams keeps one identity: the views
+/// built from it compare as a reference and skip their body (see `MarkdownBlockView`).
+final class MarkdownBlock: Hashable, @unchecked Sendable {
     enum Kind: Hashable {
         case paragraph(MarkdownInline)
         case heading(level: Int, text: MarkdownInline)
@@ -138,6 +141,17 @@ struct MarkdownBlock: Hashable {
     static let rule = MarkdownBlock(.rule)
 
     var isHeading: Bool { if case .heading = kind { true } else { false } }
+
+    static func == (a: MarkdownBlock, b: MarkdownBlock) -> Bool { a === b || a.kind == b.kind }
+    func hash(into hasher: inout Hasher) { hasher.combine(kind) }
+
+    /// `new` with each block that equals the one at its place in `old` replaced by that very
+    /// object: a streaming message keeps the identity of its finished blocks.
+    static func reusing(_ old: [MarkdownBlock], in new: [MarkdownBlock]) -> [MarkdownBlock] {
+        var result = new
+        for i in 0..<min(old.count, new.count) where old[i] == new[i] { result[i] = old[i] }
+        return result
+    }
 
     static func parse(_ source: String) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []
@@ -342,9 +356,10 @@ struct MarkdownView: View {
         #if DEBUG
         let _ = RenderProbe.hit("MarkdownView")
         #endif
+        let dark = palette.isDark
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { i, block in
-                view(for: block, visibleWords: revealed.map { $0 - starts[i] })
+                MarkdownBlockView(block: block, dark: dark, visible: visible(i, block))
                     // A heading belongs to what follows it: more room above than below.
                     .padding(.top, i > 0 && block.isHeading ? 10 : 0)
             }
@@ -354,29 +369,45 @@ struct MarkdownView: View {
         // every message's text (a third of the time spent scrolling). Copy and Select Text are in the long-press menu.
     }
 
-    /// Inline text with the not yet revealed words transparent.
-    private func inlineText(_ inline: MarkdownInline, _ visible: Int?) -> Text {
-        let styled = inline.styled(palette)
-        return Text(visible.map { styled.revealing(words: max(0, $0)) } ?? styled)
+    /// The words of block `i` to show: -1 for all of them (so a finished block's value stays the
+    /// same while a reply reveals), 0 for none, else the count.
+    private func visible(_ i: Int, _ block: MarkdownBlock) -> Int {
+        guard let revealed else { return -1 }
+        let words = revealed - starts[i]
+        return words >= block.wordCount ? -1 : max(0, words)
     }
+}
+
+/// One block. Its three fields are plain words (a reference, a flag, a number), the same bit for
+/// bit while the block is unchanged, so SwiftUI skips it at once: a streamed token builds and
+/// measures only the block that grew (see `RowSlot` for why it isn't `Equatable`).
+private struct MarkdownBlockView: View {
+    let block: MarkdownBlock
+    let dark: Bool
+    /// Words shown; -1 shows everything.
+    let visible: Int
 
     private static let codeFont = Font.system(.footnote, design: .monospaced)
 
-    @ViewBuilder
-    private func view(for block: MarkdownBlock, visibleWords visible: Int?) -> some View {
+    var body: some View {
+        #if DEBUG
+        let _ = RenderProbe.hit("MarkdownBlockView")
+        #endif
+        let palette = ChatPalette.of(dark ? .dark : .light)
+        let visible: Int? = visible >= 0 ? visible : nil
         switch block.kind {
         case .paragraph(let inline):
-            inlineText(inline, visible)
+            inlineText(inline, visible, palette)
                 .lineSpacing(3)
         case .heading(let level, let inline):
-            inlineText(inline, visible)
+            inlineText(inline, visible, palette)
                 .font(level == 1 ? .title3.bold() : level == 2 ? .headline : .subheadline.bold())
                 .accessibilityAddTraits(.isHeader)
         case .bullet(let indent, let marker, let inline):
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(marker).foregroundStyle(palette.secondary).monospacedDigit()
                     .opacity(visible.map { $0 > 0 } ?? true ? 1 : 0)
-                inlineText(inline, visible).lineSpacing(3)
+                inlineText(inline, visible, palette).lineSpacing(3)
             }
             .padding(.leading, CGFloat(indent) * 18)
         case .code(let code):
@@ -394,7 +425,7 @@ struct MarkdownView: View {
             MarkdownTableView(table: table, palette: palette)
                 .opacity(visible.map { $0 > 0 } ?? true ? 1 : 0)
         case .quote(let inline):
-            inlineText(inline, visible)
+            inlineText(inline, visible, palette)
                 .foregroundStyle(palette.secondary)
                 .padding(.leading, 12)
                 .overlay(alignment: .leading) { Rectangle().fill(palette.border).frame(width: 3) }
@@ -402,6 +433,12 @@ struct MarkdownView: View {
             Rectangle().fill(palette.border).frame(height: 1)
                 .opacity(visible.map { $0 > 0 } ?? true ? 1 : 0)
         }
+    }
+
+    /// Inline text with the not yet revealed words transparent.
+    private func inlineText(_ inline: MarkdownInline, _ visible: Int?, _ palette: ChatPalette) -> Text {
+        let styled = inline.styled(palette)
+        return Text(visible.map { styled.revealing(words: max(0, $0)) } ?? styled)
     }
 }
 

@@ -67,7 +67,17 @@ enum ChatAgent: String, Sendable {
 final class ChatFeed {
     struct Item: Identifiable, Equatable {
         let id: String
-        var kind: Kind
+        /// Setting it counts a change in `version`.
+        var kind: Kind { didSet { version &+= 1 } }
+        /// Counts changes to `kind`. Items compare by id and version, not by their (possibly long) content.
+        private(set) var version = 0
+
+        init(id: String, kind: Kind) {
+            self.id = id
+            self.kind = kind
+        }
+
+        static func == (a: Item, b: Item) -> Bool { a.id == b.id && a.version == b.version }
     }
 
     enum Kind: Equatable {
@@ -416,6 +426,7 @@ final class ChatFeed {
                     caughtUp = false
                     building = []
                     index = [:]
+                    pendingReplies = [:]
                     revealStart = [:]
                     if !rereading {
                         toolOutput = [:]
@@ -493,6 +504,7 @@ final class ChatFeed {
     func loadItems(_ items: [Item]) {
         self.items = items
         building = []
+        pendingReplies = [:]
         index = Dictionary(uniqueKeysWithValues: items.enumerated().map { ($1.id, $0) })
         phase = .live
         caughtUp = true
@@ -517,6 +529,7 @@ final class ChatFeed {
     func loadEvents(_ events: [[String: Any]]) {
         working = []
         index = [:]
+        pendingReplies = [:]
         for event in events {
             if event["t"] as? String == "usage" { applyUsage(event) } else { apply(event, type: event["t"] as? String ?? "") }
         }
@@ -555,6 +568,33 @@ final class ChatFeed {
             used: (event["used"] as? NSNumber)?.intValue ?? 0, limit: (event["limit"] as? NSNumber)?.intValue,
             session: window(event["session"]), weekly: window(event["weekly"]))
         if next != usage { usage = next }
+    }
+
+    /// Streamed reply updates not yet shown, by item id (the latest per reply).
+    @ObservationIgnored private var pendingReplies: [String: Kind] = [:]
+    @ObservationIgnored private var flushScheduled = false
+    /// How long a streamed update waits to be joined by the next ones: about one display frame.
+    static let flushDelay = Duration.milliseconds(16)
+
+    private func scheduleFlush() {
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.flushDelay)
+            self?.flushReplies()
+        }
+    }
+
+    /// Shows the waiting reply updates. Called on the next frame, and before anything that
+    /// reads or replaces the conversation as a whole.
+    func flushReplies() {
+        flushScheduled = false
+        guard !pendingReplies.isEmpty else { return }
+        let pending = pendingReplies
+        pendingReplies = [:]
+        for (id, kind) in pending {
+            if let at = index[id], working[at].kind != kind { working[at].kind = kind }
+        }
     }
 
     private func apply(_ event: [String: Any], type: String, prepared: ChatEvent? = nil) {
@@ -614,8 +654,19 @@ final class ChatFeed {
                 kind = .note(text)
             } else {
                 // Unchanged text (a step read again): keep the parsed blocks.
-                if let at = index[id], case .assistant(let old, _) = working[at].kind, old == text { return }
-                kind = .assistant(text: text, blocks: prepared?.blocks ?? MarkdownBlock.parse(text))
+                if let at = index[id], case .assistant(let old, _) = working[at].kind, old == text {
+                    pendingReplies[id] = nil
+                    return
+                }
+                let blocks = prepared?.blocks ?? MarkdownBlock.parse(text)
+                if let at = index[id], case .assistant(_, let oldBlocks) = working[at].kind {
+                    // A reply growing: its update waits for the next frame, so a burst of
+                    // tokens is laid out once; the finished blocks keep their identity.
+                    pendingReplies[id] = .assistant(text: text, blocks: MarkdownBlock.reusing(oldBlocks, in: blocks))
+                    scheduleFlush()
+                    return
+                }
+                kind = .assistant(text: text, blocks: blocks)
             }
         }
         if let at = index[id] {
