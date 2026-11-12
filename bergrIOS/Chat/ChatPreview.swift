@@ -47,6 +47,11 @@ struct ChatPreviewScreen: View {
                 feed.loadItems(Array(feed.items.prefix(2)))
             }
         }
+        // `-bergr.stress <turns>`: the stress conversation and its live updates, for profiling.
+        .task {
+            let turns = UserDefaults.standard.integer(forKey: "bergr.stress")
+            if turns > 0 { await feed.runStress(turns: turns) }
+        }
         // `-bergr.chatPreviewLive YES`: usage keeps arriving, as from a working Codex.
         .task {
             guard UserDefaults.standard.bool(forKey: "bergr.chatPreviewLive") else { return }
