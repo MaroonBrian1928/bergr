@@ -134,7 +134,8 @@ def result_text(content):
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "\n".join(c.get("text") or "" for c in content if isinstance(c, dict) and c.get("type") == "text")
+        return "\n".join(c.get("text") or "" for c in content if isinstance(c, dict)
+                         and c.get("type") in ("text", "input_text", "output_text"))
     return ""
 
 
@@ -212,6 +213,51 @@ def image_event(eid, role, mime, data):
     if len(data) * 3 // 4 - data[-2:].count("=") > MAX_IMAGE:
         return None
     return {"t": "image", "id": eid, "role": role, "mime": mime, "data": data}
+
+
+def tool_images(eid, output):
+    """Codex/code-mode tool results can mix text and images. Display the images as assistant
+    messages, preserving their order and the existing size limit; never fetch external URLs."""
+    seen = set()
+    def blocks(value):
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (ValueError, TypeError):
+                return
+        if isinstance(value, list):
+            for item in value:
+                yield from blocks(item)
+        elif isinstance(value, dict):
+            if value.get("type") in ("input_image", "output_image", "image", "image_url"):
+                yield value
+            else:
+                for key in ("content", "output"):
+                    if key in value:
+                        yield from blocks(value[key])
+                        break
+    for block in blocks(output):
+        url = block.get("image_url")
+        if isinstance(url, dict):
+            url = url.get("url")
+        mime, data = None, None
+        if isinstance(url, str) and url.startswith("data:image/") and ";base64," in url:
+            head, _, data = url.partition(";base64,")
+            mime = head[5:]
+        elif block.get("type") == "image":
+            source = block.get("source") or block
+            if isinstance(source, dict):
+                mime = source.get("media_type") or source.get("mimeType")
+                data = source.get("data")
+        if not isinstance(mime, str) or not mime.startswith("image/") or not isinstance(data, str):
+            continue
+        identity = (mime, data)
+        if identity in seen:
+            continue
+        event = image_event(f"{eid}.toolimage{len(seen)}", "assistant", mime, data)
+        if event:
+            seen.add(identity)
+            yield event
 
 
 def plan_event(steps):
@@ -941,15 +987,16 @@ class Codex:
             yield {"t": "tool", "id": pid, "name": name, "summary": tool_summary(args)}
         elif t in ("function_call_output", "custom_tool_call_output"):
             out = p.get("output")
-            if isinstance(out, str) and out.lstrip().startswith("{"):
+            if isinstance(out, str) and out.lstrip().startswith(("{", "[")):
                 try:
-                    out = json.loads(out).get("output", out)
+                    out = json.loads(out)
                 except Exception:
                     pass
-            elif isinstance(out, dict):
-                out = out.get("content") or out.get("output")
+            if isinstance(out, dict) and ("content" in out or "output" in out):
+                out = out.get("content") if "content" in out else out.get("output")
             cid = p.get("call_id")
             yield from toolout(self.__dict__.get("calls", {}).get(cid, cid), result_text(out))
+            yield from tool_images(pid, out)
 
 
 # MARK: Antigravity: ~/.gemini/antigravity-cli/conversations/<id>.db (SQLite, protobuf steps)

@@ -89,6 +89,37 @@ class CodexParse(Base):
                                      "content": [{"type": "input_image", "image_url": url}]}), [])
 
 
+class CodexToolImages(Base):
+    def parse(self, output):
+        parser = load("codex", self.home)["Codex"]()
+        return list(parser.parse({"type": "response_item", "payload": {
+            "type": "custom_tool_call_output", "id": "result1", "call_id": "call1", "output": output}}))
+
+    def test_code_mode_mixed_output_images_render_as_assistant(self):
+        images = [{"type": "input_image", "image_url": "data:image/png;base64," + b64(100)},
+                  {"type": "input_image", "image_url": "data:image/jpeg;base64," + b64(200)}]
+        events = self.parse([{"type": "input_text", "text": "Screenshot inspected"}, *images])
+        self.assertEqual([e["t"] for e in events], ["toolout", "image", "image"])
+        self.assertEqual(events[0]["text"], "Screenshot inspected")
+        self.assertEqual([e["role"] for e in events[1:]], ["assistant", "assistant"])
+        self.assertEqual([e["id"] for e in events[1:]], ["result1.toolimage0", "result1.toolimage1"])
+
+    def test_serialized_result_and_mcp_image(self):
+        image = {"type": "image", "mimeType": "image/png", "data": b64(100)}
+        events = self.parse(json.dumps({"content": [image]}))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["mime"], "image/png")
+        self.assertEqual(events[0]["data"], b64(100))
+
+    def test_duplicate_large_and_external_images_are_skipped(self):
+        image = {"type": "input_image", "image_url": "data:image/png;base64," + b64(100)}
+        events = self.parse([image, image,
+            {"type": "input_image", "image_url": "data:image/png;base64," + b64(1_500_001)},
+            {"type": "input_image", "image_url": "https://example.test/image.png"}])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["data"], b64(100))
+
+
 class CodexQuestion(Base):
     def test_request_user_input_becomes_question(self):
         m = load("codex", self.home)
