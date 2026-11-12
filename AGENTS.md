@@ -38,8 +38,8 @@ App tests: `xcodebuild … -only-testing:bergrTests test` (unit) or `-only-testi
 - **The project file** is `bergr.xcodeproj/project.xcproj` (a JSON-like format, not `project.pbxproj`).
   Per-configuration keys (`KEY[config=Debug]`) only work in the project-level `build-settings`, not in
   a target's. `bergr/` is a synchronized folder: new files there are in the target automatically.
-- **Version every published batch.** Before pushing a new set of commits to `main` or distributing
-  a new build (including local Mac/phone installs and TestFlight), increment `MARKETING_VERSION` in
+- **Version every published batch.** Before pushing a new set of commits to a remote branch
+  or distributing a new build (including local Mac/phone installs and TestFlight), increment `MARKETING_VERSION` in
   every target. Use the next patch version by default (for example `0.3.0` → `0.3.1`); an explicit
   version requested by the user takes precedence. Bump once for the batch: its commit push, Mac and
   phone installs, and TestFlight upload all share that version. Bookkeeping commits for the same

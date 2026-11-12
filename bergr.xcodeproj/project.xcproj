@@ -73,7 +73,7 @@
         "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": "AccentColor",
         "CODE_SIGN_ENTITLEMENTS": "Config/bergr.entitlements",
         "CODE_SIGN_STYLE": "Automatic",
-        "CURRENT_PROJECT_VERSION": "1",
+        "CURRENT_PROJECT_VERSION": "2",
         "ENABLE_PREVIEWS": "YES",
         "GENERATE_INFOPLIST_FILE": "YES",
         "INFOPLIST_FILE": "Config/Info.plist",
@@ -128,7 +128,7 @@
         "CODE_SIGN_ENTITLEMENTS": "Config/bergrMac.entitlements",
         "CODE_SIGN_STYLE": "Automatic",
         "COMBINE_HIDPI_IMAGES": "YES",
-        "CURRENT_PROJECT_VERSION": "1",
+        "CURRENT_PROJECT_VERSION": "2",
         "ENABLE_HARDENED_RUNTIME": "YES",
         "ENABLE_PREVIEWS": "YES",
         "GENERATE_INFOPLIST_FILE": "YES",
@@ -165,7 +165,7 @@
       "build-settings": {
         "CODE_SIGN_ENTITLEMENTS": "Config/LiveActivity.entitlements",
         "CODE_SIGN_STYLE": "Automatic",
-        "CURRENT_PROJECT_VERSION": "1",
+        "CURRENT_PROJECT_VERSION": "2",
         "GENERATE_INFOPLIST_FILE": "YES",
         "INFOPLIST_FILE": "Config/LiveActivity-Info.plist",
         "INFOPLIST_KEY_CFBundleDisplayName": "Bergr Agents",
@@ -199,7 +199,7 @@
       "build-settings": {
         "CODE_SIGN_ENTITLEMENTS": "Config/NotificationService.entitlements",
         "CODE_SIGN_STYLE": "Automatic",
-        "CURRENT_PROJECT_VERSION": "1",
+        "CURRENT_PROJECT_VERSION": "2",
         "GENERATE_INFOPLIST_FILE": "YES",
         "INFOPLIST_FILE": "Config/NotificationService-Info.plist",
         "INFOPLIST_KEY_CFBundleDisplayName": "Bergr Notifications",
@@ -237,7 +237,7 @@
       "build-settings": {
         "BUNDLE_LOADER": "$(TEST_HOST)",
         "CODE_SIGN_STYLE": "Automatic",
-        "CURRENT_PROJECT_VERSION": "1",
+        "CURRENT_PROJECT_VERSION": "2",
         "GENERATE_INFOPLIST_FILE": "YES",
         "MARKETING_VERSION": "0.3.0",
         "PRODUCT_BUNDLE_IDENTIFIER": "$(BERGR_BUNDLE_ID_PREFIX).bergrTests",
@@ -266,7 +266,7 @@
       ],
       "build-settings": {
         "CODE_SIGN_STYLE": "Automatic",
-        "CURRENT_PROJECT_VERSION": "1",
+        "CURRENT_PROJECT_VERSION": "2",
         "GENERATE_INFOPLIST_FILE": "YES",
         "MARKETING_VERSION": "0.3.0",
         "PRODUCT_BUNDLE_IDENTIFIER": "$(BERGR_BUNDLE_ID_PREFIX).bergrUITests",
