@@ -177,6 +177,7 @@ final class TerminalScreenModel {
             pendingInput.removeAll()
             for try await chunk in attached.output {
                 vt.write(chunk)
+                await attached.consumed(bytes: chunk.count)
                 // The first paint turns mode 2048 back on, which answers with our size: that's
                 // how a Textual app learns the size we attached with.
                 let replies = vt.takeReplies()

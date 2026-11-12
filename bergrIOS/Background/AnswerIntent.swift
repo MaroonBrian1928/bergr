@@ -133,6 +133,7 @@ final class ScreenCapture {
                     guard let self else { return }
                     self.vt.write(chunk)
                     self.lastChunk = .now
+                    await attached.consumed(bytes: chunk.count)
                     let replies = self.vt.takeReplies()
                     if !replies.isEmpty { try? await attached.sendAutomatic(replies) }
                 }

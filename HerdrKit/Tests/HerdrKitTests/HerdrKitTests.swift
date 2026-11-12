@@ -425,6 +425,7 @@ func localHerdrCoreAttach() async throws {
         while !vt.frame().text.contains(text) {
             guard let chunk = try await output.next() else { throw StreamEnd(reason: "eof", exitCode: nil) }
             vt.write(chunk)
+            await attached.consumed(bytes: chunk.count)
         }
     }
     try await waitFor("hello from herdr")

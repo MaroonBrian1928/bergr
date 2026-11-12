@@ -148,8 +148,8 @@ public actor HerdrClient {
         let pump = Task {
             do {
                 for try await chunk in bytes {
+                    // Credit goes back from `AttachedTerminal.consumed`, once the viewer has used the bytes.
                     continuation.yield(chunk)
-                    try await self.sendFrame(.credit(channel: channel, bytes: chunk.count))
                 }
                 continuation.finish()
             } catch {
@@ -432,6 +432,12 @@ public struct AttachedTerminal: Sendable {
 
     public func focus(_ focused: Bool) async throws {
         try await client.sendFrame(Frame(channel: channel, kind: .focus, payload: Data([focused ? 1 : 0])))
+    }
+
+    /// Tells the core the viewer is done with `bytes` of output, so it may send that much more.
+    /// Call it after each chunk of `output` is handled; without it the channel stalls.
+    public func consumed(bytes: Int) async {
+        try? await client.sendFrame(.credit(channel: channel, bytes: bytes))
     }
 
     public func detach() async {
