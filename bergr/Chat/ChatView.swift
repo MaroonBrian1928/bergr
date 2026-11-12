@@ -241,15 +241,10 @@ struct ChatView: View {
             .padding(.bottom, 8)
     }
 
-    /// On the Mac the conversation reads the feed in a view of its own: a streamed token runs
-    /// that, not the whole chat (its bars, toolbar and the window's layout).
-    @ViewBuilder private var conversationLayer: some View {
-        #if os(macOS)
-        Isolated { conversationContent() }
-        #else
-        conversationContent()
-        #endif
-    }
+    /// The conversation reads the feed in a view of its own: a streamed token runs that, not the
+    /// whole chat (its bars, toolbar and the window's layout). The scroll view and its scroll
+    /// modifiers are inside it, so they stay on the ScrollView itself.
+    private var conversationLayer: some View { Isolated { conversationContent() } }
     private var watcherLayer: some View { Isolated { feedWatcher } }
     @ViewBuilder private var placeholderLayer: some View {
         if search == nil { Isolated { placeholder } }
@@ -1654,8 +1649,9 @@ private struct ToolRun: View {
     /// summary line (as the reply arrives) glides shut instead of snapping, and the chat, which
     /// keeps its bottom still, doesn't jerk everything above it.
     @State private var height: CGFloat?
-    /// The glide and mask apply while the run is live and shortly after (so folding shut still plays).
+    /// The glide and clip apply while the run is live and shortly after (so folding shut still plays).
     @State private var gliding = false
+    private var clipReach: CGFloat { max(0, (PlatformMetrics.controlHeight - 24) / 2) }
 
     var body: some View {
         #if DEBUG
@@ -1677,14 +1673,19 @@ private struct ToolRun: View {
         return Group {
             if gliding || running {
                 content
+                    // Measured only to glide: a change of a point or less is not a state change.
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { new in
-                        guard let old = height, abs(old - new) > 0.5 else { height = new; return }
+                        guard let old = height else { height = new; return }
+                        guard abs(old - new) > 1 else { return }
                         withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { height = new }
                     }
                     .frame(height: height, alignment: .top)
                     // The live run's negative vertical padding lets its lines hang past the measured box; a plain
-                    // clip cut the newest line's descenders, so the clip reaches that far too.
-                    .mask(Rectangle().padding(.vertical, -max(0, (PlatformMetrics.controlHeight - 24) / 2)))
+                    // clip cut the newest line's descenders, so the clip reaches that far too: the clip is the
+                    // box grown by that much, applied by padding out, clipping, and padding back in.
+                    .padding(.vertical, clipReach)
+                    .clipped()
+                    .padding(.vertical, -clipReach)
             } else {
                 content
             }
@@ -1917,7 +1918,7 @@ struct WorkingRow: View {
                 WorkingMark(index: markIndex, previous: previousMark,
                             changedAt: since.addingTimeInterval(Double(markStep * 6)), color: palette.accent)
                 HStack(spacing: 0) {
-                    // One phrase gives way to the next: a short blurred crossfade with a small rise
+                    // One phrase gives way to the next: a short crossfade with a small rise
                     // (a word rolling letter by letter, like a number, read as a glitch).
                     ZStack(alignment: .leading) {
                         Text(verb + "…")
@@ -2378,12 +2379,13 @@ struct SeededRandom: RandomNumberGenerator {
     }
 }
 
-/// A blurred crossfade with a small rise, for one phrase replacing another.
+/// A crossfade with a small rise, for one phrase replacing another. No blur: a blur re-rasterizes
+/// the text on every frame of the change.
 private struct PhraseChange: ViewModifier {
     let shown: Bool
     let rise: CGFloat
     func body(content: Content) -> some View {
-        content.opacity(shown ? 1 : 0).blur(radius: shown ? 0 : 3).offset(y: shown ? 0 : rise)
+        content.opacity(shown ? 1 : 0).offset(y: shown ? 0 : rise)
     }
 }
 
