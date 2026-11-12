@@ -16,15 +16,10 @@ struct MachineSetupView: View {
     var body: some View {
         NavigationStack {
             Form {
-                if session.state != .connected {
-                    Section {
-                        Label("Connect to \(session.host.name) to check it.", systemImage: "bolt.horizontal")
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                Section { summary }
                 Section {
-                    row(.core) { EmptyView() }
-                    row(.python) { EmptyView() }
+                    row(.core, symbol: "server.rack") { EmptyView() }
+                    row(.python, symbol: "curlybraces") { EmptyView() }
                 } header: {
                     Text("Machine")
                 }
@@ -33,29 +28,30 @@ struct MachineSetupView: View {
                 } header: {
                     Text("Agents")
                 } footer: {
-                    Text("Bergr runs these agents on the machine. Install the ones you use; Bergr shows what it finds.")
+                    Text("Install the agents you use. Bergr shows the ones it finds.")
                 }
                 Section {
-                    row(.push) { pushAction }
-                    row(.statusLine) { statusLineAction }
+                    row(.push, symbol: "bell.badge") { pushAction }
+                    row(.statusLine, symbol: "gauge.with.dots.needle.33percent") { statusLineAction }
                 } header: {
-                    Text("Bergr on the machine")
+                    Text("Bergr")
                 } footer: {
                     if let error = setup.actionError {
                         Text(error).foregroundStyle(.red)
                     } else {
-                        Text("The push helper sends alerts when an agent needs you. The status line lets the chat show context and plan usage.")
+                        Text("The push helper alerts you when an agent needs you. The status line shows context and plan usage in the chat.")
                     }
                 }
             }
-            .navigationTitle("Setup for \(session.host.name)")
+            .formStyle(.grouped)
+            .navigationTitle("Set Up \(session.host.name)")
             .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Recheck") { Task { await setup.check() } }
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Check Again", systemImage: "arrow.clockwise") { Task { await setup.check() } }
                         .disabled(session.state != .connected || setup.busy != nil)
                 }
             }
@@ -63,52 +59,71 @@ struct MachineSetupView: View {
                 if session.state == .connected { await setup.check() }
             }
         }
+        #if os(macOS)
+        .frame(minWidth: 480, idealWidth: 520, minHeight: 560, idealHeight: 640)
+        #endif
+    }
+
+    // MARK: Summary
+
+    /// Everything the checks found, in one line at the top: the answer to "is this machine ready?".
+    private var states: [CheckState] {
+        SetupItem.allCases.filter { $0 != .agents }.map { setup.states[$0] ?? .checking }
+            + AgentCLI.allCases.map { setup.agents[$0] ?? .checking }
+    }
+
+    @ViewBuilder
+    private var summary: some View {
+        let open = states.filter { if case .ready = $0 { false } else if case .checking = $0 { false } else { true } }.count
+        let checking = states.contains { if case .checking = $0 { true } else { false } }
+        HStack(spacing: 12) {
+            Group {
+                if session.state != .connected {
+                    Image(systemName: "bolt.horizontal.circle").foregroundStyle(.secondary)
+                } else if checking {
+                    ProgressView().controlSize(.small)
+                } else if open == 0 {
+                    Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
+                } else {
+                    Image(systemName: "wrench.and.screwdriver.fill").foregroundStyle(.orange)
+                }
+            }
+            .font(.title2)
+            .frame(width: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.state != .connected ? "Not connected"
+                     : checking ? "Checking \(session.host.name)…"
+                     : open == 0 ? "\(session.host.name) is ready" : open == 1 ? "1 thing to set up" : "\(open) things to set up")
+                    .font(.headline)
+                Text(session.state != .connected ? "Connect to \(session.host.name) to check it."
+                     : "What Bergr needs on this machine, and what it found.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     // MARK: Rows
 
-    private func row<Action: View>(_ item: SetupItem, @ViewBuilder action: () -> Action) -> some View {
+    private func row<Action: View>(_ item: SetupItem, symbol: String, @ViewBuilder action: () -> Action) -> some View {
         let state = setup.states[item] ?? .checking
-        return HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.title)
-                Text(Self.text(for: state))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            Spacer(minLength: 8)
+        return SetupRow(symbol: symbol, title: item.title, detail: Self.text(for: state)) {
             Self.icon(state)
             action()
         }
-        .frame(minHeight: PlatformMetrics.controlHeight)
         .accessibilityIdentifier("setup-\(item.rawValue)")
     }
 
     private func agentRow(_ agent: AgentCLI) -> some View {
         let state = setup.agents[agent] ?? .checking
         let command = agent.installCommand(windows: setup.windows)
-        return HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(agent.title)
-                Text(Self.text(for: state))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                if case .missing = state, let command {
-                    Text(command)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
-            Spacer(minLength: 8)
+        let missing: Bool = if case .missing = state { true } else { false }
+        return SetupRow(symbol: "sparkles", title: agent.title, detail: Self.text(for: state),
+                        command: missing ? command : nil) {
             Self.icon(state)
-            if case .missing = state, let command {
-                copyButton(agent.title, id: agent.rawValue, text: command)
-            }
+            if missing, let command { copyButton(agent.title, id: agent.rawValue, text: command) }
         }
-        .frame(minHeight: PlatformMetrics.controlHeight)
     }
 
     @ViewBuilder
@@ -183,6 +198,45 @@ struct MachineSetupView: View {
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
         }
+    }
+}
+
+/// One checklist row: the item's symbol, its name and what was found, and its status or action,
+/// centred on the right.
+private struct SetupRow<Trailing: View>: View {
+    let symbol: String
+    let title: String
+    let detail: String
+    var command: String? = nil
+    @ViewBuilder let trailing: Trailing
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(detail)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+                if let command {
+                    Text(command)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+                        .textSelection(.enabled)
+                }
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 8) { trailing }
+        }
+        .padding(.vertical, 2)
+        .frame(minHeight: PlatformMetrics.controlHeight)
     }
 }
 
