@@ -28,6 +28,7 @@ struct ChatView: View {
     @State private var pushes = 0
     @State private var showingUsage = false
     @State private var showingChanges = false
+    @State private var lifecycle = AgentLifecycle()
     @State private var choosingMode = false
     @State private var selecting: SelectableMessage?
     @State private var viewing: ViewedImage?
@@ -582,6 +583,15 @@ struct ChatView: View {
     private var moreMenu: some View {
         MoreMenuSlot(
             agent: agent, feed: feed, model: model, hasInfo: onInfo != nil, canSetMode: canType,
+            lifecycle: lifecycle, canManage: manageable,
+            end: {
+                guard let terminal, let session else { return }
+                lifecycle.end(session: session, terminal: terminal, interrupt: { model.press(.escape) })
+            },
+            restart: {
+                guard let terminal, let session else { return }
+                lifecycle.restart(session: session, terminal: terminal, agent: agent, conversationID: feed.conversationID)
+            },
             choosingMode: $choosingMode, sendError: $sendError,
             search: {
                 withAnimation(motion) { searching = true }
@@ -594,6 +604,12 @@ struct ChatView: View {
     private var changesButton: some View {
         Button("Changes", systemImage: "plusminus") { showingChanges = true }
             .disabled(terminal?.cwd.isEmpty != false)
+    }
+
+    /// A live agent terminal on this machine's own core, with a connection to act through.
+    private var manageable: Bool {
+        guard let terminal, session != nil else { return false }
+        return terminal.isLive && !terminal.address.contains("/")
     }
 
     private var contextItem: some ToolbarContent {
@@ -2320,6 +2336,10 @@ private struct MoreMenuSlot: View {
     let model: TerminalScreenModel
     let hasInfo: Bool
     let canSetMode: Bool
+    let lifecycle: AgentLifecycle
+    let canManage: Bool
+    let end: () -> Void
+    let restart: () -> Void
     @Binding var choosingMode: Bool
     @Binding var sendError: String?
     let search: () -> Void
@@ -2335,9 +2355,11 @@ private struct MoreMenuSlot: View {
         MoreMenu(
             agent: agent, hasUsage: feed.usage != nil || agent == .claude, hasInfo: hasInfo,
             currentMode: PermissionModes.current(agent, in: model.textLines, saved: feed.usage?.mode),
-            saved: feed.usage?.mode, canSetMode: canSetMode,
-            search: search, usage: usage, permissions: { choosingMode = true }, info: info)
+            saved: feed.usage?.mode, canSetMode: canSetMode, canManage: canManage,
+            search: search, usage: usage, permissions: { choosingMode = true }, info: info,
+            restart: { lifecycle.confirming = .restart }, end: { lifecycle.confirming = .end })
         .equatable()
+        .agentLifecycleDialogs(lifecycle, name: agent.displayName, end: end, restart: restart)
         .confirmationDialog("Permissions", isPresented: $choosingMode, titleVisibility: .visible) {
             let current = PermissionModes.current(agent, in: model.textLines, saved: feed.usage?.mode)
             ForEach(PermissionModes.modes(agent), id: \.self) { mode in
@@ -2361,14 +2383,18 @@ private struct MoreMenu: View, Equatable {
     let currentMode: String?
     let saved: String?
     let canSetMode: Bool
+    let canManage: Bool
     let search: () -> Void
     let usage: () -> Void
     let permissions: () -> Void
     let info: () -> Void
+    let restart: () -> Void
+    let end: () -> Void
 
     static func == (a: Self, b: Self) -> Bool {
         a.agent == b.agent && a.hasUsage == b.hasUsage && a.hasInfo == b.hasInfo
             && a.currentMode == b.currentMode && a.saved == b.saved && a.canSetMode == b.canSetMode
+            && a.canManage == b.canManage
     }
 
     var body: some View {
@@ -2386,6 +2412,13 @@ private struct MoreMenu: View, Equatable {
             #endif
             if hasInfo {
                 Button("Info", systemImage: "info.circle", action: info)
+            }
+            if canManage {
+                Divider()
+                if agent != .antigravity {
+                    Button("Restart", systemImage: "arrow.clockwise", action: restart)
+                }
+                Button("End Session", systemImage: "stop.circle", role: .destructive, action: end)
             }
         } label: {
             Label("More", systemImage: "ellipsis")

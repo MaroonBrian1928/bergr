@@ -114,6 +114,8 @@ struct NewSessionView: View {
     @State private var message = ""
     @State private var starting = false
     @State private var error: String?
+    @State private var recent: [RecentSession] = []
+    @State private var loadingRecent = false
 
     /// Machines a session can start on: connected, and real (the demo can't run agents).
     private var machines: [Host] {
@@ -148,6 +150,9 @@ struct NewSessionView: View {
                     agentSection
                     if let session {
                         folderSection(session)
+                    }
+                    RecentSessionsSection(sessions: recent, loading: loadingRecent) { s in
+                        Task { await start(resuming: s) }
                     }
                     Section {
                         TextField("First message", text: $message, prompt: Text("Optional"), axis: .vertical)
@@ -195,6 +200,7 @@ struct NewSessionView: View {
                 }
             }
             .task(id: hostID) { await locate() }
+            .task(id: RecentKey(host: hostID, agent: agent, folder: folder, ready: agents != nil)) { await loadRecent() }
         }
         #if os(macOS)
         .frame(width: 540, height: 560)
@@ -267,6 +273,29 @@ struct NewSessionView: View {
         }
     }
 
+    private struct RecentKey: Equatable {
+        let host: Host.ID?, agent: ChatAgent?, folder: String, ready: Bool
+    }
+
+    /// The conversations of the chosen agent in the chosen folder (the home folder when empty).
+    private func loadRecent() async {
+        recent = []
+        guard let session, let agent, agent == .claude || agent == .codex, agents != nil else { return }
+        // Typing a folder asks again for every letter; wait for a pause.
+        try? await Task.sleep(for: .milliseconds(400))
+        guard !Task.isCancelled, let cwd = resolvedFolder(session) else { return }
+        loadingRecent = true
+        defer { loadingRecent = false }
+        let list = try? await RecentSessions.list(session: session, agent: agent, folder: cwd)
+        if !Task.isCancelled { recent = list ?? [] }
+    }
+
+    private func resolvedFolder(_ session: HostSession) -> String? {
+        let folder = folder.trimmingCharacters(in: .whitespaces)
+        if folder.hasPrefix("~"), let home = session.homeFolder { return home + folder.dropFirst() }
+        return folder.isEmpty ? session.homeFolder : folder
+    }
+
     private func locate() async {
         guard let hostID, located[hostID] == nil, let session else { return }
         locateFailed[hostID] = nil
@@ -281,13 +310,18 @@ struct NewSessionView: View {
         }
     }
 
-    private func start() async {
+    private func start(resuming resumed: RecentSession? = nil) async {
         guard let hostID, let session, let agent,
               let path = agents?.first(where: { $0.agent == agent })?.path else { return }
         starting = true
         defer { starting = false }
         error = nil
-        var request = RunRequest(argv: NewSession.argv(path: path, message: message))
+        var argv = NewSession.argv(path: path, message: message)
+        if let resumed {
+            guard let resume = RecentSessions.resumeArgv(agent: agent, path: path, id: resumed.id) else { return }
+            argv = resume
+        }
+        var request = RunRequest(argv: argv)
         if let path = searchPath[hostID] { request.env?["PATH"] = path }
         let folder = folder.trimmingCharacters(in: .whitespaces)
         if folder.hasPrefix("~"), let home = session.homeFolder {

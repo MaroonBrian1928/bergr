@@ -4,11 +4,12 @@ import SSHTransport
 extension HostSession {
     /// Runs a short command on the machine and returns what it printed; gives up after
     /// `timeout` so a stuck channel can't hang the caller.
-    func commandOutput(_ command: String, timeout: Duration = .seconds(20)) async throws -> String {
+    func commandOutput(_ command: String, input: Data? = nil, timeout: Duration = .seconds(20)) async throws -> String {
         try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask {
                 let pipe = try await self.openExec(command)
                 defer { pipe.close() }
+                if let input { try await pipe.write(input) }
                 var out = Data()
                 do {
                     for try await chunk in pipe.output { out.append(chunk) }

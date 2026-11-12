@@ -428,9 +428,25 @@ private struct SubagentRow: View {
     let terminal: Terminal
     let session: HostSession
     let machine: String?
+    @State private var lifecycle = AgentLifecycle()
 
     var body: some View {
         AgentRow(terminal: terminal, subagents: session.runningSubagents(address: terminal.address), machine: machine)
+            .contextMenu {
+                if terminal.isLive, terminal.isAgent, !terminal.address.contains("/") {
+                    if let agent = ChatAgent.detect(terminal), agent != .antigravity {
+                        Button("Restart", systemImage: "arrow.clockwise") { lifecycle.confirming = .restart }
+                    }
+                    Button("End Session", systemImage: "stop.circle", role: .destructive) { lifecycle.confirming = .end }
+                }
+            }
+            .agentLifecycleDialogs(lifecycle, name: AgentsOrdering.title(terminal), end: {
+                lifecycle.end(session: session, terminal: terminal, interrupt: nil)
+            }, restart: {
+                if let agent = ChatAgent.detect(terminal) {
+                    lifecycle.restart(session: session, terminal: terminal, agent: agent, conversationID: nil)
+                }
+            })
     }
 }
 
