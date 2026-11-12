@@ -41,9 +41,11 @@ struct RootView: View {
             ChatPreviewScreen()
         } else {
             main.modifier(TrustPrompt(sessions: sessions)).background { agentShortcuts }
+                .background { UsageAlertsHost(sessions: sessions) }
         }
         #else
         main.modifier(TrustPrompt(sessions: sessions)).background { agentShortcuts }
+            .background { UsageAlertsHost(sessions: sessions) }
         #endif
     }
 

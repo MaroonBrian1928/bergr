@@ -104,6 +104,21 @@ struct SettingsView: View {
             }
 
             Section {
+                NavigationLink {
+                    UsageScreen(sessions: sessions)
+                } label: {
+                    Label {
+                        Text("Usage")
+                    } icon: {
+                        SettingsIcon("gauge.with.dots.needle.50percent", color: .green)
+                    }
+                    .frame(minHeight: 44)
+                }
+            } footer: {
+                Text("Context and plan usage of the agents running on your machines, across machines.")
+            }
+
+            Section {
                 Picker(selection: $hideAfter) {
                     ForEach(QuietAgents.choices, id: \.seconds) { Text($0.title).tag($0.seconds) }
                 } label: {

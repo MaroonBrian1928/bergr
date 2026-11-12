@@ -64,6 +64,10 @@ struct MacCommands: SwiftUI.Commands {
             Button("Check for Updates…") { Updater.shared.checkForUpdates() }
         }
 
+        CommandGroup(after: .windowList) {
+            Button("Usage") { openWindow(id: "usage") }
+        }
+
         SidebarCommands()
         CommandGroup(after: .sidebar) {
             Picker("Group Agents by", selection: Binding(get: { grouping.isEmpty ? "machine" : grouping }, set: { grouping = $0 })) {

@@ -49,6 +49,13 @@ struct BergrMacApp: App {
         .defaultSize(width: 1000, height: 700)
         .commands { MacCommands(sessions: sessions, hosts: hosts, shell: shell) }
 
+        // Context and plan usage of every agent, across machines (the Usage item in the menu).
+        Window("Usage", id: "usage") {
+            UsageScreen(sessions: sessions)
+                .environment(hosts)
+        }
+        .defaultSize(width: 480, height: 560)
+
         // One window per agent; opening an agent that has one focuses it, and the windows come
         // back after a relaunch.
         WindowGroup("Agent", for: AgentRef.self) { $ref in

@@ -11,6 +11,10 @@ struct MacRootView: View {
     @Bindable var shell: MacShell
 
     var body: some View {
+        content.background { UsageAlertsHost(sessions: sessions) }
+    }
+
+    private var content: some View {
         NavigationSplitView {
             AgentsView(sessions: sessions, selection: $shell.selection) { host, address in
                 shell.selection = AgentRef(host: host, address: address)

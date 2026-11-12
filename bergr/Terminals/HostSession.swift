@@ -218,6 +218,10 @@ final class HostSession {
         }
     }
 
+    /// The chat feed being followed for a terminal, if one runs (the Usage screen reads its usage).
+    @MainActor
+    func runningFeed(address: String) -> ChatFeed? { feeds[address]?.feed }
+
     /// Sub-agents running under a terminal's agent, from its chat feed if one is being followed.
     @MainActor
     func runningSubagents(address: String) -> Int {
