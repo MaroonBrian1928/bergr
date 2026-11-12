@@ -172,7 +172,7 @@ final class HostSession {
     /// Feeds whose line went away (the app went to the background): kept, not their tasks, so
     /// coming back follows the conversation into the same feed. The chat keeps showing what it
     /// had while the conversation is read again, instead of going blank and rebuilding.
-    @ObservationIgnored private var pausedFeeds: [String: (agent: ChatAgent, feed: ChatFeed, start: FeedStart)] = [:]
+    @ObservationIgnored private var pausedFeeds: [String: (agent: ChatAgent, feed: ChatFeed, start: FeedStart, used: Date)] = [:]
     /// What a feed was started with, so the session can start it again by itself.
     struct FeedStart { let pid: Int32; let cwd: String; let sessionHint: String? }
     @ObservationIgnored private var feedStarts: [String: FeedStart] = [:]
@@ -208,7 +208,11 @@ final class HostSession {
     /// stayed frozen until you left it and came back.
     @MainActor
     private func resumeFeeds() {
-        for (address, paused) in pausedFeeds {
+        // Most recently used first, and only into free places: resuming must never evict a feed
+        // a chat on screen just asked for (it would keep showing a stopped feed until reopened).
+        for (address, paused) in pausedFeeds.sorted(by: { $0.value.used > $1.value.used }) {
+            guard feeds[address] == nil else { pausedFeeds[address] = nil; continue }
+            guard feeds.count < Self.maxFeeds else { break }
             _ = chatFeed(address: address, agent: paused.agent, pid: paused.start.pid,
                          cwd: paused.start.cwd, sessionHint: paused.start.sessionHint)
         }
@@ -223,7 +227,7 @@ final class HostSession {
     private func stopFeeds() {
         for (address, entry) in feeds {
             entry.task.cancel()
-            if let start = feedStarts[address] { pausedFeeds[address] = (entry.agent, entry.feed, start) }
+            if let start = feedStarts[address] { pausedFeeds[address] = (entry.agent, entry.feed, start, entry.used) }
         }
         feeds = [:]
     }
