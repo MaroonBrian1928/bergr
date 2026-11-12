@@ -27,6 +27,7 @@ struct ChatView: View {
     /// Each Send Now: a firmer tap than a send, felt as stopping the agent.
     @State private var pushes = 0
     @State private var showingUsage = false
+    @State private var showingChanges = false
     @State private var choosingMode = false
     @State private var selecting: SelectableMessage?
     @State private var viewing: ViewedImage?
@@ -196,6 +197,9 @@ struct ChatView: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showingChanges) {
+            ChangesSheet(session: session, folder: terminal?.cwd, items: feed.items, toolOutput: feed.toolOutput)
         }
         .sheet(isPresented: $showingUsage) {
             UsageSheet(usage: feed.usage, agent: agent, machine: session?.host.name,
@@ -560,6 +564,7 @@ struct ChatView: View {
                 .help("Search Conversation (⌘F)")
             }
         #else
+            ToolbarItem(placement: .trailingAction) { changesButton }
             ToolbarItem(placement: .trailingAction) { moreMenu }
         #endif
     }
@@ -567,6 +572,7 @@ struct ChatView: View {
     /// The chat's buttons, for the system bar's items and for a pane's own header.
     @ViewBuilder
     private var chatButtons: some View {
+        changesButton
         contextButton
         moreMenu
     }
@@ -583,6 +589,11 @@ struct ChatView: View {
             },
             usage: { showingUsage = true },
             info: { onInfo?() })
+    }
+
+    private var changesButton: some View {
+        Button("Changes", systemImage: "plusminus") { showingChanges = true }
+            .disabled(terminal?.cwd.isEmpty != false)
     }
 
     private var contextItem: some ToolbarContent {

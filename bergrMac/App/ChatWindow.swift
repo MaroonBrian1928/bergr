@@ -128,7 +128,7 @@ private struct ChatWindowContent: View {
         .inspector(isPresented: $showingInspector) {
             if let agent = chatAgent(terminal), linkedMachine == nil {
                 ChatInspector(feed: feed, agent: agent, terminal: terminal, machine: machineName,
-                              model: model, canSetMode: terminal?.isLive == true)
+                              model: model, canSetMode: terminal?.isLive == true, session: session)
             } else {
                 // No chat to describe: where it runs, still.
                 Form {

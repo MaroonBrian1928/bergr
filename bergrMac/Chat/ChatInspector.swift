@@ -10,6 +10,8 @@ struct ChatInspector: View {
     let machine: String
     let model: TerminalScreenModel
     let canSetMode: Bool
+    var session: HostSession?
+    @State private var showingChanges = false
     /// Tool calls and written files, worked out when the conversation grows, not on every streamed
     /// token: scanning the whole conversation on each update made scrolling stutter.
     @State private var activity = Activity()
@@ -46,15 +48,11 @@ struct ChatInspector: View {
             Section("Permissions") {
                 PermissionPicker(agent: agent, model: model, saved: feed.usage?.mode, enabled: canSetMode)
             }
-            Section("Outputs") {
-                let files = activity.outputs
-                if files.isEmpty {
-                    Text("No files written yet").foregroundStyle(.secondary)
-                } else {
-                    ForEach(files, id: \.self) { path in
-                        row("doc", (path as NSString).lastPathComponent)
-                            .help(path)
-                    }
+            Section("Changes") {
+                Button { showingChanges = true } label: { row("plusminus", "Changes") }
+                    .disabled(terminal?.cwd.isEmpty != false)
+                ForEach(activity.outputs, id: \.self) { path in
+                    row("doc", (path as NSString).lastPathComponent).help(path)
                 }
             }
             Section("Activity") {
@@ -68,6 +66,9 @@ struct ChatInspector: View {
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $showingChanges) {
+            ChangesSheet(session: session, folder: terminal?.cwd, items: feed.items, toolOutput: feed.toolOutput)
+        }
         .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
         // A view of its own reads the conversation, so a streamed token redraws only it.
         .background(ActivityTracker(feed: feed, activity: $activity))
