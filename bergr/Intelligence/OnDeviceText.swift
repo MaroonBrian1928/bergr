@@ -6,7 +6,7 @@ import FoundationModels
 /// Short text written on the device by Apple's on-device model (Foundation Models). Nothing leaves
 /// the device. Every caller has a plain fallback: this returns nil when Apple Intelligence is off,
 /// the device doesn't support it, the model fails, or it takes longer than `timeout`.
-protocol OnDeviceTextWriting: Sendable {
+nonisolated protocol OnDeviceTextWriting: Sendable {
     /// Nil when it can't: the caller shows its fallback.
     func write(instructions: String, prompt: String, timeout: Duration) async -> String?
 }
@@ -42,7 +42,7 @@ enum OnDeviceText {
     }
 }
 
-struct FoundationModelsWriter: OnDeviceTextWriting {
+nonisolated struct FoundationModelsWriter: OnDeviceTextWriting {
     func write(instructions: String, prompt: String, timeout: Duration) async -> String? {
         #if canImport(FoundationModels)
         guard case .available = SystemLanguageModel.default.availability else { return nil }

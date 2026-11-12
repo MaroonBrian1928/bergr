@@ -226,6 +226,10 @@ struct AnswerCard: View {
     @State private var changed = false
     /// The number of a dangerous prompt's Yes that was tapped once and waits for a second tap.
     @State private var confirming: Int?
+    /// The on-device explanation of the command it belongs to; kept per command, so a stale one
+    /// never shows for a different command.
+    @State private var explained: (command: String, text: String)?
+    private let explainer = CommandExplainer(writer: OnDeviceText.shared)
 
     init(status: TerminalStatus?, model: TerminalScreenModel, palette: ChatPalette,
          onAnswer: ((String, String) -> Void)? = nil) {
@@ -252,7 +256,9 @@ struct AnswerCard: View {
         } else if choices.isEmpty, let asked, !numberedOnly, let reason = DangerousCommand.check(asked) {
             // The generic Yes/No buttons are no place to approve this one.
             notice(title: "Dangerous: \(reason)",
-                   detail: "\(asked)\nOpen the terminal (top right) to answer this one.", danger: true)
+                   detail: "\(asked)\nOpen the terminal (top right) to answer this one.", danger: true,
+                   explanation: explanation(for: asked))
+                .task(id: asked) { await explain(asked) }
         } else if choices.isEmpty, let asked, !numberedOnly {
             NeedsYouBar(status: status, model: model, dark: scheme == .dark) { answer in
                 onAnswer?(asked, answer)
@@ -336,11 +342,26 @@ struct AnswerCard: View {
         .sensoryFeedback(.impact(weight: .light), trigger: tapped)
     }
 
-    private func notice(title: String, detail: String, danger: Bool = false) -> some View {
+    /// What the on-device model says the command would do, for the command shown now (nil until
+    /// it answers, and when it can't).
+    private func explanation(for command: String) -> String? {
+        guard let explained, explained.command == command else { return nil }
+        return explained.text
+    }
+
+    private func explain(_ command: String) async {
+        let text = await explainer.explain(command)
+        explained = text.map { (command: command, text: $0) }
+    }
+
+    private func notice(title: String, detail: String, danger: Bool = false, explanation: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Label(title, systemImage: danger ? "exclamationmark.triangle.fill" : "hand.raised.fill")
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(danger ? Color.red : palette.text)
+            if let explanation {
+                Text(explanation).font(.footnote).foregroundStyle(palette.text)
+            }
             Text(detail).font(.footnote).foregroundStyle(palette.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -351,13 +372,22 @@ struct AnswerCard: View {
     }
 
     private func card(_ choices: [AnswerChoice], question: String?, context: [String]) -> some View {
-        let danger = DangerousCommand.check(([question ?? ""] + context).joined(separator: "\n"))
+        let commandText = ([question ?? ""] + context).joined(separator: "\n")
+        let danger = DangerousCommand.check(commandText)
         return VStack(alignment: .leading, spacing: 8) {
             if let danger {
-                Label("Dangerous: \(danger)", systemImage: "exclamationmark.triangle.fill")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Color.red)
-                    .padding(.horizontal, 4)
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Dangerous: \(danger)", systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color.red)
+                    if let explanation = explanation(for: commandText) {
+                        Text(explanation)
+                            .font(.footnote)
+                            .foregroundStyle(palette.text)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.horizontal, 4)
             }
             // What is being approved, so "Yes" is never a blind answer.
             if !context.isEmpty {
@@ -431,6 +461,10 @@ struct AnswerCard: View {
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
         .sensoryFeedback(.impact(weight: .light), trigger: tapped)
+        .task(id: danger == nil ? nil : commandText) {
+            guard danger != nil else { return }
+            await explain(commandText)
+        }
     }
 
     private func select(_ choice: AnswerChoice) {

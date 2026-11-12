@@ -11,7 +11,7 @@ struct ChangesSheet: View {
     init(session: HostSession?, folder: String?, items: [ChatFeed.Item], toolOutput: [String: String]) {
         self.items = items
         self.toolOutput = toolOutput
-        _model = State(initialValue: ChangesModel(folder: folder ?? "") { [weak session] command in
+        _model = State(initialValue: ChangesModel(folder: folder ?? "", lastReply: ChangesSummary.lastReply(in: items)) { [weak session] command in
             guard let session else { throw CocoaError(.fileNoSuchFile) }
             return try await session.commandOutput(command)
         })
@@ -56,6 +56,13 @@ struct ChangesSheet: View {
         let stat = model.stat
         let paths = Set(stat.files.map(\.path))
         return List {
+            switch model.summary {
+            case .none: EmptyView()
+            case .writing:
+                Section { Text("Summarising the change…").foregroundStyle(.secondary) }
+            case .written(let text):
+                Section { Text(text).font(.body) }
+            }
             Section("Branch") {
                 LabeledContent(status.branch ?? "unknown", value: status.upstream ?? "no upstream")
                 if status.ahead > 0 || status.behind > 0 {

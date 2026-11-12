@@ -708,12 +708,35 @@ struct ChatView: View {
                     }
                 }
             }
+            if !replyChips.isEmpty {
+                ReplyChips(chips: replyChips, draft: $draft, palette: palette)
+                    .transition(.opacity)
+            }
             inputBar
         }
         .animation(motion, value: state)
+        .animation(motion, value: replyChips)
+        .task(id: replyKey) {
+            // Once per assistant message, when its turn has finished (see `ReplySuggestions`).
+            guard let last = feed.items.last, case .assistant(let text, _) = last.kind else { return }
+            await ReplySuggestions.shared.request(messageID: last.id, text: text, working: state == "working")
+        }
         .frame(maxWidth: Self.readableWidth)
         .frame(maxWidth: .infinity)
         .background { shortcuts }
+    }
+
+    /// The last message's id, and whether the agent is still working on it.
+    private var replyKey: String {
+        "\(feed.items.last?.id ?? "")|\(state == "working")"
+    }
+
+    /// Suggested replies after the agent's last message: only once its turn is done, and while
+    /// nothing is typed or attached (they're hidden then).
+    private var replyChips: [String] {
+        guard state != "working", draft.isBlank, attachments.isEmpty,
+              let last = feed.items.last, case .assistant = last.kind else { return [] }
+        return ReplySuggestions.shared.chips[last.id] ?? []
     }
 
     /// What the user replied after a question (nil while it's still open).
@@ -1626,6 +1649,7 @@ private struct ToolRun: View {
     var running = false
     /// The agent stopped on this run to ask: it hasn't happened yet, so it doesn't say "Ran".
     var waiting = false
+    var summaries: ToolOutputSummaries = .shared
     @State private var open = false
     /// The tallest the live run's output box has been (lines): it doesn't shrink mid-run.
     @State private var outputLines = 0
@@ -1645,6 +1669,15 @@ private struct ToolRun: View {
     }
 
     private var title: String { Self.title(steps) }
+
+    /// The newest step with output, when the run is done and that output is long enough to summarize.
+    private var digestStep: Step? {
+        guard !running, !waiting, let step = steps.last(where: { $0.output != nil }),
+              let output = step.output, ToolOutputSummaries.isLong(output) else { return nil }
+        return step
+    }
+    /// The one-line summary of that output, once written on the device.
+    private var digest: String? { digestStep.flatMap { summaries.summary(for: $0.id) } }
 
     private static func title(_ steps: [Step]) -> String {
         if steps.count == 1, let step = steps.first {
@@ -1839,10 +1872,18 @@ private struct ToolRun: View {
                             .font(.footnote.weight(.medium))
                             .shimmer(palette: palette)
                     } else {
-                        Text(title)
-                            .font(.footnote)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(title)
+                                .font(.footnote)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            if let digest {
+                                Text(digest)
+                                    .font(.footnote)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
+                        }
                     }
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.bold))
@@ -1853,7 +1894,7 @@ private struct ToolRun: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(running ? "Running: \(title)" : title)
+            .accessibilityLabel(running ? "Running: \(title)" : [title, digest].compactMap { $0 }.joined(separator: ". "))
             .accessibilityHint(open ? "Hides the steps" : "Shows each step")
 
             if open || waiting {
@@ -1878,8 +1919,47 @@ private struct ToolRun: View {
                 .transition(.opacity)
             }
         }
+        .task(id: digestStep.map { "\($0.id)" }) {
+            guard let step = digestStep, let output = step.output else { return }
+            await summaries.request(id: step.id, finished: true, name: step.name, command: step.summary, output: output)
+        }
         .foregroundStyle(palette.secondary)
         .padding(.vertical, -max(0, (PlatformMetrics.controlHeight - 24) / 2)) // Keep the control from adding air between messages.
+    }
+}
+
+/// Suggested replies above the reply bar. Tapping one fills the reply field; it never sends.
+private struct ReplyChips: View {
+    let chips: [String]
+    @Binding var draft: String
+    let palette: ChatPalette
+
+    @State private var picks = 0
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                ForEach(chips, id: \.self) { chip in
+                    Button {
+                        draft = chip
+                        picks += 1
+                    } label: {
+                        Text(chip)
+                            .font(.footnote)
+                            .foregroundStyle(palette.text)
+                            .lineLimit(1)
+                            .padding(.horizontal, 12)
+                            .frame(minHeight: 32)
+                            .background(palette.bubble, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("reply-chip")
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        .scrollIndicators(.hidden)
+        .sensoryFeedback(.selection, trigger: picks)
     }
 }
 

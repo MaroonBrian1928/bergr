@@ -109,7 +109,10 @@ final class AgentNotifier {
                 let focus = focusedAddress.flatMap { $0.host == item.id ? $0.address : nil }
                 for alert in Self.alerts(host: item.id, old: old, new: item.terminals, focused: focus, delivered: delivered, machine: item.machine) {
                     delivered.insert(alert.key)
-                    post(alert)
+                    let agent = item.terminals.first { $0.address == alert.address }?.displayName ?? "Agent"
+                    let transcript = sessions.existing(item.id)?.runningFeed(address: alert.address)
+                        .map { NotificationSummary.transcript($0.items) } ?? []
+                    post(alert, agent: agent, transcript: transcript)
                 }
             }
             last[item.id] = item.terminals
@@ -118,23 +121,30 @@ final class AgentNotifier {
         for id in last.keys where !ids.contains(id) { last[id] = nil }
     }
 
-    private func post(_ alert: Alert) {
+    private func post(_ alert: Alert, agent: String, transcript: [String]) {
         // Settings → Notifications.
         guard UserDefaults.standard.bool(forKey: Delivery.notificationsKey) else { return }
-        let content = UNMutableNotificationContent()
-        content.title = alert.title
-        content.body = alert.body
-        content.sound = .default
-        content.interruptionLevel = alert.kind.interruptionLevel
-        content.threadIdentifier = alert.host.uuidString
-        content.userInfo = ["host": alert.host.uuidString, "address": alert.address]
-        if let q = alert.question, let category = AnswerCategory.identifier(for: q) {
-            content.categoryIdentifier = category
-            content.userInfo.merge(AnswerCategory.userInfo(q)) { _, new in new }
-        } else if alert.kind != .error, let category = AnswerCategory.replyIdentifier {
-            content.categoryIdentifier = category
+        // The body is the model's one-sentence summary of the chat when there is one (within
+        // NotificationSummary.timeout), else the status text.
+        Task { @MainActor in
+            let body = await NotificationSummary.body(
+                agent: agent, kind: alert.kind, transcript: transcript, fallback: alert.body,
+                writer: OnDeviceText.shared)
+            let content = UNMutableNotificationContent()
+            content.title = alert.title
+            content.body = body
+            content.sound = .default
+            content.interruptionLevel = alert.kind.interruptionLevel
+            content.threadIdentifier = alert.host.uuidString
+            content.userInfo = ["host": alert.host.uuidString, "address": alert.address]
+            if let q = alert.question, let category = AnswerCategory.identifier(for: q) {
+                content.categoryIdentifier = category
+                content.userInfo.merge(AnswerCategory.userInfo(q)) { _, new in new }
+            } else if alert.kind != .error, let category = AnswerCategory.replyIdentifier {
+                content.categoryIdentifier = category
+            }
+            let request = UNNotificationRequest(identifier: alert.key, content: content, trigger: nil)
+            UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
         }
-        let request = UNNotificationRequest(identifier: alert.key, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
     }
 }

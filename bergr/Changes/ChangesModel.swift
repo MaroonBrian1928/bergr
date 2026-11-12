@@ -7,6 +7,8 @@ import SSHTransport
 final class ChangesModel {
     enum Phase: Equatable { case loading, notARepo, failed(String), loaded }
     enum DiffState: Equatable { case loading, loaded(GitParsing.FileDiff), failed(String) }
+    /// The one-sentence summary; `.none` means no row.
+    enum SummaryState: Equatable { case none, writing, written(String) }
 
     typealias Runner = @Sendable (String) async throws -> String
 
@@ -14,15 +16,23 @@ final class ChangesModel {
     private(set) var status = GitParsing.Status()
     private(set) var stat = GitParsing.Stat()
     private(set) var diffs: [String: DiffState] = [:]
+    private(set) var summary = SummaryState.none
     let folder: String
     @ObservationIgnored private let run: Runner
     @ObservationIgnored private let expensive: Bool
+    @ObservationIgnored private let lastReply: String?
+    @ObservationIgnored private let writer: OnDeviceTextWriting
+    @ObservationIgnored private var statText = ""
+    @ObservationIgnored var summaryTask: Task<Void, Never>?
     static let prefetchLimit = 10
     private static let diffLineCap = 4000
 
-    init(folder: String, expensive: Bool? = nil, run: @escaping Runner) {
+    init(folder: String, expensive: Bool? = nil, lastReply: String? = nil,
+         writer: OnDeviceTextWriting = OnDeviceText.shared, run: @escaping Runner) {
         self.folder = folder
         self.expensive = expensive ?? NetworkWatcher.shared.isExpensive
+        self.lastReply = lastReply
+        self.writer = writer
         self.run = run
     }
 
@@ -36,14 +46,19 @@ final class ChangesModel {
     func load() async {
         phase = .loading
         diffs = [:]
+        summaryTask?.cancel()
+        summary = .none
         do {
             let out = try await run(Self.git(folder, "status --porcelain=v1 -b"))
             status = GitParsing.status(out)
-            let statText: String
-            do { statText = try await run(Self.git(folder, "diff HEAD --stat=120 --no-color")) }
-            catch { statText = (try? await run(Self.git(folder, "diff --stat=120 --no-color"))) ?? "" }
-            stat = GitParsing.stat(statText)
+            let text: String
+            do { text = try await run(Self.git(folder, "diff HEAD --stat=120 --no-color")) }
+            catch { text = (try? await run(Self.git(folder, "diff --stat=120 --no-color"))) ?? "" }
+            statText = text
+            stat = GitParsing.stat(text)
             phase = .loaded
+            summary = .writing
+            summaryTask = Task { await self.writeSummary() }
         } catch {
             let err = Self.stderr(of: error)
             phase = err.lowercased().contains("not a git repository") ? .notARepo
@@ -53,6 +68,29 @@ final class ChangesModel {
         if !expensive {
             for file in stat.files.prefix(Self.prefetchLimit) { await loadDiff(file.path) }
         }
+    }
+
+    /// Writes the summary from the stat, the first lines of the combined diff (not on expensive
+    /// networks) and the agent's last reply. Runs beside the sheet; a nil write hides the row.
+    private func writeSummary() async {
+        var head = ""
+        if !expensive, !statText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            do {
+                head = ChangesSummary.diffHead(try await run(Self.git(folder, "diff HEAD --no-color --no-ext-diff")))
+            } catch {
+                let fallback = (try? await run(Self.git(folder, "diff --no-color --no-ext-diff"))) ?? ""
+                head = ChangesSummary.diffHead(fallback)
+            }
+        }
+        guard !Task.isCancelled else { return }
+        guard let prompt = ChangesSummary.prompt(stat: statText, diffHead: head, reply: lastReply) else {
+            summary = .none
+            return
+        }
+        let written = await writer.write(instructions: ChangesSummary.instructions, prompt: prompt,
+                                         timeout: ChangesSummary.timeout)
+        guard !Task.isCancelled else { return }
+        if let written, !written.isEmpty { summary = .written(written) } else { summary = .none }
     }
 
     private nonisolated static func stderr(of error: Error) -> String {

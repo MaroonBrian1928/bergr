@@ -65,9 +65,11 @@ extension SearchResultsSections {
 
 private struct SearchHitRow: View {
     let hit: SearchHit
+    private let titles = ConversationTitles.shared
+
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(hit.displayTitle).fontWeight(.medium).lineLimit(1)
+            Text(titles.titles[hit.session] ?? hit.displayTitle).fontWeight(.medium).lineLimit(1)
             Text(hit.snippet).font(.footnote).foregroundStyle(.secondary).lineLimit(3)
             HStack(spacing: 6) {
                 Text(hit.agentName)
@@ -79,5 +81,8 @@ private struct SearchHitRow: View {
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+        .task(id: hit.id) {
+            await titles.resolve(id: hit.session, title: hit.title, snippet: hit.snippet)
+        }
     }
 }

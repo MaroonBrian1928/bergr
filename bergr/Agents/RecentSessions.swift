@@ -186,25 +186,36 @@ struct RecentSessionsSection: View {
                     HStack(spacing: 8) { ProgressView(); Text("Looking for earlier conversations…").foregroundStyle(.secondary) }
                 }
                 ForEach(sessions) { s in
-                    Button { resume(s) } label: {
-                        HStack(alignment: .firstTextBaseline) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(s.title.isEmpty ? "Untitled conversation" : s.title)
-                                    .foregroundStyle(.primary).lineLimit(2)
-                                Text("\(s.count) message\(s.count == 1 ? "" : "s")")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 8)
-                            Text(RecentSessions.age(s)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                        }
-                    }
-                    .macPlainButton()
+                    Button { resume(s) } label: { RecentSessionRow(session: s) }
+                        .macPlainButton()
                 }
             } header: {
                 Text("Recent conversations")
             } footer: {
                 Text("Tap one to continue it in this folder.")
             }
+        }
+    }
+}
+
+/// A recent conversation's row: the on-device title when it's written, else the first message.
+private struct RecentSessionRow: View {
+    let session: RecentSession
+    private let titles = ConversationTitles.shared
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(titles.titles[session.id] ?? (session.title.isEmpty ? "Untitled conversation" : session.title))
+                    .foregroundStyle(.primary).lineLimit(2)
+                Text("\(session.count) message\(session.count == 1 ? "" : "s")")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Text(RecentSessions.age(session)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+        }
+        .task(id: session.id) {
+            await titles.resolve(id: session.id, title: session.title, snippet: "")
         }
     }
 }
