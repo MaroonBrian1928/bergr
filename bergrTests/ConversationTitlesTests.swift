@@ -108,6 +108,22 @@ struct ConversationTitlesTests {
         }
     }
 
+    @Test func alreadyCancelledWithFreeSlotsWritesNothing() async {
+        await withDefaults { defaults in
+            let writer = FakeTitleWriter()
+            let titles = ConversationTitles(writer: writer, defaults: defaults)
+            let task = Task { @MainActor in await titles.resolve(id: "cancelled", title: "Do not write", snippet: "") }
+            task.cancel()
+            await task.value
+            #expect(await writer.prompts.isEmpty)
+            #expect(titles.titles.isEmpty)
+            // Cancellation must not mark the conversation as failed or consume a slot.
+            await titles.resolve(id: "cancelled", title: "Try again", snippet: "")
+            #expect(await writer.prompts.count == 1)
+            #expect(titles.titles["cancelled"] != nil)
+        }
+    }
+
     @Test func cancelledWhileQueuedWritesNothing() async {
         await withDefaults { defaults in
             let writer = FakeTitleWriter()

@@ -30,7 +30,7 @@ struct WhatNeedsMeSpeechTests {
         AgentsSnapshot(
             needsYou: 2, working: 1, done: 0,
             rows: [
-                row("Migrations", kind: "claude", status: "Needs approval", machine: "pop-os", needsYou: true),
+                row("Migrations", kind: "claude", status: "Needs approval", machine: "lab-box", needsYou: true),
                 row("Build", kind: "codex", status: "Error", machine: "raspberrypi", needsYou: true),
                 row("Docs", status: "Working", machine: "box", needsYou: false),
             ],
@@ -38,9 +38,9 @@ struct WhatNeedsMeSpeechTests {
     }
 
     @Test func modelSentenceIsUsedWhenItReturns() async {
-        let writer = FakeTextWriter(reply: "Two agents need you: Claude on pop-os is asking to run the migrations.")
+        let writer = FakeTextWriter(reply: "Two agents need you: Claude on lab-box is asking to run the migrations.")
         let text = await AgentCatalog.needsYouSpeech(fixture, writer: writer)
-        #expect(text == "Two agents need you: Claude on pop-os is asking to run the migrations.")
+        #expect(text == "Two agents need you: Claude on lab-box is asking to run the migrations.")
         #expect(await writer.prompts.count == 1)
     }
 
@@ -64,7 +64,7 @@ struct WhatNeedsMeSpeechTests {
         _ = await AgentCatalog.needsYouSpeech(fixture, writer: writer)
         let prompt = await writer.prompts.first ?? ""
         #expect(prompt.contains("Migrations"))
-        #expect(prompt.contains("pop-os"))
+        #expect(prompt.contains("lab-box"))
         #expect(prompt.contains("Needs approval"))
         #expect(prompt.contains("Build"))
         #expect(prompt.contains("raspberrypi"))

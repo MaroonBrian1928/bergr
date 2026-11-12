@@ -8,9 +8,9 @@ import Testing
     }
 
     @Test func remoteAttachDefaultPort() throws {
-        let r = AttachCommand.Remote(user: "brian", host: "pop-os.local")
+        let r = AttachCommand.Remote(user: "demo", host: "lab-box.local")
         #expect(try AttachCommand.argv(remote: r, address: "t7") == [
-            "ssh", "-t", "brian@pop-os.local", "PATH=\"$HOME/.local/bin:$PATH\" hc attach 't7'",
+            "ssh", "-t", "demo@lab-box.local", "PATH=\"$HOME/.local/bin:$PATH\" hc attach 't7'",
         ])
     }
 

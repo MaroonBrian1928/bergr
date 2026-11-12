@@ -147,6 +147,21 @@ struct ChatFeedProtocolTests {
         #expect(feed.items.map(\.id) == ["a"])  // still on screen until the first ping
     }
 
+    @Test func clearSwitchesToEmptySessionAndDropsOldMessages() async throws {
+        let feed = ChatFeed()
+        _ = try await run(feed, lines: [reset, msg("a", "previous conversation"), #"{"t":"ping"}"#])
+        #expect(feed.items.count == 1)
+        _ = try await run(feed, lines: [#"{"t":"reset","agent":"claude","session":"new.jsonl"}"#,
+                                       #"{"t":"cursor","session":"new.jsonl","offset":0}"#,
+                                       #"{"t":"ping"}"#])
+        #expect(feed.conversationID == "new")
+        #expect(feed.caughtUp)
+        #expect(feed.items.isEmpty)
+        #expect(feed.cursor == .init(session: "new.jsonl", offset: 0))
+        _ = try await run(feed, lines: [#"{"t":"resume"}"#, msg("b", "fresh start")])
+        #expect(feed.items.map(\.id) == ["b"])
+    }
+
     @Test func noneShowsNoConversationWithoutPings() async throws {
         let feed = ChatFeed()
         _ = try await run(feed, lines: [#"{"t":"none"}"#])

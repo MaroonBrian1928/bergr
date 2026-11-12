@@ -49,16 +49,18 @@ final class ConversationTitles {
     /// Writes a title for conversation `id` unless one is known. Returns when done; the result shows
     /// through `titles`. A caller cancelled while queued gives up without writing.
     func resolve(id: String, title: String, snippet: String) async {
-        guard titles[id] == nil, !failed.contains(id), !pending.contains(id),
+        guard !Task.isCancelled, titles[id] == nil, !failed.contains(id), !pending.contains(id),
               !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         pending.insert(id)
         defer { pending.remove(id) }
         guard await acquire() else { return }
+        defer { release() }
+        guard !Task.isCancelled else { return }
         let reply = await writer.write(
             instructions: Self.instructions,
             prompt: Self.prompt(title: title, snippet: snippet),
             timeout: Self.timeout)
-        release()
+        guard !Task.isCancelled else { return }
         if let reply, !reply.isEmpty {
             store(id, reply)
         } else {
@@ -76,6 +78,7 @@ final class ConversationTitles {
 
     /// Takes a write slot, waiting in line when all are busy. False when cancelled while waiting.
     private func acquire() async -> Bool {
+        guard !Task.isCancelled else { return false }
         if running < Self.maxConcurrent {
             running += 1
             return true

@@ -34,6 +34,7 @@ import UIKit
 @MainActor final class ReplyRig {
     let terminal = FakeTerminal()
     let outbox = ReplyOutbox()
+    var conversationID: String? = "old"
     var state: String?
     var items: [ChatFeed.Item] = []
     var reconnectHeld = false
@@ -56,6 +57,7 @@ import UIKit
             reconnect: { [self] in
                 while reconnectHeld { try? await Task.sleep(for: .milliseconds(1)) }
             },
+            conversationID: { [self] in conversationID },
             timing: timing)
     }
 
@@ -77,6 +79,35 @@ import UIKit
 }
 
 @MainActor struct ReplyDeliveryTests {
+    @Test func clearConfirmedBySessionChangeWithoutTranscriptMessage() async {
+        let rig = ReplyRig()
+        let reply = rig.send("/clear")
+        await rig.until { rig.terminal.count("enter") == 1 }
+        rig.conversationID = "new"
+        await rig.until { rig.outbox.replies.isEmpty }
+        #expect(reply.phase == .confirmed)
+        #expect(rig.terminal.count("enter") == 1)
+    }
+
+    @Test func clearRetryUsesSessionAcknowledgement() async {
+        let rig = ReplyRig()
+        let reply = rig.send("/clear")
+        await rig.until { reply.phase == .failed }
+        rig.outbox.retry(reply.id)
+        await rig.until { rig.terminal.count("enter") == 2 }
+        rig.conversationID = "new"
+        await rig.until { rig.outbox.replies.isEmpty }
+        #expect(reply.phase == .confirmed)
+    }
+
+    @Test func clearWithoutSessionChangeIsNotConfirmed() async {
+        let rig = ReplyRig()
+        let reply = rig.send("/clear")
+        await rig.until { reply.phase == .failed }
+        #expect(rig.terminal.count("enter") == 1)
+        rig.outbox.cancelAll()
+    }
+
     @Test func earlierIdenticalMessageDoesNotConfirm() async {
         let rig = ReplyRig()
         rig.items = [rig.user("u1", "yes")]

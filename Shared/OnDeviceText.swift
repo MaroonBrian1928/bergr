@@ -43,6 +43,15 @@ enum OnDeviceText {
 }
 
 nonisolated struct FoundationModelsWriter: OnDeviceTextWriting {
+    /// List-producing callers parse their own lines; summaries keep the one-paragraph default.
+    var preserveLines = false
+
+    static func usable(_ text: String, preserveLines: Bool) -> String? {
+        if !preserveLines { return OnDeviceText.clean(text) }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     func write(instructions: String, prompt: String, timeout: Duration) async -> String? {
         #if canImport(FoundationModels)
         guard case .available = SystemLanguageModel.default.availability else { return nil }
@@ -50,7 +59,7 @@ nonisolated struct FoundationModelsWriter: OnDeviceTextWriting {
             group.addTask {
                 let session = LanguageModelSession(instructions: instructions)
                 guard let reply = try? await session.respond(to: prompt) else { return nil }
-                return OnDeviceText.clean(reply.content)
+                return Self.usable(reply.content, preserveLines: preserveLines)
             }
             group.addTask {
                 try? await Task.sleep(for: timeout)

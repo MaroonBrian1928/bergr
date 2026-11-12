@@ -6,11 +6,13 @@ import Testing
 private actor FakeWriter: OnDeviceTextWriting {
     private let reply: String?
     private(set) var calls = 0
+    private(set) var lastPrompt: String?
 
     init(reply: String?) { self.reply = reply }
 
     func write(instructions: String, prompt: String, timeout: Duration) async -> String? {
         calls += 1
+        lastPrompt = prompt
         return reply
     }
 }
@@ -106,6 +108,25 @@ struct ReplySuggestionTests {
         await suggestions.request(messageID: "m1", text: "All done.", working: false)
         #expect(suggestions.chips["m1"] == ["Run the tests", "Commit it"])
         #expect(await writer.calls == 1)
+    }
+
+    @Test func listWriterPreservesAllSuggestions() {
+        let output = "Review the auth changes\nCheck callback edge cases"
+        #expect(FoundationModelsWriter.usable(output, preserveLines: true) == output)
+        #expect(FoundationModelsWriter.usable(output, preserveLines: false) == "Review the auth changes")
+    }
+
+    @Test func promptIncludesUserConstraintsAndLatestEnding() async {
+        let writer = FakeWriter(reply: "Review the auth changes\nCheck callback edge cases")
+        let suggestions = ReplySuggestions(writer: writer)
+        await suggestions.request(messageID: "context", text: "Fixed the login loop.", working: false,
+                                  context: "User: Fix login; do not commit.")
+        let prompt = await writer.lastPrompt
+        #expect(prompt?.contains("do not commit") == true)
+        #expect(prompt?.contains("Fixed the login loop") == true)
+        #expect(suggestions.chips["context"]?.count == 2)
+        let long = String(repeating: "details ", count: 600) + "Which cache strategy do you prefer?"
+        #expect(ReplySuggestions.prompt(text: long, context: "").contains("Which cache strategy do you prefer?"))
     }
 
     @Test func noChipsWhileTheAgentWorks() async {

@@ -80,6 +80,7 @@ struct ReplyEnvironment {
     var upload: @MainActor (Data) async throws -> String
     /// Reconnects from scratch, as reopening the app does.
     var reconnect: @MainActor () async -> Void
+    var conversationID: @MainActor () -> String? = { nil }
     var timing = ReplyTiming()
 }
 
@@ -184,6 +185,7 @@ struct ReplyEnvironment {
         reply.driver = Task {
             await env.reconnect()
             guard reply.epoch == epoch else { return }
+            let conversation = env.conversationID()
             // The words may already be in the prompt, typed before the line died with Enter lost:
             // typing them again would send them twice in one message. Submit what's there.
             await env.terminal.automate {
@@ -196,7 +198,11 @@ struct ReplyEnvironment {
                 env.terminal.press(.enter)
             }
             guard reply.epoch == epoch else { return }
-            await monitor(reply, epoch: epoch, since: .now, env: env)
+            if reply.text.trimmingCharacters(in: .whitespacesAndNewlines) == "/clear", !reply.payload.hasImages {
+                await monitorClear(reply, epoch: epoch, conversation: conversation, env: env)
+            } else {
+                await monitor(reply, epoch: epoch, since: .now, env: env)
+            }
         }
     }
 
@@ -256,6 +262,7 @@ struct ReplyEnvironment {
         let terminal = env.terminal
         let timing = env.timing
         let sentPaths = paths
+        let conversation = env.conversationID()
         await terminal.automate {
             guard reply.epoch == epoch else { return }
             if interrupting {
@@ -287,9 +294,30 @@ struct ReplyEnvironment {
             terminal.press(.enter)
         }
         guard reply.epoch == epoch else { return }
+        if reply.text.trimmingCharacters(in: .whitespacesAndNewlines) == "/clear", !reply.payload.hasImages {
+            await monitorClear(reply, epoch: epoch, conversation: conversation, env: env)
+            return
+        }
         await confirmEnter(reply, epoch: epoch, message: message, env: env)
         guard reply.epoch == epoch else { return }
         await monitor(reply, epoch: epoch, since: reply.sentAt, env: env)
+    }
+
+    private func monitorClear(_ reply: ReplyDelivery, epoch: Int, conversation: String?, env: ReplyEnvironment) async {
+        // /clear has no user-message echo. A changed session is its acknowledgement;
+        // never send extra Returns or infer failure from its absence in the transcript.
+        let end = ContinuousClock.now + env.timing.imagesGiveUp
+        while ContinuousClock.now < end, reply.epoch == epoch {
+            if let current = env.conversationID(), current != conversation {
+                reply.set(.confirmed)
+                remove(reply)
+                return
+            }
+            try? await Task.sleep(for: env.timing.poll)
+        }
+        guard reply.epoch == epoch else { return }
+        reply.driver = nil
+        reply.set(.failed)
     }
 
     /// A Return can be lost (sent on a channel that was being replaced as the app came back): the

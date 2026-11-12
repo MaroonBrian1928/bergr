@@ -15,7 +15,7 @@ struct AgentIntentsTests {
         AgentsSnapshot(
             needsYou: 2, working: 1, done: 1,
             rows: [
-                row("Refactor", "Needs approval", needsYou: true, machine: "pop-os", address: "t1"),
+                row("Refactor", "Needs approval", needsYou: true, machine: "lab-box", address: "t1"),
                 row("Tests", "Waiting", needsYou: true, machine: "box", address: "t2"),
                 row("Docs", "Working", needsYou: false, address: "t3"),
             ],
@@ -34,7 +34,7 @@ struct AgentIntentsTests {
     @Test func matchingIsCaseInsensitiveAndChecksMachineAndStatus() {
         let rows = fixture.rows
         #expect(AgentCatalog.matching("refactor", in: rows).map(\.address) == ["t1"])
-        #expect(AgentCatalog.matching("POP-OS", in: rows).map(\.address) == ["t1"])
+        #expect(AgentCatalog.matching("LAB-BOX", in: rows).map(\.address) == ["t1"])
         #expect(AgentCatalog.matching("waiting", in: rows).map(\.address) == ["t2"])
         #expect(AgentCatalog.matching("  ", in: rows).count == 3)
         #expect(AgentCatalog.matching("nothing like this", in: rows).isEmpty)
@@ -46,7 +46,7 @@ struct AgentIntentsTests {
 
     @Test func whatNeedsMeNamesEachAgentAndMachine() {
         #expect(AgentCatalog.needsYouText(fixture)
-            == "2 agents need you: Refactor on pop-os, Tests on box.")
+            == "2 agents need you: Refactor on lab-box, Tests on box.")
     }
 
     @Test func whatNeedsMeCountsAgentsTheSnapshotDoesNotList() {
@@ -105,9 +105,9 @@ struct AgentIntentsTests {
     }
 
     @Test func startSessionBecomesAPrefillForAKnownAgentOnly() {
-        let known = NewSessionPrefill(.newSession(machine: "pop-os", agent: "codex", folder: "~/src/app", message: "hi"))
-        #expect(known == NewSessionPrefill(machine: "pop-os", agent: .codex, folder: "~/src/app", message: "hi"))
-        #expect(NewSessionPrefill(.newSession(machine: "pop-os", agent: "gemini", folder: "", message: "")) == nil)
+        let known = NewSessionPrefill(.newSession(machine: "lab-box", agent: "codex", folder: "~/src/app", message: "hi"))
+        #expect(known == NewSessionPrefill(machine: "lab-box", agent: .codex, folder: "~/src/app", message: "hi"))
+        #expect(NewSessionPrefill(.newSession(machine: "lab-box", agent: "gemini", folder: "", message: "")) == nil)
         #expect(NewSessionPrefill(.openNeedsYou) == nil)
     }
 }

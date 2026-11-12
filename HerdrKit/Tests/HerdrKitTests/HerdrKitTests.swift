@@ -338,12 +338,12 @@ func systemSSHHerdrHandshakeAndSnapshot() async throws {
 private let localCore = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent(".local/bin/herdr-core")
 
-/// Against a real herdr-core in its own session (`herdrkit-test-*`), so your terminals are untouched:
+/// Against a real herdr-core in its own session (`hkt-*`), so your terminals are untouched:
 /// subscribe, run a command, and watch it appear and finish.
 @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: localCore.path)), .timeLimit(.minutes(1)))
 func localHerdrCoreEvents() async throws {
     let client = try await HerdrClient.connect(
-        over: try ProcessTransport(executable: localCore, environment: ["HC_SESSION": "herdrkit-test-events"]))
+        over: try ProcessTransport(executable: localCore, environment: ["HC_SESSION": "hkt-events"]))
     let hello = try #require(await client.hello)
     #expect(hello.generation == HerdrCore.generation)
 
@@ -372,7 +372,7 @@ func localHerdrCoreEvents() async throws {
 @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: localCore.path)), .timeLimit(.minutes(1)))
 func localHerdrCoreTurns() async throws {
     let client = try await HerdrClient.connect(
-        over: try ProcessTransport(executable: localCore, environment: ["HC_SESSION": "herdrkit-test-turns"]))
+        over: try ProcessTransport(executable: localCore, environment: ["HC_SESSION": "hkt-turns"]))
     let subscription = try await client.subscribeEvents()
     var snapshot = subscription.snapshot
 
@@ -410,7 +410,7 @@ func localHerdrCoreTurns() async throws {
 @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: localCore.path)), .timeLimit(.minutes(1)))
 func localHerdrCoreAttach() async throws {
     let client = try await HerdrClient.connect(
-        over: try ProcessTransport(executable: localCore, environment: ["HC_SESSION": "herdrkit-test-attach"]))
+        over: try ProcessTransport(executable: localCore, environment: ["HC_SESSION": "hkt-attach"]))
     struct Run: Encodable, Sendable { let argv: [String]; let name: String }
     struct Ran: Decodable, Sendable { let address: String }
     let ran: Ran = try await client.call("terminal.run", Run(
@@ -450,7 +450,7 @@ func localHerdrCoreAttach() async throws {
 @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: localCore.path)), .timeLimit(.minutes(1)))
 func localHerdrCoreLayoutDocument() async throws {
     let client = try await HerdrClient.connect(
-        over: try ProcessTransport(executable: localCore, environment: ["HC_SESSION": "herdrkit-test-layout"]))
+        over: try ProcessTransport(executable: localCore, environment: ["HC_SESSION": "hkt-layout"]))
     let subscription = try await client.subscribeEvents()
     let current = try await client.document(named: HerdrAppLayout.documentName)
 
@@ -495,7 +495,7 @@ func localHerdrCoreLayoutDocument() async throws {
 @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: localCore.path)), .timeLimit(.minutes(1)))
 func localHerdrCoreRunKillRemove() async throws {
     let client = try await HerdrClient.connect(
-        over: try ProcessTransport(executable: localCore, environment: ["HC_SESSION": "herdrkit-test-run"]))
+        over: try ProcessTransport(executable: localCore, environment: ["HC_SESSION": "hkt-run"]))
     _ = try await client.templates()  // whatever this machine has; must decode
 
     let shell = try await client.run(RunRequest(cwd: "/tmp", name: "herdrkit-shell", labels: ["herdr.space": "sp1"], keep: true))

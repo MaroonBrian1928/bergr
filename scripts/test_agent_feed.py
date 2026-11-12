@@ -472,6 +472,38 @@ class HintLookup(Base):
         ns["descendants"] = lambda pid: [pid]
         self.assertEqual(ns["Claude"]().locate(), other)
 
+    def test_claude_clear_before_new_transcript_exists(self):
+        project = os.path.join(self.home, ".claude", "projects", "-work")
+        old = os.path.join(project, "old.jsonl")
+        write_jsonl(old, [{}])
+        meta = os.path.join(self.home, ".claude", "sessions", "4242.json")
+        write_jsonl(meta, [{"sessionId": "old", "cwd": "/work"}])
+        ns = load("claude", self.home, pid="4242", hint="old")
+        ns["descendants"] = lambda pid: [pid]
+        source = ns["Claude"]()
+        self.assertEqual(source.locate(), old)
+        write_jsonl(meta, [{"sessionId": "new", "cwd": "/work"}])
+        new = os.path.join(project, "new.jsonl")
+        self.assertFalse(os.path.exists(new))
+        self.assertEqual(source.locate(), new)
+        # Reconnecting with the old session hint still follows the new empty session.
+        self.assertEqual(ns["Claude"]().locate(), new)
+        self.assertEqual(ns["Tail"](new).lines(), [])
+        events = []
+        ns["emit"] = events.append
+        ns["refresh_models"] = lambda: None
+        class Done(Exception):
+            pass
+        def stop():
+            raise Done()
+        ns["flush"] = stop
+        with self.assertRaises(Done):
+            ns["follow_jsonl"](source)
+        self.assertIn({"t": "reset", "agent": "claude", "session": "new.jsonl"}, events)
+        self.assertIn({"t": "ping"}, events)
+        write_jsonl(new, [{"type": "user", "message": {"content": "hello"}}])
+        self.assertEqual(source.locate(), new)
+
     def test_claude_no_hint_stale_file_not_found(self):
         self.old(os.path.join(self.home, ".claude", "projects", "-work", "abc-123.jsonl"))
         ns = load("claude", self.home)

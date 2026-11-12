@@ -719,7 +719,15 @@ struct ChatView: View {
         .task(id: replyKey) {
             // Once per assistant message, when its turn has finished (see `ReplySuggestions`).
             guard let last = feed.items.last, case .assistant(let text, _) = last.kind else { return }
-            await ReplySuggestions.shared.request(messageID: last.id, text: text, working: state == "working")
+            let context = feed.items.dropLast().reversed().lazy.compactMap { item -> String? in
+                switch item.kind {
+                case .user(let text): return "User: " + OnDeviceText.truncate(text, to: 700)
+                case .assistant(let text, _): return "Agent: " + OnDeviceText.truncate(text, to: 700)
+                default: return nil
+                }
+            }.prefix(6).reversed().joined(separator: "\n")
+            await ReplySuggestions.shared.request(messageID: last.id, text: text,
+                                                   working: state == "working", context: context)
         }
         .frame(maxWidth: Self.readableWidth)
         .frame(maxWidth: .infinity)
@@ -1446,7 +1454,8 @@ struct ChatView: View {
                 while ContinuousClock.now < live, model.phase != .live {
                     try? await Task.sleep(for: .milliseconds(100))
                 }
-            })
+            },
+            conversationID: { feed.conversationID })
         return outbox
     }
 

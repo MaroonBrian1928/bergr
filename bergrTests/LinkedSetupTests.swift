@@ -3,11 +3,11 @@ import Testing
 
 struct LinkedSetupTests {
     @Test func readsUserAddressAndKey() {
-        #expect(LinkedSetup.parse("brian\n192.168.1.50\nkey-ok\n") == .init(user: "brian", address: "192.168.1.50", keyAdded: true))
+        #expect(LinkedSetup.parse("demo\n192.168.1.50\nkey-ok\n") == .init(user: "demo", address: "192.168.1.50", keyAdded: true))
     }
 
     @Test func missingPartsStayNil() {
-        #expect(LinkedSetup.parse("brian\n\n") == .init(user: "brian", address: nil, keyAdded: false))
+        #expect(LinkedSetup.parse("demo\n\n") == .init(user: "demo", address: nil, keyAdded: false))
     }
 
     @Test func aliasGivesWayToTheFoundAddress() {

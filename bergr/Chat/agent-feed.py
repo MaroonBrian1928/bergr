@@ -513,6 +513,8 @@ class SubTrack:
 
 
 class Claude:
+    project = None
+
     def locate(self):
         base = os.path.join(HOME, ".claude")
         meta = None
@@ -521,11 +523,13 @@ class Claude:
             if os.path.exists(f):
                 meta = f
                 break
-        if meta is None and HINT:
+        if HINT:
             # A resumed session: its file can predate this process, so no fresh() here.
             found = glob.glob(os.path.join(base, "projects", "*", f"{HINT}.jsonl"))
             if found:
-                return found[0]
+                self.project = os.path.dirname(found[0])
+                if meta is None:
+                    return found[0]
         if meta is None:
             same = []
             for f in glob.glob(os.path.join(base, "sessions", "*.json")):
@@ -544,7 +548,15 @@ class Claude:
         except Exception:
             return None
         found = [f for f in glob.glob(os.path.join(base, "projects", "*", f"{sid}.jsonl")) if fresh(f)]
-        return found[0] if found else None
+        if found:
+            self.project = os.path.dirname(found[0])
+            return found[0]
+        # /clear updates the process metadata before the new transcript exists. Follow
+        # that session immediately, so the app drops the previous conversation even
+        # if no message has been sent in the new one yet.
+        if sid and self.project:
+            return os.path.join(self.project, f"{sid}.jsonl")
+        return None
 
     results = None  # tool_use id -> {"error", "async"} of the parent's finished tool calls
 
@@ -1561,7 +1573,8 @@ def follow_jsonl(source):
                 sent_cursor, sent_at = (name, CURSOR[1]), time.time()
                 INTRO[0] = True  # the app still has its commands and models
             else:
-                tail.start_backlog(BACKLOG * 3)
+                if size >= 0:
+                    tail.start_backlog(BACKLOG * 3)
                 emit({"t": "reset", "agent": AGENT, "session": name})
                 STATE["need_ping"] = True
                 MODELS_SEEN[2] = 300  # A new conversation: look at the model list again.
