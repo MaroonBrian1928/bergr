@@ -24,8 +24,8 @@ struct ChangesSheet: View {
                 case .loading:
                     ProgressView("Reading changes…").frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .notARepo:
-                    ContentUnavailableView("Not a git repository", systemImage: "folder.badge.questionmark",
-                                           description: Text(model.folder))
+                    ContentUnavailableView("No git repository here", systemImage: "folder.badge.questionmark",
+                                           description: Text("The agent works in \(model.folder), which isn't inside a git repository, so there are no changes to show."))
                 case .failed(let message):
                     ContentUnavailableView("Couldn't read changes", systemImage: "exclamationmark.triangle",
                                            description: Text(message))
@@ -34,9 +34,7 @@ struct ChangesSheet: View {
                 }
             }
             .navigationTitle("Changes")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
+            .inlineNavigationTitle()
             .navigationDestination(for: String.self) { FileDiffView(model: model, path: $0) }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }

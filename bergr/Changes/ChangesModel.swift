@@ -61,8 +61,11 @@ final class ChangesModel {
             summaryTask = Task { await self.writeSummary() }
         } catch {
             let err = Self.stderr(of: error)
-            phase = err.lowercased().contains("not a git repository") ? .notARepo
-                : .failed(err.isEmpty ? error.localizedDescription : err)
+            // git exits 128 on its fatal errors (not a repository, no such folder, a repo owned by
+            // another user); over SSH its message may not come back, only the code.
+            let notRepo = err.lowercased().contains("not a git repository")
+                || error.localizedDescription.contains("exited with 128")
+            phase = notRepo ? .notARepo : .failed(err.isEmpty ? error.localizedDescription : err)
             return
         }
         if !expensive {

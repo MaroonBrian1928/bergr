@@ -164,7 +164,8 @@ extension View {
         #if os(iOS)
         navigationBarTitleDisplayMode(.inline)
         #else
-        self
+        // In a Mac sheet the default title sits in a tall, empty toolbar band above the content.
+        toolbarTitleDisplayMode(.inline)
         #endif
     }
 
