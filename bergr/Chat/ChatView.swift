@@ -1899,44 +1899,8 @@ struct WorkingRow: View {
     }
 
     var body: some View {
-        TimelineView(.periodic(from: since, by: 1)) { context in
-            let seconds = max(0, Int(context.date.timeIntervalSince(since)))
-            // A new phrase every 3 s, in an order of its own for each run.
-            let step = seconds / 3
-            let seed = Int(since.timeIntervalSince1970)
-            let phrases = pool.phrases.isEmpty ? Self.fitting(width) : pool.phrases
-            let verb = pool.phrases.isEmpty
-                ? phrases[Self.order(phrases.count, seed: seed)[step % phrases.count]]
-                : phrases[pool.order[step % phrases.count]]
-            // The picture stays twice as long as a phrase, long enough for its motion to read.
-            let markStep = seconds / 6
-            let markOrder = pool.markOrder.isEmpty ? Self.order(WorkingMark.count, seed: seed &+ 1) : pool.markOrder
-            let markIndex = markOrder[markStep % WorkingMark.count]
-            let previousMark = markStep > 0 ? markOrder[(markStep - 1) % WorkingMark.count] : nil
-            VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 8) {
-                WorkingMark(index: markIndex, previous: previousMark,
-                            changedAt: since.addingTimeInterval(Double(markStep * 6)), color: palette.accent)
-                HStack(spacing: 0) {
-                    // One phrase gives way to the next: a short crossfade with a small rise
-                    // (a word rolling letter by letter, like a number, read as a glitch).
-                    ZStack(alignment: .leading) {
-                        Text(verb + "…")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(palette.accent)
-                            .shimmer(palette: palette)
-                            .id(verb)
-                            .transition(reduceMotion ? .opacity : .phraseChange)
-                    }
-                    .animation(.smooth(duration: 0.28), value: verb)
-                    Text(" · " + Self.elapsed(seconds))
-                        .font(.footnote)
-                        .monospacedDigit()
-                        .foregroundStyle(palette.secondary)
-                }
-                .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 2) {
+            WorkingLine(since: since, pool: pool, width: width, palette: palette)
             // What herdr-core says the agent is doing, on a line of its own under the phrase:
             // sharing the phrase's line, a long phrase squeezed it to "…" and it seemed missing.
             if let detail, !detail.isEmpty {
@@ -1946,7 +1910,6 @@ struct WorkingRow: View {
                     .lineLimit(2)
                     .padding(.leading, 28)
                     .frame(maxWidth: .infinity, alignment: .leading)
-            }
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0; refreshPool() }
@@ -1968,6 +1931,58 @@ struct WorkingRow: View {
 
     static func elapsed(_ seconds: Int) -> String {
         seconds < 60 ? "\(seconds)s" : "\(seconds / 60)m \(seconds % 60)s"
+    }
+}
+
+/// The line of the working row that changes: the mark, the phrase and the elapsed time. Its own
+/// timeline ticks each second, so only this line is evaluated again, not the whole row.
+private struct WorkingLine: View {
+    let since: Date
+    let pool: WorkingPool
+    let width: CGFloat
+    let palette: ChatPalette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.periodic(from: since, by: 1)) { context in
+            let seconds = max(0, Int(context.date.timeIntervalSince(since)))
+            // A new phrase every 3 s, in an order of its own for each run.
+            let step = seconds / 3
+            let seed = Int(since.timeIntervalSince1970)
+            let phrases = pool.phrases.isEmpty ? WorkingRow.fitting(width) : pool.phrases
+            let verb = pool.phrases.isEmpty
+                ? phrases[WorkingRow.order(phrases.count, seed: seed)[step % phrases.count]]
+                : phrases[pool.order[step % phrases.count]]
+            // The picture stays as long as its keyframes run (see `WorkingMark.pictureDuration`).
+            let picture = Int(WorkingMark.pictureDuration)
+            let markStep = seconds / picture
+            let markOrder = pool.markOrder.isEmpty ? WorkingRow.order(WorkingMark.count, seed: seed &+ 1) : pool.markOrder
+            let markIndex = markOrder[markStep % WorkingMark.count]
+            let previousMark = markStep > 0 ? markOrder[(markStep - 1) % WorkingMark.count] : nil
+            HStack(spacing: 8) {
+                WorkingMark(index: markIndex, previous: previousMark,
+                            changedAt: since.addingTimeInterval(Double(markStep * picture)), color: palette.accent)
+                HStack(spacing: 0) {
+                    // One phrase gives way to the next: a short crossfade with a small rise
+                    // (a word rolling letter by letter, like a number, read as a glitch).
+                    ZStack(alignment: .leading) {
+                        Text(verb + "…")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(palette.accent)
+                            .shimmer(palette: palette)
+                            .id(verb)
+                            .transition(reduceMotion ? .opacity : .phraseChange)
+                    }
+                    .animation(.smooth(duration: 0.28), value: verb)
+                    Text(" · " + WorkingRow.elapsed(seconds))
+                        .font(.footnote)
+                        .monospacedDigit()
+                        .foregroundStyle(palette.secondary)
+                }
+                .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 

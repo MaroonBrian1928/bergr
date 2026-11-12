@@ -22,6 +22,8 @@ struct WorkingMark: View {
     static let count = Pattern.allCases.count
     /// How long one picture takes to become the next: slow enough to watch it happen.
     static let morphDuration = 1.1
+    /// How long one picture stays on screen before the next (the mark's keyframes cover it).
+    static let pictureDuration = 6.0
 
     var body: some View {
         Group {
@@ -72,10 +74,9 @@ struct WorkingMark: View {
 
 #if os(macOS)
 extension WorkingMark {
-    /// On the Mac the mark is a plain view that draws itself 30 times a second. As a `TimelineView`
-    /// it had SwiftUI draw the whole window's view tree again on every frame the display shows,
-    /// for as long as an agent worked: a quarter of the main thread, which scrolling and live
-    /// updates then had to share.
+    /// On the Mac the mark is a few layers whose pictures are Core Animation keyframes, so the
+    /// window server moves it and the app does nothing per frame. As a `TimelineView` it had SwiftUI
+    /// draw the whole window's view tree again on every frame, for as long as an agent worked.
     private var layer: some View {
         MarkLayer(index: index, previous: previous, changedAt: changedAt, color: color, reduceMotion: reduceMotion)
     }
@@ -96,28 +97,66 @@ private struct MarkLayer: NSViewRepresentable {
         view.changedAt = changedAt
         view.color = color.resolve(in: context.environment).cgColor
         view.reduceMotion = reduceMotion
-        view.needsDisplay = true
-        view.schedule()
+        view.sync()
     }
 }
 
+/// The mark as eight stroke layers. Each picture is sampled over its time on screen (60 a second)
+/// into keyframes for each stroke's path, width and opacity: the same frames the Canvas draws on
+/// iOS, played by Core Animation. A change of picture, colour or size builds them again.
 final class MarkView: NSView {
     var index = 0
     var previous: Int?
     var changedAt = Date.distantPast
-    var color = CGColor(gray: 0, alpha: 1)
+    var color = CGColor(gray: 0, alpha: 1) {
+        didSet { for l in strokeLayers { l.strokeColor = color } }
+    }
     var reduceMotion = false
-    private var timer: Timer?
+    private let strokeLayers: [CAShapeLayer] = (0..<Stroke.count).map { _ in
+        let l = CAShapeLayer()
+        l.fillColor = nil
+        l.lineCap = .round
+        return l
+    }
+    /// What the current animations were built for; nil when they are off (not on screen).
+    private var built: Built?
     private var observers: [NSObjectProtocol] = []
 
-    // Top-left origin, like the canvas the pictures were made for.
-    override var isFlipped: Bool { true }
+    private struct Built: Equatable {
+        var index: Int
+        var previous: Int?
+        var changedAt: Date
+        var size: CGSize
+        var reduceMotion: Bool
+    }
+
+    private static let sampleRate = 60.0
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        for l in strokeLayers { layer?.addSublayer(l) }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        // Without the implicit animation a layer's frame gets.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for l in strokeLayers { l.frame = bounds }
+        CATransaction.commit()
+        sync()
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         observeVisibility()
-        schedule()
+        sync()
     }
 
     /// Visible on screen: its window is not occluded or minimized, and it is scrolled into view.
@@ -126,7 +165,7 @@ final class MarkView: NSView {
         return !visibleRect.isEmpty
     }
 
-    /// Re-checks `schedule()` when the window's occlusion or the enclosing scroll position changes.
+    /// Re-checks `sync()` when the window's occlusion or the enclosing scroll position changes.
     private func observeVisibility() {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers = []
@@ -134,42 +173,97 @@ final class MarkView: NSView {
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification,
                                             object: window, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.schedule() }
+            MainActor.assumeIsolated { self?.sync() }
         })
         if let clip = enclosingScrollView?.contentView {
             clip.postsBoundsChangedNotifications = true
             observers.append(center.addObserver(forName: NSView.boundsDidChangeNotification,
                                                 object: clip, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.schedule() }
+                MainActor.assumeIsolated { self?.sync() }
             })
         }
     }
 
-    /// Redraws 30 times a second while on screen (and not with Reduce Motion: then it stands still).
-    /// Off screen the timer is stopped, so nothing wakes up for it.
-    func schedule() {
-        let wanted = window != nil && !reduceMotion && isOnScreen
-        if wanted, timer == nil {
-            let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.needsDisplay = true }
+    /// Brings the animations up to date. Off screen they are removed, so nothing runs for the mark.
+    /// On screen they run from the picture's start, so the mark is at the same moment of its
+    /// picture whenever it appears; with Reduce Motion it stands still on the picture.
+    func sync() {
+        guard window != nil, isOnScreen else {
+            for l in strokeLayers { l.removeAllAnimations() }
+            built = nil
+            return
+        }
+        let now = Built(index: index, previous: previous, changedAt: changedAt, size: bounds.size,
+                        reduceMotion: reduceMotion)
+        if now == built, reduceMotion || strokeLayers[0].animation(forKey: "path") != nil { return }
+        built = now
+        for l in strokeLayers { l.removeAllAnimations() }
+        guard bounds.width > 0 else { return }
+        if reduceMotion {
+            let strokes = WorkingMark.strokes(index: index, previous: nil, changedAt: .distantPast, at: .now,
+                                              reduceMotion: true)
+            for (l, s) in zip(strokeLayers, strokes) {
+                l.path = path(for: s)
+                l.lineWidth = max(1, s.width * radius)
+                l.opacity = Float(s.opacity)
             }
-            // Also while the list scrolls or a menu is open.
-            RunLoop.main.add(timer, forMode: .common)
-            self.timer = timer
-        } else if !wanted, let timer {
-            timer.invalidate()
-            self.timer = nil
+            return
+        }
+        // Start at the picture's change, unless it is long over (then from now, with no morph).
+        let duration = WorkingMark.pictureDuration
+        let start = Date.now.timeIntervalSince(changedAt) < duration ? changedAt : .now
+        let count = Int(duration * Self.sampleRate)
+        var paths = Array(repeating: [CGPath](), count: Stroke.count)
+        var widths = Array(repeating: [NSNumber](), count: Stroke.count)
+        var opacities = Array(repeating: [NSNumber](), count: Stroke.count)
+        for k in 0...count {
+            let date = start.addingTimeInterval(Double(k) / Self.sampleRate)
+            let strokes = WorkingMark.strokes(index: index, previous: previous, changedAt: changedAt, at: date,
+                                              reduceMotion: false)
+            for (i, s) in strokes.enumerated() {
+                paths[i].append(path(for: s))
+                widths[i].append(NSNumber(value: Double(max(1, s.width * radius))))
+                opacities[i].append(NSNumber(value: Double(s.opacity)))
+            }
+        }
+        let times = (0...count).map { NSNumber(value: Double($0) / Double(count)) }
+        // The animations' local time starts at the picture's start, so now is that moment in it.
+        let offset = max(0, Date.now.timeIntervalSince(start))
+        for (i, l) in strokeLayers.enumerated() {
+            l.path = paths[i].last
+            l.lineWidth = CGFloat(widths[i].last?.doubleValue ?? 1)
+            l.opacity = Float(opacities[i].last?.doubleValue ?? 1)
+            let keys: [(String, [Any])] = [("path", paths[i]), ("lineWidth", widths[i]), ("opacity", opacities[i])]
+            for (key, values) in keys {
+                let a = CAKeyframeAnimation(keyPath: key)
+                a.values = values
+                a.keyTimes = times
+                a.calculationMode = .linear
+                a.duration = duration
+                a.timeOffset = offset
+                a.fillMode = .forwards
+                a.isRemovedOnCompletion = false
+                l.add(a, forKey: key)
+            }
         }
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
-        let r = min(bounds.width, bounds.height) / 2
+    private var radius: CGFloat { min(bounds.width, bounds.height) / 2 }
+
+    /// The stroke as a line in the layer's coordinates (y up). The picture is laid out top-left down,
+    /// as the Canvas on iOS draws it, so each y is flipped here.
+    private func path(for s: Stroke) -> CGPath {
+        let r = radius
         let center = CGPoint(x: bounds.midX, y: bounds.midY)
-        for s in WorkingMark.strokes(index: index, previous: previous, changedAt: changedAt, at: .now,
-                                     reduceMotion: reduceMotion) {
-            s.draw(in: context, center: center, radius: r, color: color)
+        let half = s.length / 2
+        let dx = cos(s.angle) * half, dy = sin(s.angle) * half
+        func point(_ x: Double, _ y: Double) -> CGPoint {
+            CGPoint(x: center.x + x * r, y: bounds.height - (center.y + y * r))
         }
+        let p = CGMutablePath()
+        p.move(to: point(s.x - dx, s.y - dy))
+        p.addLine(to: point(s.x + dx, s.y + dy))
+        return p
     }
 }
 #endif
@@ -249,19 +343,6 @@ struct Stroke {
         path.addLine(to: CGPoint(x: center.x + (x + dx) * r, y: center.y + (y + dy) * r))
         gc.stroke(path, with: .color(color.opacity(opacity)),
                   style: StrokeStyle(lineWidth: max(1, width * r), lineCap: .round))
-    }
-
-    /// The same stroke, in a Core Graphics context.
-    func draw(in context: CGContext, center: CGPoint, radius r: CGFloat, color: CGColor) {
-        guard opacity > 0.01 else { return }
-        let half = length / 2
-        let dx = cos(angle) * half, dy = sin(angle) * half
-        context.setLineCap(.round)
-        context.setLineWidth(max(1, width * r))
-        context.setStrokeColor(color.copy(alpha: color.alpha * opacity) ?? color)
-        context.move(to: CGPoint(x: center.x + (x - dx) * r, y: center.y + (y - dy) * r))
-        context.addLine(to: CGPoint(x: center.x + (x + dx) * r, y: center.y + (y + dy) * r))
-        context.strokePath()
     }
 }
 
