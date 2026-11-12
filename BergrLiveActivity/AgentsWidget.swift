@@ -31,7 +31,7 @@ struct AgentsWidget: Widget {
         }
         .configurationDisplayName("Agents")
         .description("Which agents need you, are working, or are done.")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        .supportedFamilies([.systemSmall, .systemMedium, .accessoryCircular, .accessoryRectangular, .accessoryInline])
     }
 }
 
@@ -40,7 +40,32 @@ private struct AgentsWidgetView: View {
     @Environment(\.widgetFamily) private var family
 
     var body: some View {
-        if family == .systemSmall {
+        if family == .accessoryCircular {
+            Gauge(value: 0, in: 0...1) {
+                Image(systemName: "exclamationmark.bubble.fill")
+            } currentValueLabel: {
+                Text("\(snapshot.needsYou)").font(.title3.bold().monospacedDigit())
+            }
+            .gaugeStyle(.accessoryCircularCapacity)
+            .accessibilityLabel("\(snapshot.needsYou) agents need you")
+        } else if family == .accessoryRectangular {
+            let rows = AgentWidgetContent.activeRows(snapshot, limit: 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(snapshot.needsYou > 0 ? "\(snapshot.needsYou) need you" : "Agents")
+                    .font(.headline).widgetAccentable()
+                if rows.isEmpty {
+                    Text("Nothing needs you").font(.caption)
+                }
+                ForEach(rows, id: \.url) { row in
+                    Link(destination: row.url) {
+                        Text("\(row.title) · \(row.status.isEmpty ? row.machine : row.status)")
+                            .font(.caption).lineLimit(1)
+                    }
+                }
+            }
+        } else if family == .accessoryInline {
+            Text("Bergr: \(AgentWidgetContent.inlineText(snapshot))")
+        } else if family == .systemSmall {
             VStack(alignment: .leading, spacing: 8) {
                 counts
                 Spacer(minLength: 0)

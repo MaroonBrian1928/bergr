@@ -78,6 +78,21 @@ enum NewSession {
     }
 }
 
+/// Values an intent ("Start session") fills New Session in with. The user still presses Start.
+struct NewSessionPrefill: Equatable {
+    var machine: String
+    var agent: ChatAgent?
+    var folder: String
+    var message: String
+
+    init(machine: String, agent: ChatAgent?, folder: String, message: String) {
+        self.machine = machine
+        self.agent = agent
+        self.folder = folder
+        self.message = message
+    }
+}
+
 /// Starts Claude Code, Codex or Antigravity in a folder on one of the machines, then opens it.
 struct NewSessionView: View {
     @Environment(HostStore.self) private var hosts
@@ -85,6 +100,8 @@ struct NewSessionView: View {
     let sessions: SessionStore
     /// The machine to start on, when started from one machine's list.
     var preferredHost: Host.ID?
+    /// Filled in from an intent; the machine falls back to the default when it isn't connected.
+    var prefill: NewSessionPrefill?
     /// Called with the new terminal, to open its chat.
     let onStarted: (_ host: Host.ID, _ address: String) -> Void
 
@@ -164,6 +181,15 @@ struct NewSessionView: View {
                 }
             }
             .onAppear {
+                if let prefill {
+                    // The agent is kept once the machine's agents are found (see locate).
+                    if let match = machines.first(where: { $0.name.caseInsensitiveCompare(prefill.machine) == .orderedSame }) {
+                        hostID = match.id
+                    }
+                    agent = prefill.agent
+                    folder = prefill.folder
+                    message = prefill.message
+                }
                 if hostID == nil {
                     hostID = machines.first { $0.id == preferredHost }?.id ?? machines.first?.id
                 }

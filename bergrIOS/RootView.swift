@@ -18,6 +18,8 @@ struct RootView: View {
     @State private var compactColumn = NavigationSplitViewColumn.sidebar
     @State private var showingSettings = false
     @State private var showingNewSession = false
+    /// Set by an intent ("Start session") for the New Session sheet it opens.
+    @State private var newSessionPrefill: NewSessionPrefill?
     /// A second conversation shown beside the open one (iPad, the unfolded Duo).
     @State private var beside: Pane?
     struct Pane: Hashable { let host: Host.ID; let address: String }
@@ -108,7 +110,7 @@ struct RootView: View {
                 }
             }
             .sheet(isPresented: $showingNewSession) {
-                NewSessionView(sessions: sessions) { host, address in open(host: host, address: address) }
+                NewSessionView(sessions: sessions, prefill: newSessionPrefill) { host, address in open(host: host, address: address) }
             }
             .sheet(isPresented: $showingSettings) {
                 SettingsSheet(addDemo: {}, sessions: sessions) { showingSettings = false }
@@ -191,6 +193,11 @@ struct RootView: View {
         .onChange(of: selectedHost.wrappedValue) {
             selectedTerminal = nil
         }
+        // Siri, Shortcuts or a control launched the app: the queued request is routed here.
+        .task { handleIntents() }
+        .onChange(of: showingNewSession) { _, showing in
+            if !showing { newSessionPrefill = nil }
+        }
         .onChange(of: hosts.hosts) { _, current in
             // Edited or deleted machines get a fresh session.
             for host in current where sessions.existing(host.id).map({ $0.host != host }) ?? false {
@@ -213,6 +220,7 @@ struct RootView: View {
                     keys.forgetUnlocked()
                 }
             case .active:
+                handleIntents()
                 KeepAlive.shared.appEnteredForeground()
                 if wasInBackground {
                     wasInBackground = false
@@ -249,6 +257,29 @@ extension RootView {
         let pane = Pane(host: host, address: address)
         if pane == Pane(host: selectedHost.wrappedValue ?? host, address: selectedTerminal ?? "") { return }
         withAnimation(.smooth(duration: 0.3)) { beside = pane }
+    }
+
+    /// Routes what App Intents queued (see `IntentQueue`): opens the agent's chat, with the text in
+    /// its reply draft for the existing reply path to send; or opens New Session prefilled.
+    private func handleIntents() {
+        for item in IntentQueue.take() {
+            switch item {
+            case .message(let host, let address, let text):
+                guard let id = UUID(uuidString: host) else { continue }
+                let key = "\(id.uuidString)|\(address)"
+                let kept = ReplyDrafts.text(for: key)
+                ReplyDrafts.set(kept.isEmpty ? text : kept + "\n" + text, for: key)
+                router.pending = (id, address)
+            case .newSession:
+                guard let prefill = NewSessionPrefill(item) else { continue }
+                newSessionPrefill = prefill
+                showingNewSession = true
+            case .openNeedsYou:
+                guard let row = AgentCatalog.needingYou(AgentsSnapshot.load()).first,
+                      let id = UUID(uuidString: row.host) else { continue }
+                router.pending = (id, row.address)
+            }
+        }
     }
 
     func open(host: Host.ID, address: String) {
