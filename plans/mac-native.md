@@ -102,8 +102,8 @@ phase; AGENTS.md already notes conditional keys only work at project level in th
 - a shared scheme `bergrMac`,
 - folder memberships (next section).
 
-**Bundle id: a separate one, `<prefix>.bergr.mac`** (`com.redacted.bergr.mac`, Debug `.mac.dev`).
-The iOS app is installable on Apple silicon Macs under `com.redacted.bergr` ("Designed for iPad",
+**Bundle id: a separate one, `<prefix>.bergr.mac`** (`com.example.bergr.mac`, Debug `.mac.dev`).
+The iOS app is installable on Apple silicon Macs under `com.example.bergr` ("Designed for iPad",
 what `just mac` installs today); the same id would make the two collide in LaunchServices, defaults,
 keychain and notification settings. A separate id also gives the relay a distinct APNs topic, and
 Developer ID needs its own App ID and profile anyway.
@@ -227,7 +227,7 @@ missing) is visible in the terminal itself; Bergr only reports launch failures.
 ### 2.7 Signing, notarization, DMG, Sparkle, Homebrew: `just mac-release`
 
 One-time, by the user (cannot be automated):
-1. App ID `com.redacted.bergr.mac` with Keychain Sharing (and Push Notifications if 2.8 option B).
+1. App ID `com.example.bergr.mac` with Keychain Sharing (and Push Notifications if 2.8 option B).
 2. A "Developer ID Application" certificate (or cloud-managed Developer ID signing, which needs the
    Account Holder or a specifically permitted Admin on the API key) and a Developer ID provisioning
    profile for that App ID.
@@ -277,7 +277,7 @@ cask "bergr" do
   depends_on macos: ">= :tahoe"
   depends_on arch: :arm64
   app "Bergr.app"
-  zap trash: ["~/Library/Preferences/com.redacted.bergr.mac.plist", "~/Library/Caches/com.redacted.bergr.mac"]
+  zap trash: ["~/Library/Preferences/com.example.bergr.mac.plist", "~/Library/Caches/com.example.bergr.mac"]
 end
 ```
 
@@ -300,7 +300,7 @@ registration from the Mac. The phone keeps getting pushes as today.
   `Contents/embedded.provisionprofile` (not `embedded.mobileprovision`);
 - **relay code: no change needed.** `relay/src/index.js` sends `apns-topic: reg.bundle_id` with the
   team's token-auth key, and an APNs `.p8` key covers every app of the team, macOS included. Only
-  configuration: if the `ALLOWED_BUNDLE_IDS` variable is set, add `com.redacted.bergr.mac` and
+  configuration: if the `ALLOWED_BUNDLE_IDS` variable is set, add `com.example.bergr.mac` and
   `.mac.dev`. The Live Activity routes (`/v1/activity*`) are simply never called by the Mac;
 - the encrypted alert text (`e`, decrypted by `BergrNotificationService`) needs a **macOS notification
   service extension**. App extensions on macOS must be sandboxed, so the extension and the unsandboxed
@@ -414,7 +414,7 @@ paused; C may find that `ChatView` needs more seams than 0 provided.
 
 ## 4. Decisions for the user
 
-1. **Bundle id**: separate `com.redacted.bergr.mac` (recommended) or the iOS id. And: once the native
+1. **Bundle id**: separate `com.example.bergr.mac` (recommended) or the iOS id. And: once the native
    app ships, switch off "available on Mac" for the iOS app in App Store Connect?
 2. **Target**: second target `bergrMac` with `bergrIOS/` and `bergrMac/` folders (recommended, moves
    about 14 files) or `#if os(iOS)` around whole files in place (no moves, noisier files).
@@ -442,7 +442,7 @@ paused; C may find that `ChatView` needs more seams than 0 provided.
 
 ## Decisions (user, 2026-11-10)
 
-All recommendations accepted: separate bundle id `com.redacted.bergr.mac`; second target with
+All recommendations accepted: separate bundle id `com.example.bergr.mac`; second target with
 `bergrIOS/` and `bergrMac/` folders beside shared `bergr/`; local notifications only in v1; Secure
 Enclave keys plus import from `~/.ssh` (ssh-agent later); a "This Mac" machine in v1; terminal attach
 uses the system `ssh` (document it, add copy-public-key and test buttons); launch through a generated

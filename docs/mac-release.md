@@ -5,7 +5,7 @@ Everything below the one-time steps is a recipe line you run yourself; nothing h
 
 ## One-time steps (you, in this order)
 
-1. **App ID.** In the developer portal, create `com.redacted.bergr.mac` with Keychain Sharing.
+1. **App ID.** In the developer portal, create `com.example.bergr.mac` with Keychain Sharing.
 2. **Developer ID Application certificate.** Create it in Xcode (Settings, Accounts, Manage Certificates) or the
    portal, so it sits in your login keychain (`security find-identity -v -p codesigning` lists it). Then a
    Developer ID provisioning profile for the App ID, or cloud-managed Developer ID signing, which needs the

@@ -17,7 +17,8 @@ done
 
 project=bergr.xcodeproj/project.xcproj
 out=.build/mac
-bundle_prefix="${BERGR_BUNDLE_ID_PREFIX:-com.redacted}"
+project_prefix="$(sed -n 's/.*"BERGR_BUNDLE_ID_PREFIX": "\([^"]*\)".*/\1/p' "$project" | head -1)"
+bundle_prefix="${BERGR_BUNDLE_ID_PREFIX:-$project_prefix}"
 team="${BERGR_TEAM:-DW336Y9ABR}"
 version="$(grep -o '"MARKETING_VERSION": "[^"]*"' "$project" | sort -u | head -1 | cut -d'"' -f4)"
 tag="mac-v$version"
@@ -101,7 +102,12 @@ else
 fi
 echo "+ fill scripts/homebrew/bergr.rb -> $out/bergr.rb (version $version, sha256 $sha)"
 if [ "$dry" -eq 0 ]; then
-    sed -e "s/@VERSION@/$version/" -e "s/@SHA256@/$sha/" scripts/homebrew/bergr.rb > "$out/bergr.rb"
+    bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$out/export/Bergr.app/Contents/Info.plist")"
+    VERSION="$version" SHA256="$sha" BUNDLE_ID="$bundle_id" ruby -e '
+      text = File.read("scripts/homebrew/bergr.rb")
+      %w[VERSION SHA256 BUNDLE_ID].each { |name| text = text.gsub("@#{name}@", ENV.fetch(name)) }
+      File.write(ARGV.fetch(0), text)
+    ' "$out/bergr.rb"
 fi
 if [ "$upload" -eq 1 ]; then
     run gh release create "$tag" "$dmg" "$out/dist/appcast.xml" --repo "$repo" --title "Bergr $version (Mac)" \

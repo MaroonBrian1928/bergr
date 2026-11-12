@@ -16,7 +16,7 @@ cask "bergr" do
   app "Bergr.app"
 
   zap trash: [
-    "~/Library/Preferences/com.redacted.bergr.mac.plist",
-    "~/Library/Caches/com.redacted.bergr.mac",
+    "~/Library/Preferences/@BUNDLE_ID@.plist",
+    "~/Library/Caches/@BUNDLE_ID@",
   ]
 end
