@@ -81,6 +81,8 @@ final class ChatFeed {
         /// An image still on its way (a conversation's history sends the text first): its size,
         /// when the header gave it, so the placeholder takes the image's place without a jump.
         case imageLoading(width: Double?, height: Double?, fromUser: Bool)
+        /// An image the helper holds back on an expensive network: tap to fetch it.
+        case imageOnDemand(size: Int, width: Double?, height: Double?, fromUser: Bool, fetching: Bool)
         /// An answer given from the chat to an agent's question or approval prompt. Agents don't
         /// write these to their files, so the app keeps them.
         case decision(question: String, answer: String)
@@ -233,12 +235,28 @@ final class ChatFeed {
     private(set) var phase: Phase = .loading
     private var index: [String: Int] = [:]
 
+    /// Where the helper's reading stood in this conversation's file; handed back on a relaunch so
+    /// it can resume instead of sending the backlog again.
+    private(set) var cursor: ChatHelperLaunch.Cursor?
+    @ObservationIgnored private var activePipe: ExecPipe?
+    /// Whether the network is expensive or constrained (cellular, Low Data Mode); tests override it.
+    @ObservationIgnored var isExpensive: () -> Bool = { NetworkWatcher.shared.isExpensive }
+
+    /// Asks the helper for an image it held back; it arrives as an ordinary image event.
+    func requestImage(id: String) {
+        guard let at = index[id], case .imageOnDemand(let size, let w, let h, let user, false) = working[at].kind,
+              let pipe = activePipe else { return }
+        working[at].kind = .imageOnDemand(size: size, width: w, height: h, fromUser: user, fetching: true)
+        let line = (try? JSONSerialization.data(withJSONObject: ["t": "image", "id": id], options: [.withoutEscapingSlashes])) ?? Data()
+        Task { try? await pipe.write(line + Data("\n".utf8)) }
+    }
+
     private static let script: String? = Bundle.main.url(forResource: "agent-feed", withExtension: "py")
         .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
 
     /// Follows the conversation until cancelled, reconnecting when the line drops.
     func run(session: HostSession, agent: ChatAgent, pid: Int32, cwd: String, sessionHint: String? = nil) async {
-        guard let script = Self.script else {
+        guard let script = Self.script, ChatHelperLaunch.stage2Source != nil else {
             phase = .failed("The chat helper is missing from the app.")
             return
         }
@@ -250,7 +268,8 @@ final class ChatFeed {
             let launch: ChatHelperLaunch.Plan
             do {
                 launch = try ChatHelperLaunch.make(script: script, agent: agent.rawValue, pid: pid,
-                    cwd: cwd, sessionHint: conversationID ?? sessionHint, windows: session.isWindowsHost)
+                    cwd: cwd, sessionHint: conversationID ?? sessionHint, windows: session.isWindowsHost,
+                    expensive: isExpensive(), cursor: phase == .live && caughtUp ? cursor : nil)
             } catch {
                 phase = .failed(error.localizedDescription)
                 return
@@ -263,8 +282,10 @@ final class ChatFeed {
                 trace?.mark("opened")
                 try await pipe.write(launch.input)
                 trace?.mark("sent")
-                // The helper pings every second. A channel that died quietly (the phone or the
-                // machine slept) sends nothing and never errors, so without pings for a while,
+                activePipe = pipe
+                defer { activePipe = nil }
+                // The helper pings after 15 s of silence. A channel that died quietly (the phone or the
+                // machine slept) sends nothing and never errors, so without a ping for a while,
                 // close it and follow the conversation again; otherwise the chat and its
                 // sub-agent count freeze at the last thing heard.
                 lastHeard = .now
@@ -281,7 +302,7 @@ final class ChatFeed {
                 }
                 defer { watchdog.cancel() }
                 try await withTaskCancellationHandler {
-                    try await read(pipe)
+                    try await read(pipe, launch: launch)
                 } onCancel: {
                     pipe.close()
                 }
@@ -336,13 +357,12 @@ final class ChatFeed {
         }
     }
 
-    /// When the helper was last heard from (it pings every second).
+    /// When the helper was last heard from (it pings after 15 s of silence).
     @ObservationIgnored private var lastHeard = Date.now
     @ObservationIgnored private var stalled = false
-    static let stallAfter: TimeInterval = 15
+    static let stallAfter: TimeInterval = 45
 
-    private func read(_ pipe: ExecPipe) async throws {
-        var pings = 0
+    func read(_ pipe: ExecPipe, launch: ChatHelperLaunch.Plan) async throws {
         var sawConversation = false
         // Splitting, JSON, base64 and markdown happen off the main actor; chunks are awaited one
         // at a time, so events keep their order.
@@ -357,8 +377,33 @@ final class ChatFeed {
                 let event = parsed.event
                 let type = parsed.type
                 switch type {
+                case "need-source":
+                    // Stage 2 has no cached helper for this version: send it once.
+                    try await pipe.write(launch.sourceLine)
+                case "none":
+                    if !sawConversation { phase = .noConversation }
+                case "cursor":
+                    if let session = event["session"] as? String, let offset = (event["offset"] as? NSNumber)?.intValue {
+                        cursor = .init(session: session, offset: offset)
+                    }
+                case "resume":
+                    // Same conversation, only what follows the cursor is sent: what's on screen
+                    // stays exactly as it is (no re-read, no swap).
+                    sawConversation = true
+                    phase = .live
+                    if !caughtUp {
+                        caughtUp = true
+                        items = building
+                        building = []
+                    }
+                case "imagegone":
+                    if let id = event["id"] as? String, let at = index[id],
+                       case .imageOnDemand(let size, let w, let h, let user, _) = working[at].kind {
+                        working[at].kind = .imageOnDemand(size: size, width: w, height: h, fromUser: user, fetching: false)
+                    }
                 case "reset":
                     sawConversation = true
+                    cursor = nil
                     // The transcript's file name: the conversation's id, for `claude --resume`.
                     let id = (event["session"] as? String).map {
                         $0.hasSuffix(".jsonl") ? String($0.dropLast(6)) : $0
@@ -423,8 +468,6 @@ final class ChatFeed {
                         trace?.mark("caught up")
                         Task { @MainActor [trace] in trace?.mark("next main turn") }
                     }
-                    pings += 1
-                    if !sawConversation && pings >= 2 { phase = .noConversation }
                 case "error":
                     phase = .failed(event["text"] as? String ?? "The chat helper failed.")
                 default:
@@ -539,6 +582,11 @@ final class ChatFeed {
             if let b64 = event["data"] as? String {
                 guard let data = prepared?.imageData ?? Data(base64Encoded: b64) else { return }
                 kind = .image(data: data, fromUser: fromUser)
+            } else if event["lazy"] as? Bool == true {
+                kind = .imageOnDemand(size: (event["size"] as? NSNumber)?.intValue ?? 0,
+                                      width: (event["width"] as? NSNumber)?.doubleValue,
+                                      height: (event["height"] as? NSNumber)?.doubleValue,
+                                      fromUser: fromUser, fetching: false)
             } else {
                 kind = .imageLoading(width: (event["width"] as? NSNumber)?.doubleValue,
                                      height: (event["height"] as? NSNumber)?.doubleValue, fromUser: fromUser)

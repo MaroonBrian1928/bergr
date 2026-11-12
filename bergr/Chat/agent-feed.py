@@ -8,37 +8,129 @@
 #   {"t":"plan","id":"plan","steps":[{"text":..,"status":"pending|in_progress|completed"}]}
 #                                                             the agent's task list; replaces the last
 #   {"t":"image","id":..,"role":"user"|"assistant","mime":..,"data":<base64>}   (only up to 1.5 MB)
+#       On an expensive network (argv "1"): {"t":"image","id":..,"role":..,"mime":..,"lazy":true,
+#       "size":<bytes>,"width":..,"height":..} without data; the app asks for one on stdin with
+#       {"t":"image","id":..} and gets the full event back (or {"t":"imagegone","id":..}).
 #   {"t":"subagent","id":<agentId|threadId>,"parent":<tool event id>|null,"name":..,"kind":..,
 #    "state":"running|done|failed","steps":<tool calls seen>,"summary":<last assistant line>}
 #                                                             upsert; a sub-agent's progress, every ~2 s
 #                                                             when changed. Its own messages are never
 #                                                             sent as msg/tool events.
 #   {"t":"question","id":..,"title":..,"options":[..]}   the agent asks the user to pick one
-#   {"t":"ping"}                                              every few seconds
+#   {"t":"ping"}                                              right after the backlog (caught up),
+#                                                             then after 15 s of nothing else sent
+#   {"t":"none"}                                              no conversation found (yet)
+#   {"t":"cursor","session":<file name>,"offset":<byte offset>}   where reading stands (after the
+#                                                             backlog, then when it advances, at most
+#                                                             every 3 s). Passed back in argv to resume:
+#   {"t":"resume"}                                            instead of reset: the same file is at least
+#                                                             that long; only what follows the offset is sent
 #   {"t":"usage","model":..,"effort":..,"used":<tokens>,"limit":<tokens>|null,
 #    "session":{"percent":..,"resets_at":<epoch s>}|null,"weekly":{..}|null}   context and plan usage
-# Usage: agent-feed.py <claude|codex|antigravity> <pid> <cwd> [session-id|-]
-# Bergr sends this source and argv over stdin to a short Python bootstrap, including on Windows.
+# Usage: agent-feed.py <claude|codex|antigravity> <pid> <cwd> [session-id|-] [expensive 0|1] [cursor-session|-] [cursor-offset]
+# Bergr starts it through agent-stage2.py (cached by hash on the machine), including on Windows.
 # The session id comes from the agent's launch command (claude --resume <id>, codex resume <id>).
 # Read-only: it never writes to the agents' files.
 import html
-import base64, glob, json, os, re, sqlite3, subprocess, sys, time
+import base64, glob, json, os, re, sqlite3, subprocess, sys, threading, time
 
 AGENT, PID, CWD = sys.argv[1], int(sys.argv[2] or 0), sys.argv[3]
 HINT = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] not in ("", "-") else None
 if HINT and not all(c.isalnum() or c in "-_" for c in HINT):
     HINT = None  # it goes into a glob pattern
+
+
+def _arg(i, default="-"):
+    return sys.argv[i] if len(sys.argv) > i and sys.argv[i] != "" else default
+
+
+LAZY = _arg(5, "0") == "1"  # expensive network: images wait until asked for
+CURSOR = None  # (session file name, byte offset) to resume from
+try:
+    if _arg(6) != "-":
+        CURSOR = (_arg(6), int(_arg(7, "0")))
+except ValueError:
+    CURSOR = None
+PING_EVERY = 15  # seconds of silence before a keep-alive ping
+CURSOR_EVERY = 3
 MAX_IMAGE = 1_500_000  # decoded bytes
 HOME = os.path.expanduser("~")
 BACKLOG = 400  # messages sent when a conversation is first opened
 
 
+OUT = threading.Lock()  # the stdin thread answers image requests while the main loop emits
+STATE = {"last": time.time(), "need_ping": False}
+STASH = {}  # id -> full image event, for lazy images the app may ask for
+STASH_BYTES = [0]
+STASH_LIMIT = 48_000_000
+
+
+def image_bytes(data):
+    return len(data) * 3 // 4 - data[-2:].count("=")
+
+
+def lazify(ev):
+    """An image event without its data, when the network is expensive; the data is kept to be asked for."""
+    if not LAZY or ev.get("t") != "image" or not ev.get("data"):
+        return ev
+    data = ev["data"]
+    old = STASH.pop(ev["id"], None)
+    if old:
+        STASH_BYTES[0] -= len(old["data"])
+    STASH[ev["id"]] = ev
+    STASH_BYTES[0] += len(data)
+    while STASH_BYTES[0] > STASH_LIMIT and len(STASH) > 1:
+        first = next(iter(STASH))
+        STASH_BYTES[0] -= len(STASH.pop(first)["data"])
+    out = {k: v for k, v in ev.items() if k not in ("data", "fromTool")}
+    out["lazy"] = True
+    out["size"] = image_bytes(data)
+    size = image_size(data)
+    if size:
+        out["width"], out["height"] = size
+    return out
+
+
 def emit(obj):
-    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+    obj = lazify(obj)
+    line = json.dumps(obj, ensure_ascii=False) + "\n"
+    with OUT:
+        sys.stdout.write(line)
+        STATE["last"] = time.time()
 
 
 def flush():
-    sys.stdout.flush()
+    with OUT:
+        sys.stdout.flush()
+
+
+def keepalive():
+    """The caught-up ping right after a backlog, else one after PING_EVERY s of nothing sent."""
+    if STATE["need_ping"] or time.time() - STATE["last"] >= PING_EVERY:
+        STATE["need_ping"] = False
+        emit({"t": "ping"})
+
+
+def serve_requests():
+    """Answers the app's lines on stdin: {"t":"image","id":..} sends that image in full."""
+    try:
+        for raw in sys.stdin.buffer:
+            try:
+                req = json.loads(raw)
+            except Exception:
+                continue
+            if isinstance(req, dict) and req.get("t") == "image" and isinstance(req.get("id"), str):
+                ev = STASH.get(req["id"])
+                if ev:
+                    line = json.dumps({k: v for k, v in ev.items() if k != "fromTool"}, ensure_ascii=False) + "\n"
+                else:
+                    line = json.dumps({"t": "imagegone", "id": req["id"]}) + "\n"
+                with OUT:
+                    sys.stdout.write(line)
+                    STATE["last"] = time.time()
+                    sys.stdout.flush()
+    except Exception:
+        pass
 
 
 def descendants(pid):
@@ -1414,35 +1506,91 @@ def backlog(events):
     return head, images[::-1]
 
 
+def cursor_of(tail):
+    """Where a complete line ends: the offset without a half-written last line."""
+    return tail.offset - len(tail.rest or b"")
+
+
+def usage_before(source, path, offset):
+    """Reads what precedes a resume point, so the parser knows its tool calls, and returns the last usage."""
+    usage = None
+    try:
+        start = max(0, offset - 256 * 1024)
+        with open(path, "rb") as f:
+            f.seek(start)
+            data = f.read(offset - start)
+        lines = data.split(b"\n")
+        if start:
+            lines = lines[1:]
+        for raw in lines:
+            try:
+                d = json.loads(raw)
+            except Exception:
+                continue
+            for ev in source.parse(d) or ():
+                if ev.get("t") == "usage":
+                    usage = ev
+    except Exception:
+        pass
+    return usage
+
+
 def follow_jsonl(source):
+    global CURSOR
     path, tail, tick, sub_at, opening = None, None, 0, 0, False
+    sent_cursor, sent_at, said_none = None, 0, False
     while True:
         # Looking for the session costs a process scan; new sessions are rare.
         now = source.locate() if tick % 5 == 0 else path
         tick += 1
         if now and now != path:
-            path, tail = now, Tail(now)
+            path, tail, said_none = now, Tail(now), False
             SUBS.clear()
-            tail.start_backlog(BACKLOG * 3)
-            emit({"t": "reset", "agent": AGENT, "session": os.path.basename(now)})
-            MODELS_SEEN[2] = 300  # A new conversation: look at the model list again.
-            opening = True
+            name = os.path.basename(now)
+            try:
+                size = os.path.getsize(now)
+            except OSError:
+                size = -1
+            if CURSOR and CURSOR[0] == name and 0 <= CURSOR[1] <= size:
+                # Same conversation as the app has: send only what follows its cursor.
+                tail.offset, tail.rest = CURSOR[1], b""
+                emit({"t": "resume"})
+                usage = usage_before(source, now, CURSOR[1])
+                if usage:
+                    emit(usage)
+                sent_cursor, sent_at = (name, CURSOR[1]), time.time()
+                INTRO[0] = True  # the app still has its commands and models
+            else:
+                tail.start_backlog(BACKLOG * 3)
+                emit({"t": "reset", "agent": AGENT, "session": name})
+                STATE["need_ping"] = True
+                MODELS_SEEN[2] = 300  # A new conversation: look at the model list again.
+                opening = True
+            CURSOR = None
         if tail:
             events = [ev for d in tail.lines() for ev in (source.parse(d) or ())]
             later = []
             if opening:
+                if LAZY:
+                    events = [lazify(ev) for ev in events]
                 (events, later), opening = backlog(events), False
             for ev in events:
                 ev.pop("fromTool", None)
                 emit(ev)
             if later:
                 # The chat shows on the first ping; the images fill their places after it.
+                STATE["need_ping"] = False
                 emit({"t": "ping"})
                 flush()
                 for ev in later:
                     ev.pop("fromTool", None)
                     emit(ev)
                     flush()
+            here = (os.path.basename(path), cursor_of(tail))
+            if here != sent_cursor and (sent_cursor is None or time.time() - sent_at >= CURSOR_EVERY
+                                        or STATE["need_ping"] or later):
+                sent_cursor, sent_at = here, time.time()
+                emit({"t": "cursor", "session": here[0], "offset": here[1]})
         if path and hasattr(source, "subagents") and time.time() - sub_at >= 2:
             sub_at = time.time()
             try:
@@ -1452,8 +1600,11 @@ def follow_jsonl(source):
                         emit(ev)
             except Exception:
                 pass  # sub-agent status is best effort
+        if not path and not said_none:
+            said_none = True
+            emit({"t": "none"})
         refresh_models()
-        emit({"t": "ping"})
+        keepalive()
         flush()
         intro()
         time.sleep(1)
@@ -1481,7 +1632,7 @@ def antigravity_model():
 
 
 def follow_antigravity(source):
-    path, since, tick, history = None, 0, 0, 0
+    path, since, tick, history, said_none = None, 0, 0, 0, False
     while True:
         now = source.locate() if tick % 5 == 0 else path
         if tick % 5 == 0:
@@ -1491,8 +1642,9 @@ def follow_antigravity(source):
                 emit(status)
         tick += 1
         if now and now != path:
-            path, since, history = now, 0, 0
+            path, since, history, said_none = now, 0, 0, False
             emit({"t": "reset", "agent": AGENT, "session": os.path.basename(now)})
+            STATE["need_ping"] = True
             MODELS_SEEN[2] = 300  # A new conversation: look at the model list again.
             # A reset clears what the app knows: send the model and mode again.
             source.status = antigravity_model()
@@ -1512,8 +1664,11 @@ def follow_antigravity(source):
             shells, history = source.shell_commands(history)
             for ev in shells:
                 emit(ev)
+        if not path and not said_none:
+            said_none = True
+            emit({"t": "none"})
         refresh_models()
-        emit({"t": "ping"})
+        keepalive()
         flush()
         intro()
         time.sleep(1)
@@ -1532,6 +1687,7 @@ def intro():
 
 
 def main():
+    threading.Thread(target=serve_requests, daemon=True).start()
     try:
         if AGENT == "claude":
             follow_jsonl(Claude())

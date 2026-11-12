@@ -1,4 +1,5 @@
 import Foundation
+import HerdrKit
 import Testing
 @testable import bergr
 
@@ -65,5 +66,90 @@ struct ChatFeedTests {
         #expect(feed.items.map(\.id) == ["i1", "i2"])
         #expect(feed.items[0].kind == .image(data: bytes, fromUser: true))
         #expect(feed.items[1].kind == .image(data: bytes, fromUser: false))
+    }
+
+    @Test func lazyImageIsAPlaceholderWithItsSize() {
+        let feed = ChatFeed()
+        feed.loadEvents([["t": "image", "id": "i1", "role": "assistant", "mime": "image/png", "lazy": true,
+                          "size": 1234, "width": 3, "height": 2]])
+        #expect(feed.items[0].kind == .imageOnDemand(size: 1234, width: 3, height: 2, fromUser: false, fetching: false))
+    }
+}
+
+// MARK: Helper protocol: handshake, resume, cursor
+
+@MainActor
+struct ChatFeedProtocolTests {
+    final class Writes: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+        func add(_ d: Data) { lock.withLock { data.append(d) } }
+        var text: String { lock.withLock { String(decoding: data, as: UTF8.self) } }
+    }
+
+    /// Runs one helper session: the lines it "prints", then it exits. Returns what the app wrote.
+    private func run(_ feed: ChatFeed, lines: [String]) async throws -> String {
+        let writes = Writes()
+        let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
+        let pipe = ExecPipe(output: stream, write: { writes.add($0) }, close: {})
+        for line in lines { continuation.yield(Data((line + "\n").utf8)) }
+        continuation.finish()
+        let plan = try ChatHelperLaunch.make(script: "SOURCE", agent: "claude", pid: 0, cwd: "/w",
+                                             sessionHint: nil, windows: false, stage2: "pass")
+        try await feed.read(pipe, launch: plan)
+        return writes.text
+    }
+
+    private func msg(_ id: String, _ text: String) -> String {
+        #"{"t":"msg","id":"\#(id)","role":"user","text":"\#(text)"}"#
+    }
+
+    private let reset = #"{"t":"reset","agent":"claude","session":"s.jsonl"}"#
+
+    @Test func needSourceIsAnsweredWithTheSource() async throws {
+        let written = try await run(ChatFeed(), lines: [#"{"t":"need-source"}"#])
+        #expect(written == Data("SOURCE".utf8).base64EncodedString() + "\n")
+    }
+
+    @Test func cachedHelperGetsNoSource() async throws {
+        let written = try await run(ChatFeed(), lines: [reset, msg("a", "one"), #"{"t":"ping"}"#])
+        #expect(written.isEmpty)
+    }
+
+    @Test func resumeKeepsWhatIsShownWithoutASwap() async throws {
+        let feed = ChatFeed()
+        _ = try await run(feed, lines: [reset, msg("a", "one"), #"{"t":"ping"}"#,
+                                        #"{"t":"cursor","session":"s.jsonl","offset":100}"#])
+        #expect(feed.cursor == .init(session: "s.jsonl", offset: 100))
+        #expect(feed.items.map(\.id) == ["a"])
+        // Relaunched with the cursor: `resume` leaves the items alone and new ones are live.
+        _ = try await run(feed, lines: [#"{"t":"resume"}"#, msg("b", "two")])
+        #expect(feed.caughtUp)
+        #expect(feed.items.map(\.id) == ["a", "b"])
+        #expect(feed.cursor == .init(session: "s.jsonl", offset: 100))
+    }
+
+    @Test func resumeIsTheCaughtUpSignal() async throws {
+        let feed = ChatFeed()
+        _ = try await run(feed, lines: [#"{"t":"resume"}"#, msg("b", "two")])
+        #expect(feed.phase == .live)
+        #expect(feed.caughtUp)
+        #expect(feed.items.map(\.id) == ["b"])
+    }
+
+    @Test func resetAfterwardsRebuildsAndDropsTheCursor() async throws {
+        let feed = ChatFeed()
+        _ = try await run(feed, lines: [reset, msg("a", "one"), #"{"t":"ping"}"#,
+                                        #"{"t":"cursor","session":"s.jsonl","offset":100}"#])
+        _ = try await run(feed, lines: [reset, msg("a", "one")])
+        #expect(!feed.caughtUp)
+        #expect(feed.cursor == nil)
+        #expect(feed.items.map(\.id) == ["a"])  // still on screen until the first ping
+    }
+
+    @Test func noneShowsNoConversationWithoutPings() async throws {
+        let feed = ChatFeed()
+        _ = try await run(feed, lines: [#"{"t":"none"}"#])
+        #expect(feed.phase == .noConversation)
     }
 }

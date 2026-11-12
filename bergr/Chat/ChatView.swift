@@ -704,7 +704,7 @@ struct ChatView: View {
                     return (question + " " + answer).localizedStandardContains(search) ? row : nil
                 case .question(let title, let options):
                     return ([title] + options).joined(separator: " ").localizedStandardContains(search) ? row : nil
-                case .tool, .image, .imageLoading:
+                case .tool, .image, .imageLoading, .imageOnDemand:
                     return nil
                 }
             case .tools(let items):
@@ -902,6 +902,10 @@ struct ChatView: View {
                     .transition(.opacity)
             case .imageLoading(let width, let height, let fromUser):
                 ImagePlaceholder(width: width, height: height, fromUser: fromUser, palette: palette)
+            case .imageOnDemand(let size, let width, let height, let fromUser, let fetching):
+                ImagePlaceholder(width: width, height: height, fromUser: fromUser, palette: palette,
+                                 sizeText: ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file),
+                                 fetching: fetching) { feed.requestImage(id: item.id) }
             case .decision(let question, let answer):
                 DecisionRow(question: question, answer: answer, palette: palette)
                     .transition(arrival)

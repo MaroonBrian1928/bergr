@@ -1,6 +1,6 @@
 #!/usr/bin/env python3 -I
 """Tests for bergr/Chat/agent-feed.py. Run: python3 -I scripts/test_agent_feed.py"""
-import base64, json, os, subprocess, sys, tempfile, time, unittest
+import base64, hashlib, io, json, os, queue, subprocess, sys, tempfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "..", "bergr", "Chat", "agent-feed.py")
@@ -638,6 +638,256 @@ class AsTheAppRunsIt(Base):
         self.assertTrue(any(l.get("t") == "reset" and l.get("session") == "sess-1.jsonl" for l in lines), (out, err))
         self.assertTrue(any(l.get("t") == "msg" and l.get("text") == "hello" for l in lines), (out, err))
 
+
+
+STAGE2 = open(os.path.join(HERE, "..", "bergr", "Chat", "agent-stage2.py"), encoding="utf-8").read()
+STAGE1 = "S=__import__('sys');exec(S.stdin.buffer.readline())"
+SHA = hashlib.sha256(SOURCE.encode()).hexdigest()
+
+
+def stage2_line(argv, sha=SHA):
+    """The first stdin line, built as ChatHelperLaunch.make does."""
+    payload = base64.b64encode(json.dumps({"sha": sha, "argv": argv}).encode()).decode()
+    code = base64.b64encode(STAGE2.encode()).decode()
+    return (f"import base64,json;D=json.loads(base64.b64decode('{payload}'));"
+            f"exec(base64.b64decode('{code}'))\n")
+
+
+class Helper:
+    """The helper started the way the app starts it: tiny stage 1, stage 2 on stdin."""
+
+    def __init__(self, home, argv, source=SOURCE, sha=SHA):
+        self.argv = ["agent-feed.py"] + argv
+        self.source = source
+        env = {"HOME": home, "PATH": os.environ.get("PATH", "")}
+        self.p = subprocess.Popen([sys.executable, "-I", "-u", "-c", STAGE1], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        self.lines = queue.Queue()
+        threading.Thread(target=self._pump, daemon=True).start()
+        self.send(stage2_line(self.argv, sha).encode())
+
+    def _pump(self):
+        for raw in self.p.stdout:
+            self.lines.put(json.loads(raw))
+        self.lines.put(None)
+
+    def send(self, data):
+        self.p.stdin.write(data)
+        self.p.stdin.flush()
+
+    def answer_source(self):
+        self.send(base64.b64encode(self.source.encode()) + b"\n")
+
+    def get(self, timeout=5):
+        return self.lines.get(timeout=timeout)
+
+    def until(self, kind, timeout=8):
+        end = time.time() + timeout
+        seen = []
+        while time.time() < end:
+            try:
+                ev = self.get(timeout=max(0.1, end - time.time()))
+            except queue.Empty:
+                break
+            if ev is None:
+                break
+            seen.append(ev)
+            if ev.get("t") == kind:
+                return ev, seen
+        raise AssertionError(f"no {kind!r} event, saw {seen}")
+
+    def drain(self, seconds):
+        out, end = [], time.time() + seconds
+        while time.time() < end:
+            try:
+                ev = self.get(timeout=max(0.05, end - time.time()))
+            except queue.Empty:
+                break
+            if ev is None:
+                break
+            out.append(ev)
+        return out
+
+    def close(self):
+        self.p.kill()
+        self.p.wait()
+        for f in (self.p.stdin, self.p.stdout, self.p.stderr):
+            f.close()
+
+
+class Stage2Support(Base):
+    def helper(self, *args, **kw):
+        h = Helper(self.home, *args, **kw)
+        self.addCleanup(h.close)
+        return h
+
+    def conversation(self, rows=None):
+        path = os.path.join(self.home, ".claude", "projects", "-work", "sess-1.jsonl")
+        write_jsonl(path, rows or [{"type": "user", "uuid": "u1", "message": {"content": "hello"}}])
+        return path
+
+    def cache(self):
+        return os.path.join(self.home, ".cache", "bergr", f"agent-feed-{SHA}.py")
+
+    def warm_cache(self):
+        os.makedirs(os.path.dirname(self.cache()), exist_ok=True)
+        with open(self.cache(), "w", encoding="utf-8") as f:
+            f.write(SOURCE)
+
+
+class Stage2(Stage2Support):
+    def test_cache_miss_asks_for_source_then_hit_does_not(self):
+        self.conversation()
+        h = self.helper(["claude", "0", "/work", "sess-1"])
+        self.assertEqual(h.get(), {"t": "need-source"})
+        h.answer_source()
+        h.until("ping")
+        with open(self.cache(), encoding="utf-8") as f:
+            self.assertEqual(f.read(), SOURCE)
+        h.close()
+        h2 = self.helper(["claude", "0", "/work", "sess-1"])
+        self.assertEqual(h2.get()["t"], "reset")  # no need-source
+        h2.until("ping")
+
+    def test_bad_cache_content_is_a_miss(self):
+        self.conversation()
+        os.makedirs(os.path.dirname(self.cache()))
+        with open(self.cache(), "w") as f:
+            f.write("print('tampered')")
+        h = self.helper(["claude", "0", "/work", "sess-1"])
+        self.assertEqual(h.get(), {"t": "need-source"})
+
+    def test_wrong_source_is_refused_and_not_cached(self):
+        self.conversation()
+        h = self.helper(["claude", "0", "/work", "sess-1"], source=SOURCE + "# changed")
+        self.assertEqual(h.get(), {"t": "need-source"})
+        h.answer_source()
+        self.assertEqual(h.get()["t"], "error")
+        h.p.wait(timeout=5)
+        self.assertEqual(h.p.returncode, 1)
+        self.assertFalse(os.path.exists(self.cache()))
+
+    def test_only_the_newest_few_are_kept(self):
+        self.conversation()
+        d = os.path.join(self.home, ".cache", "bergr")
+        os.makedirs(d)
+        for i in range(5):
+            p = os.path.join(d, f"agent-feed-old{i}.py")
+            with open(p, "w") as f:
+                f.write("x")
+            os.utime(p, (1000 + i, 1000 + i))
+        h = self.helper(["claude", "0", "/work", "sess-1"])
+        h.get()
+        h.answer_source()
+        h.until("ping")
+        names = sorted(os.listdir(d))
+        self.assertEqual(len(names), 3, names)
+        self.assertIn(f"agent-feed-{SHA}.py", names)
+
+
+class Resume(Stage2Support):
+    ARGV = ["claude", "0", "/work", "sess-1", "0"]
+
+    def first_run(self):
+        self.conversation()
+        self.warm_cache()
+        h = self.helper(self.ARGV)
+        cursor, _ = h.until("cursor")
+        h.close()
+        return cursor
+
+    def test_cursor_after_backlog_and_resume_sends_only_the_new_part(self):
+        cursor = self.first_run()
+        self.assertEqual(cursor["session"], "sess-1.jsonl")
+        path = os.path.join(self.home, ".claude", "projects", "-work", "sess-1.jsonl")
+        self.assertEqual(cursor["offset"], os.path.getsize(path))
+        with open(path, "a") as f:
+            f.write(json.dumps({"type": "user", "uuid": "u2", "message": {"content": "again"}}) + "\n")
+        h = self.helper(self.ARGV + ["sess-1.jsonl", str(cursor["offset"])])
+        self.assertEqual(h.get(), {"t": "resume"})
+        msg, seen = h.until("msg")
+        self.assertEqual(msg["id"], "u2.0")
+        self.assertFalse(any(e["t"] in ("reset", "ping") for e in seen))
+
+    def reset_with(self, session, offset):
+        h = self.helper(self.ARGV + [session, str(offset)])
+        self.assertEqual(h.get()["t"], "reset")
+        msg, _ = h.until("msg")
+        self.assertEqual(msg["id"], "u1.0")
+
+    def test_shorter_file_resets(self):
+        cursor = self.first_run()
+        self.reset_with("sess-1.jsonl", cursor["offset"] + 500)
+
+    def test_other_file_resets(self):
+        cursor = self.first_run()
+        self.reset_with("other.jsonl", cursor["offset"])
+
+    def test_replaced_file_that_is_shorter_resets(self):
+        cursor = self.first_run()
+        self.conversation([{"type": "user", "uuid": "u1", "message": {"content": "x"}}])
+        self.reset_with("sess-1.jsonl", cursor["offset"] + 1)
+
+
+class KeepAlive(Stage2Support):
+    def test_ping_only_after_15s_of_nothing_sent(self):
+        ns = load("claude", self.home)
+        out = io.StringIO()
+        ns["sys"].stdout = out
+        state = ns["STATE"]
+        state["need_ping"] = False
+        state["last"] = time.time() - 14
+        ns["keepalive"]()
+        self.assertEqual(out.getvalue(), "")
+        state["last"] = time.time() - 16
+        ns["keepalive"]()
+        self.assertEqual(json.loads(out.getvalue()), {"t": "ping"})
+        ns["keepalive"]()  # sending reset the clock
+        self.assertEqual(len(out.getvalue().splitlines()), 1)
+
+    def test_running_helper_pings_after_backlog_then_stays_quiet(self):
+        self.conversation()
+        self.warm_cache()
+        h = self.helper(["claude", "0", "/work", "sess-1"])
+        h.until("ping")
+        later = h.drain(3.5)
+        self.assertFalse([e for e in later if e["t"] == "ping"], later)
+
+    def test_no_conversation_says_none_at_once_and_does_not_ping(self):
+        self.warm_cache()
+        h = self.helper(["claude", "0", "/work", "-"])
+        ev, seen = h.until("none", timeout=2)
+        self.assertFalse(any(e["t"] == "ping" for e in seen))
+
+
+class LazyImages(Stage2Support):
+    PNG = Backlog.PNG
+
+    def setUp(self):
+        super().setUp()
+        block = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.PNG}}
+        self.conversation([{"type": "user", "uuid": "u1", "message": {"content": [block]}}])
+        self.warm_cache()
+
+    def test_placeholders_then_fetch_on_request(self):
+        h = self.helper(["claude", "0", "/work", "sess-1", "1"])
+        image, _ = h.until("image")
+        self.assertNotIn("data", image)
+        self.assertTrue(image["lazy"])
+        self.assertEqual((image["size"], image["width"], image["height"]),
+                         (len(base64.b64decode(self.PNG)), 3, 2))
+        h.until("ping")
+        h.send(json.dumps({"t": "image", "id": image["id"]}).encode() + b"\n")
+        full, _ = h.until("image")
+        self.assertEqual(full["data"], self.PNG)
+        h.send(b'{"t":"image","id":"nope"}\n')
+        self.assertEqual(h.until("imagegone")[0]["id"], "nope")
+
+    def test_cheap_network_sends_images_inline(self):
+        h = self.helper(["claude", "0", "/work", "sess-1", "0"])
+        h.until("ping")
+        full, _ = h.until("image")
+        self.assertEqual(full["data"], self.PNG)
 
 
 class PluginCommandsTests(unittest.TestCase):
