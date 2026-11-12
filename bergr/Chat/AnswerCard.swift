@@ -96,7 +96,7 @@ enum AnswerParser {
     }
 
     private static func run(in lines: [String]) -> (start: Int, choices: [AnswerChoice])? {
-        guard let bottom = lines.lastIndex(where: { choice($0) != nil }) else { return nil }
+        guard let bottom = lines.lastIndex(where: { choice($0) != nil }) else { return cursorMenu(in: lines) }
         var found: [AnswerChoice] = []
         var start = bottom
         var i = bottom
@@ -120,6 +120,45 @@ enum AnswerParser {
         }
         guard found.first?.number == 1 else { return nil }
         return (start, found)
+    }
+
+    /// A menu without numbers, picked with the arrow keys ("❯ Deny, and tell Claude what to do
+    /// differently (esc)" / "  Allow for this session"): the line with the cursor and the options
+    /// aligned with its label, above and below, up to a blank line. Numbered in order, so the card
+    /// answers it like any other (arrows to the option, then Return). A lone "❯" line (an agent's
+    /// own input prompt) isn't a menu: it takes at least two options.
+    private static func cursorMenu(in lines: [String]) -> (start: Int, choices: [AnswerChoice])? {
+        guard let at = lines.lastIndex(where: { line in
+            let text = clean(line)
+            guard let f = text.first, markers.contains(f) else { return false }
+            return !text.dropFirst().trimmingCharacters(in: .whitespaces).isEmpty
+        }) else { return nil }
+        // The label's column on the cursor line: the options below and above start there.
+        let raw = lines[at]
+        guard let marker = raw.firstIndex(where: { markers.contains($0) }),
+              let labelStart = raw[raw.index(after: marker)...].firstIndex(where: { !$0.isWhitespace })
+        else { return nil }
+        let column = raw.distance(from: raw.startIndex, to: labelStart)
+        func option(_ line: String) -> String? {
+            let lead = line.prefix { $0 == " " }.count
+            guard lead == column else { return nil }
+            let text = clean(line)
+            guard let f = text.first, !markers.contains(f), !borders.contains(f) else { return nil }
+            return text
+        }
+        var above: [String] = []
+        var i = at - 1
+        while i >= 0, let text = option(lines[i]) { above.insert(text, at: 0); i -= 1 }
+        var below: [String] = []
+        var j = at + 1
+        while j < lines.count, let text = option(lines[j]) { below.append(text); j += 1 }
+        let selected = clean(String(raw[labelStart...]))
+        let labels = above + [selected] + below
+        guard labels.count >= 2, labels.count <= 9 else { return nil }
+        let choices = labels.enumerated().map { n, label in
+            AnswerChoice(number: n + 1, label: label, selected: n == above.count)
+        }
+        return (at - above.count, choices)
     }
 
     /// What is being asked about: the lines just above the question, back to a rule or a blank
