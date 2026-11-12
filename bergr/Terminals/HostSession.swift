@@ -348,11 +348,16 @@ final class HostSession {
         }
     }
 
-    /// Checks the line unless it was checked moments ago (several screens may ask).
+    /// Checks the line unless it was checked moments ago (several screens may ask) or the core
+    /// sent something within the last 3 s: output already proves the line, so a busy screen costs
+    /// no extra traffic and the phone's radio can rest between checks only on a quiet one.
     func checkLine() {
-        guard let keys = keyLibrary else { return }
+        guard let keys = keyLibrary, let client = try? connectedClient() else { return }
         if let lastProbe, ContinuousClock.now - lastProbe < .milliseconds(2500) { return }
-        probe(keys: keys)
+        Task { @MainActor in
+            if ContinuousClock.now - (await client.lastReceived) < .seconds(3) { return }
+            probe(keys: keys)
+        }
     }
 
     /// The line's smoothed round trip as of the last probe; nil until a call has been answered.

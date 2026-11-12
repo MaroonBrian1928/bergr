@@ -31,3 +31,12 @@ import Testing
     _ = try await client.listTerminals()
     #expect(await client.roundTrip != nil)
 }
+
+@Test func anyAnswerCountsAsHeard() async throws {
+    let client = try await HerdrClient.connectDemo()
+    defer { Task { await client.close() } }
+    let before = await client.lastReceived
+    try await Task.sleep(for: .milliseconds(20))
+    _ = try await client.listTerminals()
+    #expect(await client.lastReceived > before)
+}

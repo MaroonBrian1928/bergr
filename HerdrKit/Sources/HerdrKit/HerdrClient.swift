@@ -174,6 +174,9 @@ public actor HerdrClient {
         return ExecOutput(code: r.code, stdout: text(r.stdout), stderr: text(r.stderr))
     }
 
+    /// When the core last sent anything, on any channel: proof the line is alive.
+    public private(set) var lastReceived = ContinuousClock.now
+
     /// The line's smoothed round trip, from answered calls (not `hello` or `machine.exec`).
     public private(set) var roundTrip: RoundTrip?
 
@@ -259,11 +262,14 @@ public actor HerdrClient {
         }
     }
 
+    private func received() { lastReceived = .now }
+
     private func startReading() {
         let incoming = transport.incoming
         reader = Task { [weak self] in
             do {
                 for try await chunk in incoming {
+                    await self?.received()
                     try await self?.ingest(chunk)
                 }
                 await self?.fail(HerdrError.connectionClosed)
