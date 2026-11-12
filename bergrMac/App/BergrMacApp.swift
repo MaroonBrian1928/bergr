@@ -20,6 +20,15 @@ struct BergrMacApp: App {
             _ = hosts.addLocal()
             UserDefaults.standard.set(true, forKey: offered)
         }
+        #if DEBUG
+        // `-bergr.demo YES`: the demo machine, with its first agent open (see `MacStress`).
+        if UserDefaults.standard.bool(forKey: "bergr.demo") {
+            let shell = MacShell()
+            shell.selection = AgentRef(host: hosts.addDemo().id, address: "t1")
+            _shell = State(initialValue: shell)
+            MacStress.start()
+        }
+        #endif
         _hosts = State(initialValue: hosts)
         let sessions = SessionStore()
         _sessions = State(initialValue: sessions)

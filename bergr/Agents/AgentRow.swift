@@ -104,16 +104,29 @@ struct StatusMark: View {
     let state: AgentState
     @State private var spinning = false
 
+    private var ring: some View {
+        Circle().trim(from: 0.12, to: 1)
+            .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            .frame(width: 12, height: 12)
+            .rotationEffect(.degrees(spinning ? 360 : 0))
+            .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: spinning)
+            .onAppear { spinning = true }
+    }
+
     var body: some View {
         Group {
             switch state {
             case .working:
-                Circle().trim(from: 0.12, to: 1)
-                    .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                    .frame(width: 12, height: 12)
-                    .rotationEffect(.degrees(spinning ? 360 : 0))
-                    .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: spinning)
-                    .onAppear { spinning = true }
+                #if os(macOS)
+                if LayerMotion.on {
+                    // Turned by Core Animation, off the main thread (see `LayerMotion`).
+                    SpinnerRing(color: .blue).frame(width: 12, height: 12)
+                } else {
+                    ring
+                }
+                #else
+                ring
+                #endif
             case .done:
                 Circle().fill(Color.green).frame(width: 10, height: 10)
             case .idle:

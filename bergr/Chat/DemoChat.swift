@@ -132,6 +132,10 @@ extension ChatFeed {
 /// over a real (demo) terminal, with a conversation that answers what is sent to it.
 extension ChatFeed {
     func runDemo(agent: ChatAgent = .claude, cwd: String = "") async {
+        #if DEBUG
+        let turns = UserDefaults.standard.integer(forKey: "bergr.stress")
+        if turns > 0 { await runStress(turns: turns); return }
+        #endif
         // The shop API's agent is the one waiting to run a migration: its own conversation.
         if agent == .claude, cwd.hasSuffix("shop-api") { loadMigrationSample() } else { loadSample(agent) }
         if agent == .claude {
@@ -194,3 +198,91 @@ extension ChatFeed {
         }
     }
 }
+
+#if DEBUG
+/// A long conversation that keeps getting live updates, for profiling scrolling and streaming:
+/// `-bergr.demo YES -bergr.stress <turns>` (`-bergr.stressMode quiet` loads it and sends nothing, `working` only shows the agent working, `idle` streams without that; `-bergr.stressGap <ms>` is the time between updates).
+extension ChatFeed {
+    static let stressProse = """
+    Here is **what** I found in `Sources/App/Main.swift`:
+
+    - the first thing, with some *emphasis* and a [link](https://example.com)
+    - the second thing, a bit longer so that it wraps onto another line in a narrow window
+
+    ```
+    let a = 1
+    let b = 2
+    ```
+
+    | File | Problem |
+    |---|---|
+    | `Settings.swift` | hard-coded colors |
+    | `Toggle.swift` | no dark variant |
+
+    ## Next
+
+    I will run the tests now and report back. The change is small, but it touches the theme, so \
+    every screen that reads a color from it is checked again, in light and in dark.
+    """
+
+    static func stressConversation(_ turns: Int) -> [Item] {
+        var items: [Item] = []
+        for i in 0..<turns {
+            items.append(Item(id: "u\(i)", kind: .user("Question number \(i), please look into it")))
+            items.append(Item(id: "t\(i)a", kind: .tool(name: "Bash", summary: "List the files\nls -la \(i)")))
+            items.append(Item(id: "t\(i)b", kind: .tool(name: "Read", summary: "file\(i).swift")))
+            let text = "Answer \(i). " + stressProse
+            items.append(Item(id: "a\(i)", kind: .assistant(text: text, blocks: MarkdownBlock.parse(text))))
+        }
+        return items
+    }
+
+    /// Live updates sent so far (the profiling report divides its time by them).
+    static var stressEvents = 0
+
+    func runStress(turns: Int) async {
+        loadItems(Self.stressConversation(turns))
+        applyDemo(["t": "usage", "model": "claude-opus-5-5", "used": 70_512, "limit": 200_000])
+        let mode = UserDefaults.standard.string(forKey: "bergr.stressMode") ?? "stream"
+        if mode == "quiet" || mode == "working" {
+            demoWorking = mode == "working"
+            while !Task.isCancelled { try? await Task.sleep(for: .seconds(60)) }
+            return
+        }
+        // "idle": the same updates, without the agent showing as working.
+        let working = mode != "idle"
+        let gap = UserDefaults.standard.integer(forKey: "bergr.stressGap")
+        let pause = Duration.milliseconds(gap > 0 ? gap : 33)
+        try? await Task.sleep(for: .seconds(3))
+        let words = Self.stressProse.split(separator: " ", omittingEmptySubsequences: false)
+        var n = 0
+        var used = 70_512
+        while !Task.isCancelled {
+            n += 1
+            demoWorking = working
+            applyDemo(["t": "msg", "id": "su\(n)", "role": "user", "text": "Stress question \(n)"])
+            try? await Task.sleep(for: .milliseconds(300))
+            applyDemo(["t": "tool", "id": "st\(n)", "name": "Bash", "summary": "Run the tests\nmake test"])
+            var out: [String] = []
+            for line in 0..<20 {
+                out.append("test \(line) passed in 0.\(line)s")
+                applyDemo(["t": "toolout", "id": "st\(n)", "text": out.suffix(12).joined(separator: "\n")])
+                Self.stressEvents += 1
+                try? await Task.sleep(for: pause)
+            }
+            // A reply streamed word by word.
+            var text = "Reply \(n)."
+            for word in words {
+                text += " " + word
+                applyDemo(["t": "msg", "id": "sa\(n)", "role": "assistant", "text": text])
+                Self.stressEvents += 1
+                used += 7
+                if used % 5 == 0 { applyDemo(["t": "usage", "model": "claude-opus-5-5", "used": used, "limit": 200_000]) }
+                try? await Task.sleep(for: pause)
+            }
+            demoWorking = false
+            try? await Task.sleep(for: .milliseconds(600))
+        }
+    }
+}
+#endif

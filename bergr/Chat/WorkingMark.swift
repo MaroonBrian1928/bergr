@@ -22,32 +22,125 @@ struct WorkingMark: View {
     static let morphDuration = 1.1
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
-            Canvas { gc, canvas in
-                let t = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate
-                let now = Pattern.at(index)
-                let r = min(canvas.width, canvas.height) / 2
-                let center = CGPoint(x: canvas.width / 2, y: canvas.height / 2)
-                let p = context.date.timeIntervalSince(changedAt) / Self.morphDuration
-                let morphing = !reduceMotion && previous != nil && p < 1 && p >= 0
-                let from = Pattern.at(previous ?? index)
-                // Pairs fixed for the whole change (taken at its start), so no stroke switches partner midway.
-                let pairs = morphing ? Stroke.pairs(from: from, to: now, at: changedAt.timeIntervalSinceReferenceDate)
-                                     : []
-                let k = Ease.smoother(p)
-                // The whole mark turns a little as it changes, so the strokes sweep together.
-                let swirl = morphing ? sin(.pi * k) * 0.5 : 0
-                for i in 0..<Stroke.count {
-                    var s = now.stroke(i, t)
-                    if morphing { s = Stroke.mix(from.stroke(pairs[i], t), s, k).turned(swirl) }
-                    s.draw(in: &gc, center: center, radius: r, color: color)
-                }
-            }
+        Group {
+            #if os(macOS)
+            if LayerMotion.on { layer } else { canvas }
+            #else
+            canvas
+            #endif
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
+
+    private var canvas: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
+            Canvas { gc, canvas in
+                let r = min(canvas.width, canvas.height) / 2
+                let center = CGPoint(x: canvas.width / 2, y: canvas.height / 2)
+                for s in Self.strokes(index: index, previous: previous, changedAt: changedAt, at: context.date,
+                                      reduceMotion: reduceMotion) {
+                    s.draw(in: &gc, center: center, radius: r, color: color)
+                }
+            }
+        }
+    }
+
+    /// The mark's strokes at a moment: the picture's own motion, and its flow out of the one before.
+    static func strokes(index: Int, previous: Int?, changedAt: Date, at date: Date, reduceMotion: Bool) -> [Stroke] {
+        let t = reduceMotion ? 0 : date.timeIntervalSinceReferenceDate
+        let now = Pattern.at(index)
+        let p = date.timeIntervalSince(changedAt) / morphDuration
+        let morphing = !reduceMotion && previous != nil && p < 1 && p >= 0
+        let from = Pattern.at(previous ?? index)
+        // Pairs fixed for the whole change (taken at its start), so no stroke switches partner midway.
+        let pairs = morphing ? Stroke.pairs(from: from, to: now, at: changedAt.timeIntervalSinceReferenceDate)
+                             : []
+        let k = Ease.smoother(p)
+        // The whole mark turns a little as it changes, so the strokes sweep together.
+        let swirl = morphing ? sin(.pi * k) * 0.5 : 0
+        return (0..<Stroke.count).map { i in
+            let s = now.stroke(i, t)
+            return morphing ? Stroke.mix(from.stroke(pairs[i], t), s, k).turned(swirl) : s
+        }
+    }
 }
+
+#if os(macOS)
+extension WorkingMark {
+    /// On the Mac the mark is a plain view that draws itself 30 times a second. As a `TimelineView`
+    /// it had SwiftUI draw the whole window's view tree again on every frame the display shows,
+    /// for as long as an agent worked: a quarter of the main thread, which scrolling and live
+    /// updates then had to share.
+    private var layer: some View {
+        MarkLayer(index: index, previous: previous, changedAt: changedAt, color: color, reduceMotion: reduceMotion)
+    }
+}
+
+private struct MarkLayer: NSViewRepresentable {
+    let index: Int
+    let previous: Int?
+    let changedAt: Date
+    let color: Color
+    let reduceMotion: Bool
+
+    func makeNSView(context: Context) -> MarkView { MarkView() }
+
+    func updateNSView(_ view: MarkView, context: Context) {
+        view.index = index
+        view.previous = previous
+        view.changedAt = changedAt
+        view.color = color.resolve(in: context.environment).cgColor
+        view.reduceMotion = reduceMotion
+        view.needsDisplay = true
+        view.schedule()
+    }
+}
+
+final class MarkView: NSView {
+    var index = 0
+    var previous: Int?
+    var changedAt = Date.distantPast
+    var color = CGColor(gray: 0, alpha: 1)
+    var reduceMotion = false
+    private var timer: Timer?
+
+    // Top-left origin, like the canvas the pictures were made for.
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        schedule()
+    }
+
+    /// Redraws 30 times a second while in a window (and not with Reduce Motion: then it stands still).
+    func schedule() {
+        let wanted = window != nil && !reduceMotion
+        if wanted, timer == nil {
+            let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.needsDisplay = true }
+            }
+            // Also while the list scrolls or a menu is open.
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+        } else if !wanted, let timer {
+            timer.invalidate()
+            self.timer = nil
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let r = min(bounds.width, bounds.height) / 2
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        for s in WorkingMark.strokes(index: index, previous: previous, changedAt: changedAt, at: .now,
+                                     reduceMotion: reduceMotion) {
+            s.draw(in: context, center: center, radius: r, color: color)
+        }
+    }
+}
+#endif
 
 /// Curves for the motion: nothing in the mark moves at a constant speed.
 enum Ease {
@@ -124,6 +217,19 @@ struct Stroke {
         path.addLine(to: CGPoint(x: center.x + (x + dx) * r, y: center.y + (y + dy) * r))
         gc.stroke(path, with: .color(color.opacity(opacity)),
                   style: StrokeStyle(lineWidth: max(1, width * r), lineCap: .round))
+    }
+
+    /// The same stroke, in a Core Graphics context.
+    func draw(in context: CGContext, center: CGPoint, radius r: CGFloat, color: CGColor) {
+        guard opacity > 0.01 else { return }
+        let half = length / 2
+        let dx = cos(angle) * half, dy = sin(angle) * half
+        context.setLineCap(.round)
+        context.setLineWidth(max(1, width * r))
+        context.setStrokeColor(color.copy(alpha: color.alpha * opacity) ?? color)
+        context.move(to: CGPoint(x: center.x + (x - dx) * r, y: center.y + (y - dy) * r))
+        context.addLine(to: CGPoint(x: center.x + (x + dx) * r, y: center.y + (y + dy) * r))
+        context.strokePath()
     }
 }
 

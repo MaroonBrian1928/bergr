@@ -1866,23 +1866,44 @@ private struct Shimmer: ViewModifier {
         if reduceMotion {
             content
         } else {
-            content
-                .overlay {
-                    GeometryReader { geo in
-                        LinearGradient(colors: [.clear, .white.opacity(0.55), .clear],
-                                       startPoint: .leading, endPoint: .trailing)
-                            .frame(width: geo.size.width * 0.6)
-                            .offset(x: phase * geo.size.width * 1.6)
-                            .blendMode(.plusLighter)
-                    }
+            #if os(macOS)
+            if LayerMotion.on { layered(content) } else { animated(content) }
+            #else
+            animated(content)
+            #endif
+        }
+    }
+
+    #if os(macOS)
+    /// The band is moved by Core Animation, off the main thread (see `LayerMotion`).
+    private func layered(_ content: Content) -> some View {
+        content
+            .overlay {
+                ShimmerBand()
+                    .blendMode(.plusLighter)
                     .mask(content)
                     .allowsHitTesting(false)
+            }
+    }
+    #endif
+
+    private func animated(_ content: Content) -> some View {
+        content
+            .overlay {
+                GeometryReader { geo in
+                    LinearGradient(colors: [.clear, .white.opacity(0.55), .clear],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: geo.size.width * 0.6)
+                        .offset(x: phase * geo.size.width * 1.6)
+                        .blendMode(.plusLighter)
                 }
-                .onAppear {
-                    // A sweep, then a rest: calmer next to the moving mark.
-                    withAnimation(.easeInOut(duration: 1.8).delay(1.2).repeatForever(autoreverses: false)) { phase = 1 }
-                }
-        }
+                .mask(content)
+                .allowsHitTesting(false)
+            }
+            .onAppear {
+                // A sweep, then a rest: calmer next to the moving mark.
+                withAnimation(.easeInOut(duration: 1.8).delay(1.2).repeatForever(autoreverses: false)) { phase = 1 }
+            }
     }
 }
 

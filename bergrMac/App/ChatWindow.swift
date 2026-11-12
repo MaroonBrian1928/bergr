@@ -54,7 +54,7 @@ private struct ChatWindowContent: View {
 
     var body: some View {
         let terminal = session.terminal(address)
-        let agent = terminal.flatMap(ChatAgent.detect)
+        let agent = chatAgent(terminal)
         Group {
             if let linked = linkedMachine {
                 // Its conversation is on that machine: through this one there's only the terminal.
@@ -122,7 +122,7 @@ private struct ChatWindowContent: View {
         })
         .focusedSceneValue(\.interruptAgent, { model.press(.escape) })
         .inspector(isPresented: $showingInspector) {
-            if let agent = terminal.flatMap(ChatAgent.detect), linkedMachine == nil {
+            if let agent = chatAgent(terminal), linkedMachine == nil {
                 ChatInspector(feed: feed, agent: agent, terminal: terminal, machine: machineName,
                               model: model, canSetMode: terminal?.isLive == true)
             } else {
@@ -155,6 +155,15 @@ private struct ChatWindowContent: View {
         } message: { Text(launchError ?? "") }
         .navigationTitle(terminal?.nameInSpace ?? address)
         .navigationSubtitle(machineName)
+    }
+
+    private func chatAgent(_ terminal: Terminal?) -> ChatAgent? {
+        #if DEBUG
+        // Profiling (`-bergr.demo YES -bergr.stress <turns>`): the demo machine's agents get a chat.
+        if session.host.isDemo, UserDefaults.standard.integer(forKey: "bergr.stress") > 0,
+           let terminal, terminal.foreground?.name == "agent" { return .claude }
+        #endif
+        return terminal.flatMap(ChatAgent.detect)
     }
 
     /// The machine this terminal runs on: a linked machine's name (`popos/t3`), or this connection's.
