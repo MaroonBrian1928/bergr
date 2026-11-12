@@ -1,16 +1,143 @@
 import SwiftUI
 
-/// The block structure of an agent's markdown reply: enough for prose, lists, code and tables.
-enum MarkdownBlock: Hashable {
-    case paragraph(String)
-    case heading(level: Int, text: String)
-    case bullet(indent: Int, marker: String, text: String)
-    case code(String)
-    case table([[String]])
-    case quote(String)
-    case rule
+/// Inline Markdown, parsed once when its block is parsed. Both palettes' colors are applied then,
+/// so drawing a block applies no attributes and parses nothing.
+struct MarkdownInline: Hashable, ExpressibleByStringLiteral {
+    let source: String
+    /// Words as rendered (markdown marks removed).
+    let words: Int
+    private let light: AttributedString
+    private let dark: AttributedString
 
-    var isHeading: Bool { if case .heading = self { true } else { false } }
+    init(_ source: String) {
+        self.source = source
+        let plain = Self.markup(source)
+        words = Self.plainWords(plain)
+        light = Self.styled(plain, palette: .of(.light))
+        dark = Self.styled(plain, palette: .of(.dark))
+    }
+
+    init(stringLiteral value: String) { self.init(value) }
+
+    /// The text in the palette's colors, ready to draw.
+    func styled(_ palette: ChatPalette) -> AttributedString { palette.isDark ? dark : light }
+
+    static func == (a: MarkdownInline, b: MarkdownInline) -> Bool { a.source == b.source }
+    func hash(into hasher: inout Hasher) { hasher.combine(source) }
+
+    /// Words in Markdown source, as rendered: the count `init` stores, worked out from scratch.
+    static func wordsUncached(_ source: String) -> Int { plainWords(markup(source)) }
+
+    private static func markup(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(text)
+    }
+
+    private static func plainWords(_ plain: AttributedString) -> Int {
+        String(plain.characters).split(whereSeparator: \.isWhitespace).count
+    }
+
+    /// Bold, italics and links from the markup; `code` gets the palette's code colors.
+    private static func styled(_ parsed: AttributedString, palette: ChatPalette) -> AttributedString {
+        var result = AttributedString()
+        for run in parsed.runs {
+            var piece = AttributedString(parsed[run.range])
+            if run.inlinePresentationIntent?.contains(.code) == true {
+                // A short code span stays on one line: its spaces don't break.
+                let chars = String(piece.characters)
+                if chars.count <= 40, chars.contains(" ") || chars.contains("-") {
+                    // No-break space and no-break hyphen.
+                    var unbroken = AttributedString(chars.replacingOccurrences(of: " ", with: "\u{00A0}")
+                        .replacingOccurrences(of: "-", with: "\u{2011}"))
+                    unbroken.mergeAttributes(run.attributes)
+                    piece = unbroken
+                }
+                piece.font = .system(.callout, design: .monospaced)
+                piece.foregroundColor = palette.codeText
+                piece.backgroundColor = palette.codeBackground
+            }
+            result.append(piece)
+        }
+        return result
+    }
+}
+
+/// A fenced code block, with its text ready to draw and its words counted.
+struct MarkdownCode: Hashable, ExpressibleByStringLiteral {
+    let text: String
+    let words: Int
+    let attributed: AttributedString
+
+    init(_ text: String) {
+        self.text = text
+        words = text.split(whereSeparator: \.isWhitespace).count
+        attributed = AttributedString(text)
+    }
+
+    init(stringLiteral value: String) { self.init(value) }
+
+    static func == (a: MarkdownCode, b: MarkdownCode) -> Bool { a.text == b.text }
+    func hash(into hasher: inout Hasher) { hasher.combine(text) }
+}
+
+/// A table with its column widths and cell text worked out once: a row redraw reads them.
+struct MarkdownTable: Hashable, ExpressibleByArrayLiteral {
+    let rows: [[String]]
+    let columns: Int
+    /// Each column as wide as its longest cell needs, between 64 and 240 points (about 7.5 pt a character).
+    let widths: [CGFloat]
+    /// Every row's cells, padded to `columns`, with their text ready to draw.
+    let cells: [[MarkdownInline]]
+
+    init(_ rows: [[String]]) {
+        self.rows = rows
+        let columns = rows.map(\.count).max() ?? 0
+        self.columns = columns
+        widths = (0..<columns).map { c in
+            let longest = rows.map { c < $0.count ? $0[c].count : 0 }.max() ?? 0
+            return min(240, max(64, CGFloat(longest) * 7.5))
+        }
+        cells = rows.map { row in
+            (0..<columns).map { c in MarkdownInline(c < row.count ? row[c] : "") }
+        }
+    }
+
+    init(arrayLiteral rows: [String]...) { self.init(rows) }
+
+    static func == (a: MarkdownTable, b: MarkdownTable) -> Bool { a.rows == b.rows }
+    func hash(into hasher: inout Hasher) { hasher.combine(rows) }
+}
+
+/// One block of an agent's markdown reply: enough for prose, lists, code and tables. The payloads
+/// are parsed when the block is made, so drawing one does no parsing.
+struct MarkdownBlock: Hashable {
+    enum Kind: Hashable {
+        case paragraph(MarkdownInline)
+        case heading(level: Int, text: MarkdownInline)
+        case bullet(indent: Int, marker: String, text: MarkdownInline)
+        case code(MarkdownCode)
+        case table(MarkdownTable)
+        case quote(MarkdownInline)
+        case rule
+    }
+
+    let kind: Kind
+
+    init(_ kind: Kind) { self.kind = kind }
+
+    static func paragraph(_ text: String) -> MarkdownBlock { MarkdownBlock(.paragraph(MarkdownInline(text))) }
+    static func heading(level: Int, text: String) -> MarkdownBlock {
+        MarkdownBlock(.heading(level: level, text: MarkdownInline(text)))
+    }
+    static func bullet(indent: Int, marker: String, text: String) -> MarkdownBlock {
+        MarkdownBlock(.bullet(indent: indent, marker: marker, text: MarkdownInline(text)))
+    }
+    static func code(_ text: String) -> MarkdownBlock { MarkdownBlock(.code(MarkdownCode(text))) }
+    static func table(_ rows: [[String]]) -> MarkdownBlock { MarkdownBlock(.table(MarkdownTable(rows))) }
+    static func quote(_ text: String) -> MarkdownBlock { MarkdownBlock(.quote(MarkdownInline(text))) }
+    static let rule = MarkdownBlock(.rule)
+
+    var isHeading: Bool { if case .heading = kind { true } else { false } }
 
     static func parse(_ source: String) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []
@@ -61,10 +188,11 @@ enum MarkdownBlock: Hashable {
                 flush()
                 let indent = line.prefix { $0 == " " }.count / 2
                 blocks.append(.bullet(indent: min(indent, 4), marker: marker, text: text))
-            } else if case .bullet(let indent, let marker, let text)? = blocks.last, paragraph.isEmpty,
+            } else if case .bullet(let indent, let marker, let text)? = blocks.last?.kind, paragraph.isEmpty,
                       line.hasPrefix("  ") {
                 // A list item's continuation line.
-                blocks[blocks.count - 1] = .bullet(indent: indent, marker: marker, text: text + " " + trimmed)
+                blocks[blocks.count - 1] = .bullet(
+                    indent: indent, marker: marker, text: text.source + " " + trimmed)
             } else {
                 paragraph.append(trimmed)
             }
@@ -100,11 +228,34 @@ enum MarkdownBlock: Hashable {
         }
         return nil
     }
+
+    /// Words in the block as rendered (markdown marks removed); a table or rule counts as one.
+    /// Read from the counts stored when the block was parsed.
+    var wordCount: Int {
+        switch kind {
+        case .paragraph(let t), .quote(let t), .heading(_, let t), .bullet(_, _, let t): t.words
+        case .code(let c): c.words
+        case .table, .rule: 1
+        }
+    }
+
+    /// The count worked out again from the source, to check the stored one.
+    var wordCountUncached: Int {
+        switch kind {
+        case .paragraph(let t), .quote(let t), .heading(_, let t), .bullet(_, _, let t):
+            MarkdownInline.wordsUncached(t.source)
+        case .code(let c): c.text.split(whereSeparator: \.isWhitespace).count
+        case .table, .rule: 1
+        }
+    }
+
+    static func totalWords(_ blocks: [MarkdownBlock]) -> Int { blocks.reduce(0) { $0 + $1.wordCount } }
 }
 
 /// The chat's colors.
 struct ChatPalette {
     let background, text, secondary, codeText, codeBackground, bubble, field, border: Color
+    let isDark: Bool
     /// Bergr's gold, from the app icon: the logo's own gold in dark mode, a deeper one in light
     /// mode so text and thin strokes stay readable on the cream background.
     var accent: Color { Color("AccentColor") }
@@ -116,57 +267,34 @@ struct ChatPalette {
             ? ChatPalette(
                 background: Color(white: 0.08), text: Color(white: 0.94), secondary: Color(white: 0.6),
                 codeText: Color(red: 0.55, green: 0.69, blue: 0.98), codeBackground: Color(red: 0.15, green: 0.17, blue: 0.21),
-                bubble: Color(white: 0.18), field: Color(white: 0.15), border: Color(white: 0.22))
+                bubble: Color(white: 0.18), field: Color(white: 0.15), border: Color(white: 0.22), isDark: true)
             : ChatPalette(
                 background: Color(red: 0.98, green: 0.976, blue: 0.96), text: Color(white: 0.1), secondary: Color(white: 0.45),
                 codeText: Color(red: 0.13, green: 0.33, blue: 0.75), codeBackground: Color(red: 0.91, green: 0.92, blue: 0.95),
-                bubble: Color(red: 0.92, green: 0.91, blue: 0.88), field: .white, border: Color(white: 0.85))
+                bubble: Color(red: 0.92, green: 0.91, blue: 0.88), field: .white, border: Color(white: 0.85), isDark: false)
     }
 }
 
-/// Parsed blocks, kept: the chat redraws often (scrolling, the working row), and parsing every
-/// message's Markdown each time made a long conversation scroll slowly, on the Mac most of all.
-private final class InlineCache: @unchecked Sendable {
-    static let shared = InlineCache()
-    private let cache: NSCache<NSString, Box> = { let c = NSCache<NSString, Box>(); c.countLimit = 4000; return c }()
-    final class Box { let value: AttributedString; init(_ v: AttributedString) { value = v } }
-    func value(_ key: String, make: () -> AttributedString) -> AttributedString {
-        if let hit = cache.object(forKey: key as NSString) { return hit.value }
-        let made = make()
-        cache.setObject(Box(made), forKey: key as NSString)
-        return made
-    }
-}
-
-/// Bold, italics, links and `code` within one block.
-func inlineMarkdown(_ text: String, palette: ChatPalette) -> AttributedString {
-    // The palette only differs between light and dark: its code color tells them apart.
-    InlineCache.shared.value("\(palette.codeText.description)\u{1}\(text)") { parseInline(text, palette: palette) }
-}
-
-private func parseInline(_ text: String, palette: ChatPalette) -> AttributedString {
-    let parsed = (try? AttributedString(
-        markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
-    var result = AttributedString()
-    for run in parsed.runs {
-        var piece = AttributedString(parsed[run.range])
-        if run.inlinePresentationIntent?.contains(.code) == true {
-            // A short code span stays on one line: its spaces don't break.
-            let chars = String(piece.characters)
-            if chars.count <= 40, chars.contains(" ") || chars.contains("-") {
-                // No-break space and no-break hyphen.
-                var unbroken = AttributedString(chars.replacingOccurrences(of: " ", with: "\u{00A0}")
-                    .replacingOccurrences(of: "-", with: "\u{2011}"))
-                unbroken.mergeAttributes(run.attributes)
-                piece = unbroken
+extension AttributedString {
+    /// The same text with every word after the first `words` made transparent.
+    func revealing(words: Int) -> AttributedString {
+        var seen = 0
+        var inWord = false
+        var cut: AttributedString.Index?
+        for i in characters.indices {
+            if characters[i].isWhitespace { inWord = false; continue }
+            if !inWord {
+                inWord = true
+                seen += 1
+                if seen > words { cut = i; break }
             }
-            piece.font = .system(.callout, design: .monospaced)
-            piece.foregroundColor = palette.codeText
-            piece.backgroundColor = palette.codeBackground
         }
-        result.append(piece)
+        guard let cut else { return self }
+        var result = self
+        result[cut...].foregroundColor = .clear
+        result[cut...].backgroundColor = .clear
+        return result
     }
-    return result
 }
 
 /// When a reply that just arrived shows its words: the whole text is laid out from the start (so
@@ -189,82 +317,31 @@ enum RevealSchedule {
     }
 }
 
-extension MarkdownBlock {
-    /// The text the block shows, for counting and revealing words (tables and rules reveal as one).
-    fileprivate var revealText: String? {
-        switch self {
-        case .paragraph(let t), .quote(let t), .code(let t): t
-        case .heading(_, let t): t
-        case .bullet(_, _, let t): t
-        case .table, .rule: nil
-        }
-    }
-
-    /// Words in the block as rendered (markdown marks removed); a table or rule counts as one.
-    var wordCount: Int {
-        guard let text = revealText else { return 1 }
-        var isCode = false
-        if case .code = self { isCode = true }
-        // Code counts raw words, prose counts rendered ones, so the kind is part of the key.
-        let key = ((isCode ? "c" : "p") + text) as NSString
-        if let hit = Self.wordCounts.object(forKey: key) { return hit.intValue }
-        let count = wordCountUncached
-        Self.wordCounts.setObject(NSNumber(value: count), forKey: key)
-        return count
-    }
-
-    private static let wordCounts = NSCache<NSString, NSNumber>()
-
-    /// The count worked out from scratch.
-    var wordCountUncached: Int {
-        guard let text = revealText else { return 1 }
-        if case .code = self { return text.split(whereSeparator: \.isWhitespace).count }
-        return String(AttributedString.markdownPlain(text).characters).split(whereSeparator: \.isWhitespace).count
-    }
-}
-
-extension AttributedString {
-    fileprivate static func markdownPlain(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text)
-    }
-
-    /// The same text with every word after the first `words` made transparent.
-    func revealing(words: Int) -> AttributedString {
-        var seen = 0
-        var inWord = false
-        var cut: AttributedString.Index?
-        for i in characters.indices {
-            if characters[i].isWhitespace { inWord = false; continue }
-            if !inWord {
-                inWord = true
-                seen += 1
-                if seen > words { cut = i; break }
-            }
-        }
-        guard let cut else { return self }
-        var result = self
-        result[cut...].foregroundColor = .clear
-        result[cut...].backgroundColor = .clear
-        return result
-    }
-}
-
-extension MarkdownBlock {
-    static func totalWords(_ blocks: [MarkdownBlock]) -> Int { blocks.reduce(0) { $0 + $1.wordCount } }
-}
-
 struct MarkdownView: View {
     let blocks: [MarkdownBlock]
     let palette: ChatPalette
     /// Words shown so far while a reply is revealing; nil shows everything.
-    var revealed: Int?
+    let revealed: Int?
+    /// Where each block's words start, counted once with the blocks (empty when nothing is revealing).
+    private let starts: [Int]
+
+    init(blocks: [MarkdownBlock], palette: ChatPalette, revealed: Int? = nil) {
+        self.blocks = blocks
+        self.palette = palette
+        self.revealed = revealed
+        var starts: [Int] = []
+        if revealed != nil {
+            starts.reserveCapacity(blocks.count + 1)
+            starts.append(0)
+            for block in blocks { starts.append(starts[starts.count - 1] + block.wordCount) }
+        }
+        self.starts = starts
+    }
 
     var body: some View {
         #if DEBUG
         let _ = RenderProbe.hit("MarkdownView")
         #endif
-        let starts = blocks.reduce(into: [0]) { $0.append($0.last! + $1.wordCount) }
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { i, block in
                 view(for: block, visibleWords: revealed.map { $0 - starts[i] })
@@ -278,42 +355,46 @@ struct MarkdownView: View {
     }
 
     /// Inline text with the not yet revealed words transparent.
-    private func text(_ source: String, _ visible: Int?) -> Text {
-        let text = inlineMarkdown(source, palette: palette)
-        return Text(visible.map { text.revealing(words: max(0, $0)) } ?? text)
+    private func inlineText(_ inline: MarkdownInline, _ visible: Int?) -> Text {
+        let styled = inline.styled(palette)
+        return Text(visible.map { styled.revealing(words: max(0, $0)) } ?? styled)
     }
+
+    private static let codeFont = Font.system(.footnote, design: .monospaced)
 
     @ViewBuilder
     private func view(for block: MarkdownBlock, visibleWords visible: Int?) -> some View {
-        switch block {
-        case .paragraph(let text):
-            self.text(text, visible)
+        switch block.kind {
+        case .paragraph(let inline):
+            inlineText(inline, visible)
                 .lineSpacing(3)
-        case .heading(let level, let text):
-            self.text(text, visible)
+        case .heading(let level, let inline):
+            inlineText(inline, visible)
                 .font(level == 1 ? .title3.bold() : level == 2 ? .headline : .subheadline.bold())
                 .accessibilityAddTraits(.isHeader)
-        case .bullet(let indent, let marker, let text):
+        case .bullet(let indent, let marker, let inline):
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(marker).foregroundStyle(palette.secondary).monospacedDigit()
                     .opacity(visible.map { $0 > 0 } ?? true ? 1 : 0)
-                self.text(text, visible).lineSpacing(3)
+                inlineText(inline, visible).lineSpacing(3)
             }
             .padding(.leading, CGFloat(indent) * 18)
         case .code(let code):
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(visible.map { AttributedString(code).revealing(words: max(0, $0)) } ?? AttributedString(code))
-                    .font(.system(.footnote, design: .monospaced))
-                    .lineSpacing(2)
-                    .padding(14)
-            }
-            .background(palette.codeBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .opacity(visible.map { $0 > 0 } ?? true ? 1 : 0)
-        case .table(let rows):
-            TableView(rows: rows, palette: palette)
+            // Wrapped, not scrolled: a nested horizontal ScrollView per code block was costly to lay out and scroll.
+            Text(visible.map { code.attributed.revealing(words: max(0, $0)) } ?? code.attributed)
+                .font(Self.codeFont)
+                .lineSpacing(2)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(palette.codeBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .opacity(visible.map { $0 > 0 } ?? true ? 1 : 0)
-        case .quote(let text):
-            self.text(text, visible)
+        case .table(let table):
+            MarkdownTableView(table: table, palette: palette)
+                .opacity(visible.map { $0 > 0 } ?? true ? 1 : 0)
+        case .quote(let inline):
+            inlineText(inline, visible)
                 .foregroundStyle(palette.secondary)
                 .padding(.leading, 12)
                 .overlay(alignment: .leading) { Rectangle().fill(palette.border).frame(width: 3) }
@@ -324,37 +405,27 @@ struct MarkdownView: View {
     }
 }
 
-private struct TableView: View {
-    let rows: [[String]]
+private struct MarkdownTableView: View {
+    let table: MarkdownTable
     let palette: ChatPalette
 
-    /// Each column as wide as its longest cell needs, between 64 and 240 points (about 7.5 pt a character).
-    static func widths(_ rows: [[String]], columns: Int) -> [CGFloat] {
-        (0..<columns).map { c in
-            let longest = rows.map { c < $0.count ? $0[c].count : 0 }.max() ?? 0
-            return min(240, max(64, CGFloat(longest) * 7.5))
-        }
-    }
-
     var body: some View {
-        let columns = rows.map(\.count).max() ?? 0
-        let widths = Self.widths(rows, columns: columns)
         ScrollView(.horizontal, showsIndicators: false) {
             Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
-                ForEach(rows.indices, id: \.self) { r in
+                ForEach(table.cells.indices, id: \.self) { r in
                     GridRow(alignment: .top) {
-                        ForEach(0..<columns, id: \.self) { c in
-                            Text(inlineMarkdown(c < rows[r].count ? rows[r][c] : "", palette: palette))
+                        ForEach(0..<table.columns, id: \.self) { c in
+                            Text(table.cells[r][c].styled(palette))
                                 .font(r == 0 ? .subheadline.weight(.semibold) : .subheadline)
                                 // A set width per column: with a flexible one, Grid sized rows for
                                 // unwrapped text, and wrapped lines drew over the next row.
                                 .fixedSize(horizontal: false, vertical: true)
-                                .frame(width: widths[c], alignment: .leading)
+                                .frame(width: table.widths[c], alignment: .leading)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 10)
                         }
                     }
-                    if r < rows.count - 1 {
+                    if r < table.cells.count - 1 {
                         Rectangle().fill(palette.border).frame(height: 1).gridCellUnsizedAxes(.horizontal)
                     }
                 }
