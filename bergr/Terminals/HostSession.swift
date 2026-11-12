@@ -256,6 +256,7 @@ final class HostSession {
 
     /// Connects and keeps the connection up until `stop()`.
     func start(keys: KeyLibrary) {
+        keyLibrary = keys
         guard attempt == nil else { return }
         intent = .running
         generation += 1
@@ -318,6 +319,7 @@ final class HostSession {
     func probe(keys: KeyLibrary) {
         guard state == .connected, !probing, let client = try? connectedClient() else { return }
         probing = true
+        lastProbe = .now
         let attempt = self.attempt
         Task { @MainActor in
             defer { probing = false }
@@ -332,6 +334,26 @@ final class HostSession {
     }
 
     @ObservationIgnored private var probing = false
+    @ObservationIgnored private var lastProbe: ContinuousClock.Instant?
+    @ObservationIgnored private var keyLibrary: KeyLibrary?
+
+    /// While a chat or terminal is on screen and the app active: check the line every 3 s, like
+    /// Mosh. A line that dies without a network change (tunnel, host asleep, VPN) otherwise looks
+    /// live until herdr-core's 40 s silence limit, and takes keys meanwhile.
+    func keepChecking() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            checkLine()
+        }
+    }
+
+    /// Checks the line unless it was checked moments ago (several screens may ask).
+    func checkLine() {
+        guard let keys = keyLibrary else { return }
+        if let lastProbe, ContinuousClock.now - lastProbe < .milliseconds(2500) { return }
+        probe(keys: keys)
+    }
 
     /// The line's smoothed round trip as of the last probe; nil until a call has been answered.
     private(set) var roundTrip: RoundTrip?

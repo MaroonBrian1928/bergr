@@ -179,6 +179,9 @@ struct TerminalScreenView: View {
         }
         // Kept connected in the background, the line may never visibly drop while the channel
         // died with the app suspended (back from a notification): attach again anyway.
+        .task(id: scenePhase == .active) {
+            if scenePhase == .active { await session.keepChecking() }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { wasInBackground = true }
             guard phase == .active, wasInBackground else { return }

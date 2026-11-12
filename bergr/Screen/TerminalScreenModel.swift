@@ -306,8 +306,14 @@ final class TerminalScreenModel {
         Task { try? await attached.sendAutomatic(replies) }
     }
 
+    @ObservationIgnored private var lastInput: ContinuousClock.Instant?
+
     private func send(_ data: Data) {
         guard !data.isEmpty else { return }
+        // The first key after a pause is when a dead line matters most: check it now.
+        let now = ContinuousClock.now
+        if lastInput.map({ now - $0 > .seconds(5) }) ?? true { session?.checkLine() }
+        lastInput = now
         // Typing while watching takes over: attach as a viewer, then send what was typed.
         if watching {
             pendingInput.append(data)

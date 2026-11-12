@@ -109,6 +109,10 @@ private struct ChatWindowContent: View {
             }
             .frame(width: 0, height: 0)
         }
+        // Check the line every 3 s while this window is in front.
+        .task(id: appearsActive) {
+            if appearsActive { await session.keepChecking() }
+        }
         // The window in front doesn't get banners about its own agent.
         .onChange(of: appearsActive, initial: true) { _, active in
             setReading(active)
