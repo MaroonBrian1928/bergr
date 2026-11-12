@@ -38,6 +38,7 @@ public actor HerdrClient {
 
     /// The core's answer to `hello`.
     public private(set) var hello: HelloResult?
+    public private(set) var platform: HerdrCore.Platform = .unix
 
     init(transport: any ByteTransport) {
         self.transport = transport
@@ -58,9 +59,24 @@ public actor HerdrClient {
 
     /// Opens `herdr-core connect` over SSH and connects to it.
     public static func connect(ssh: SSHConnection, session: String? = nil) async throws -> HerdrClient {
-        let pipe = try await ssh.openExec(HerdrCore.connectCommand(session: session))
-        return try await connect(over: pipe)
+        var platform: HerdrCore.Platform = ssh.isWindowsServer ? .windows : .unix
+        #if os(macOS)
+        if ssh.usesSystemSSH {
+            do {
+                platform = HerdrCore.platform(probeOutput: try await ssh.run(HerdrCore.windowsProbe))
+            } catch SSHTransportError.commandFailed(let code, _) where code != 255 {
+                platform = .unix
+            }
+        }
+        #endif
+        let pipe = try await ssh.openExec(HerdrCore.connectCommand(
+            session: session, platform: platform))
+        let client = try await connect(over: pipe)
+        await client.setPlatform(platform)
+        return client
     }
+
+    private func setPlatform(_ platform: HerdrCore.Platform) { self.platform = platform }
 
     public func close() {
         reader?.cancel()

@@ -14,13 +14,29 @@ extension ExecPipe: ByteTransport {
 }
 
 public enum HerdrCore {
+    public enum Platform: Sendable { case unix, windows }
+
+    /// Works with either cmd.exe or PowerShell as the Windows SSH default shell.
+    /// A Unix shell reports command-not-found, so platform detection needs no PTY.
+    public static let windowsProbe = "cmd.exe /d /c ver"
+
+    public static func platform(probeOutput: String) -> Platform {
+        probeOutput.contains("Microsoft Windows") ? .windows : .unix
+    }
     /// The protocol generation this client speaks.
     public static let generation = 1
 
     /// Shell line that connects stdin/stdout to the core on an SSH host. Same as
     /// herdr-core's own `hc machine add` (see `machines.rs`, `fn pipe`): find
     /// `herdr-core` on PATH or in `~/.local/bin`, then `exec herdr-core connect`.
-    public static func connectCommand(session: String? = nil) -> String {
+    public static func connectCommand(session: String? = nil, platform: Platform = .unix) -> String {
+        if platform == .windows {
+            let prefix = session.map { "set \"HC_SESSION=\(shellQuoteInner($0))\" && " } ?? ""
+            // cmd launches the native executable with the SSH channel's raw stdin/stdout.
+            // Routing the protocol through a PowerShell pipeline corrupts binary frames.
+            let installed = #"%LOCALAPPDATA%\Programs\herdr-core\herdr-core.exe"#
+            return "cmd.exe /d /s /c \"\(prefix)if exist \"\(installed)\" (\"\(installed)\" connect) else (herdr-core.exe connect)\""
+        }
         let sessionPrefix = session.map { "HC_SESSION=\(shellQuoteInner($0)) " } ?? ""
         return "sh -c 'p=$(command -v herdr-core) || p=$HOME/.local/bin/herdr-core; "
             + "[ -x \"$p\" ] || { echo \"\(notInstalledMessage)\" >&2; exit 127; }; "

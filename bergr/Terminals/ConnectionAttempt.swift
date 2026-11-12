@@ -11,6 +11,7 @@ struct HostConnection {
     let coreVersion: String?
     /// "This Mac": commands run here instead of over SSH.
     var isLocal = false
+    var isWindows = false
     /// Live: `client.close()`, then `ssh?.close()`.
     let close: @Sendable () async -> Void
 }
@@ -45,11 +46,25 @@ struct HostConnector {
                     client: client, ssh: nil, coreName: "Demo", coreVersion: await client.hello?.version,
                     close: { await client.close() })
             }
+            let ssh: SSHConnection
+            #if os(macOS)
+            if host.usesSystemSSH {
+                context.progress("Connecting using this Mac's SSH…")
+                ssh = SSHConnection.system(to: host.target)
+            } else {
+                context.progress("Unlocking key…")
+                let key = try await context.signingKey()
+                context.progress(context.reconnecting ? "Reconnecting…" : "Connecting to \(host.target.host)…")
+                ssh = try await SSHConnection.connect(
+                    to: host.target, key: key, knownHosts: knownHosts, onUnknownHost: context.askToTrust)
+            }
+            #else
             context.progress("Unlocking key…")
             let key = try await context.signingKey()
             context.progress(context.reconnecting ? "Reconnecting…" : "Connecting to \(host.target.host)…")
-            let ssh = try await SSHConnection.connect(
+            ssh = try await SSHConnection.connect(
                 to: host.target, key: key, knownHosts: knownHosts, onUnknownHost: context.askToTrust)
+            #endif
             context.progress("Starting herdr-core…")
             let client: HerdrClient
             do {
@@ -61,6 +76,7 @@ struct HostConnector {
             let hello = await client.hello
             return HostConnection(
                 client: client, ssh: ssh, coreName: hello?.core.name, coreVersion: hello?.version,
+                isWindows: await client.platform == .windows,
                 close: {
                     await client.close()
                     await ssh.close()

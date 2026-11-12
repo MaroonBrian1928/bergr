@@ -184,6 +184,48 @@ private func makeSession(_ line: FakeLine) -> HostSession {
         session.stop()
     }
 
+    @Test func foregroundReplacesAnApparentlyLiveBackgroundConnection() async {
+        let line = FakeLine()
+        let session = makeSession(line)
+        line.release(0)
+        line.release(1)
+        session.start(keys: keys)
+        #expect(await eventually { session.state == .connected })
+        let revision = session.connectionRevision
+        session.resumeAfterBackground(keys: keys)
+        #expect(await eventually { line.started == 2 && session.state == .connected })
+        #expect(session.connectionRevision == revision + 1)
+        #expect(await eventually { line.closes.contains(0) })
+        session.stop()
+        session.resumeAfterBackground(keys: keys)
+        await settle()
+        #expect(line.started == 2)
+    }
+
+    @Test func newConnectionBypassesRecentAttachDebounce() async throws {
+        let line = FakeLine()
+        let session = makeSession(line)
+        line.release(0)
+        line.release(1)
+        session.start(keys: keys)
+        #expect(await eventually { session.state == .connected })
+        let terminal = try #require(session.terminals.first)
+        let model = TerminalScreenModel(theme: TerminalTheme.all[0])
+        model.start(session: session, address: terminal.address, cols: 80, rows: 24)
+        #expect(await eventually { model.phase == .live })
+        // A new line within the old 3-second debounce must reattach without leaving the chat.
+        session.resumeAfterBackground(keys: keys)
+        #expect(await eventually { line.started == 2 && session.state == .connected })
+        model.reconnect()
+        #expect(await eventually { model.phase == .live })
+        // A covering sheet can disappear/reappear just after attaching, too.
+        model.stop()
+        model.reconnect()
+        #expect(await eventually { model.phase == .live })
+        model.stop()
+        session.stop()
+    }
+
     @Test func resumeDoesNotStartStoppedSessions() async {
         let line = FakeLine()
         let session = makeSession(line)

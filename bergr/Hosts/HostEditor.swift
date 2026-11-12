@@ -80,12 +80,12 @@ struct HostEditor: View {
         if host.isLocal { return nil }
         if host.target.username.trimmed.isEmpty { return "Enter a username (user@address) to save." }
         if portValue == nil { return "The port must be a number from 1 to 65535." }
-        if host.keyID == nil { return "Pick or create a key to save." }
+        if host.keyID == nil && !host.usesSystemSSH { return "Pick or create a key to save." }
         return nil
     }
 
     private var canSave: Bool {
-        !host.target.host.trimmed.isEmpty && (host.isLocal || (!host.target.username.trimmed.isEmpty && host.keyID != nil && portValue != nil))
+        !host.target.host.trimmed.isEmpty && (host.isLocal || (!host.target.username.trimmed.isEmpty && (host.usesSystemSSH || host.keyID != nil) && portValue != nil))
     }
 
     var body: some View {
@@ -100,7 +100,7 @@ struct HostEditor: View {
                     }
                 }
                 keySection
-                if let key { authorizeSection(key) }
+                if let key, !host.usesSystemSSH { authorizeSection(key) }
                 testSection
                 #if os(macOS)
                 systemSSHSection
@@ -207,6 +207,11 @@ struct HostEditor: View {
 
     private var keySection: some View {
         Section {
+            #if os(macOS)
+            Toggle("Use this Mac's SSH", isOn: Binding(
+                get: { host.usesSystemSSH }, set: { host.systemSSH = $0 }))
+            #endif
+            if !host.usesSystemSSH {
             Picker("Key", selection: $host.keyID) {
                 Text("None").tag(UUID?.none)
                 ForEach(keys.keys) { Text($0.label).tag(Optional($0.id)) }
@@ -214,12 +219,17 @@ struct HostEditor: View {
             .frame(minHeight: PlatformMetrics.controlHeight)
             Button("New Key…", systemImage: "plus.circle") { showingNewKey = true }
                 .frame(minHeight: PlatformMetrics.controlHeight)
+            }
         } header: {
             Text("Key")
         } footer: {
+            if host.usesSystemSSH {
+                Text("Uses this Mac's SSH config, known hosts and ssh-agent. Your private key stays with macOS; no import is needed. For a new host or a locked key, connect once in Terminal first.")
+            } else {
             Text(keys.keys.isEmpty
                  ? "Bergr signs in with a key that stays on this phone. Create one to start."
                  : "Bergr signs in with this key. The private half never leaves this phone.")
+            }
         }
     }
 

@@ -240,16 +240,22 @@ final class ChatFeed {
             phase = .failed("The chat helper is missing from the app.")
             return
         }
-        // The script travels base64-encoded, so no shell quoting can break it.
-        let encoded = Data(script.utf8).base64EncodedString()
-        let command = "python3 -I -c 'import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))' "
-            + "\(encoded) \(agent.rawValue) \(pid) \(Self.shellQuote(cwd)) \(Self.shellQuote(sessionHint ?? "-"))"
+        let launch: ChatHelperLaunch.Plan
+        do {
+            launch = try ChatHelperLaunch.make(script: script, agent: agent.rawValue, pid: pid,
+                cwd: cwd, sessionHint: sessionHint, windows: session.isWindowsHost)
+        } catch {
+            phase = .failed(error.localizedDescription)
+            return
+        }
         while !Task.isCancelled {
             stalled = false
             do {
                 // Bounded: on a connection that died quietly, opening a channel never answers.
                 // The loop below tries again; the session's own watchdog replaces the connection.
-                let pipe = try await Self.openExec(timeout: .seconds(10)) { try await session.openExec(command) }
+                let pipe = try await Self.openExec(timeout: .seconds(10)) { try await session.openExec(launch.command) }
+                defer { pipe.close() }
+                try await pipe.write(launch.input)
                 // The helper pings every second. A channel that died quietly (the phone or the
                 // machine slept) sends nothing and never errors, so without pings for a while,
                 // close it and follow the conversation again; otherwise the chat and its
@@ -561,10 +567,6 @@ final class ChatFeed {
             working.append(Item(id: id, kind: kind))
             if caughtUp, case .assistant = kind { markReveal(id) }
         }
-    }
-
-    private static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private static func describe(_ error: Error) -> String {

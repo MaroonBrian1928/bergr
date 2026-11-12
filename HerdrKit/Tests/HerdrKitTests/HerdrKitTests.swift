@@ -299,6 +299,41 @@ private let layoutJSON = #"""
     #expect(HerdrCore.connectCommand(session: "scratch").contains("HC_SESSION=scratch exec"))
 }
 
+@Test func windowsConnectUsesNativeStdioAndInstallLocation() {
+    let command = HerdrCore.connectCommand(platform: .windows)
+    #expect(command.hasPrefix("cmd.exe /d /s /c "))
+    #expect(command.contains(#"%LOCALAPPDATA%\Programs\herdr-core\herdr-core.exe"#))
+    #expect(command.contains("else (herdr-core.exe connect)"))
+    #expect(!command.contains("powershell"))
+    let session = HerdrCore.connectCommand(session: "scratch&whoami", platform: .windows)
+    #expect(session.contains(#"set "HC_SESSION=scratchwhoami" &&"#))
+    #expect(HerdrCore.platform(probeOutput: "Microsoft Windows [Version 10.0.26200]") == .windows)
+    #expect(HerdrCore.platform(probeOutput: "") == .unix)
+}
+
+#if os(macOS)
+/// Opt-in check using the Mac's existing agent and known_hosts; no key material is read.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["BERGR_TEST_SSH_HOST"] != nil), .timeLimit(.minutes(1)))
+func systemSSHHerdrHandshakeAndSnapshot() async throws {
+    let env = ProcessInfo.processInfo.environment
+    let ssh = SSHConnection.system(to: SSHTarget(
+        host: env["BERGR_TEST_SSH_HOST"]!, username: env["BERGR_TEST_SSH_USER"]!))
+    do {
+        let client = try await HerdrClient.connect(ssh: ssh)
+        let hello = await client.hello
+        #expect(hello?.generation == HerdrCore.generation)
+        let subscription = try await client.subscribeEvents()
+        _ = subscription.snapshot
+        _ = try await client.listTerminals()
+        await client.close()
+        await ssh.close()
+    } catch {
+        await ssh.close()
+        throw error
+    }
+}
+#endif
+
 #if os(macOS)
 private let localCore = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent(".local/bin/herdr-core")

@@ -18,6 +18,17 @@ struct Host: Identifiable, Codable, Hashable {
     /// "This Mac": herdr-core runs on this machine, reached by starting `herdr-core connect`
     /// directly (no SSH, no key). Optional so hosts saved before it existed still decode.
     var local: Bool?
+    /// Native Mac only: use OpenSSH and its agent without importing a private key.
+    /// Optional for existing saved machines; those retain their selected Bergr key.
+    var systemSSH: Bool?
+
+    var usesSystemSSH: Bool {
+        #if os(macOS)
+        systemSSH ?? (keyID == nil)
+        #else
+        false
+        #endif
+    }
 
     var isDemo: Bool { demo == true }
     var isLocal: Bool {

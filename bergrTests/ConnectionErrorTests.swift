@@ -31,6 +31,13 @@ struct ConnectionErrorTests {
         #expect(message.contains("authorized_keys"))
     }
 
+    @Test func channelTimeoutHasAnActionableMessage() {
+        let message = HostSession.describe(ChannelError.connectTimeout(.seconds(10)), host: host)
+        #expect(message.contains("SSH timed out"))
+        #expect(!message.contains("error 0"))
+        #expect(HostSession.describe(ChannelError.ioOnClosedChannel, host: host).contains("connection to laptop closed"))
+    }
+
     @Test func faceIDCanceled() {
         let error = NSError(domain: "com.apple.LocalAuthentication", code: -2)
         #expect(HostSession.describe(error, host: host).contains("canceled"))

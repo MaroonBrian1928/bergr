@@ -21,11 +21,13 @@ struct MachinesView: View {
                 ContentUnavailableView {
                     Label("No machines", systemImage: "server.rack")
                 } description: {
-                    Text(keys.keys.isEmpty
+                    Text(LocalCore.isMac
+                        ? "Add a machine using this Mac's SSH config and ssh-agent, or select a Bergr key."
+                        : keys.keys.isEmpty
                         ? "Create an SSH key first, add it to your machine, then add the machine here."
                         : "Add a machine that runs herdr-core.")
                 } actions: {
-                    if keys.keys.isEmpty {
+                    if keys.keys.isEmpty && !LocalCore.isMac {
                         Button("Create Key") { showingKeys = true }.buttonStyle(.borderedProminent)
                     } else {
                         Button("Add Machine") { editing = newHost() }.buttonStyle(.borderedProminent)

@@ -82,6 +82,9 @@ mac-native configuration="Debug":
     name="{{ if configuration == "Debug" { "Bergr Dev" } else { "Bergr" } }}"
     # By bundle id: the iPad build has the same name.
     app=".build/xcode-mac-native/Build/Products/{{configuration}}/$name.app"
+    # CODE_SIGNING_ALLOWED=NO leaves only linker signatures, without a resource seal. Seal
+    # local builds before copying them, so taskgated can validate the installed app bundle.
+    if [ -z "${BERGR_MAC_SIGNED:-}" ]; then codesign --force --deep --sign - "$app"; fi
     id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")"
     osascript -e "tell application id \"$id\" to quit" 2>/dev/null || true
     sleep 1  # opening while it quits fails (-609)

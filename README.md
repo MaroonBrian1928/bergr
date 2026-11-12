@@ -48,6 +48,16 @@ on Apple silicon Macs as an iPad app.
 No server yet? **Try the Demo** on the first screen opens a built-in machine with agents to chat
 with and answer, all simulated on the device.
 
+The native Mac app can use your existing SSH config and ssh-agent: in a machine's settings,
+enable **Use this Mac's SSH**. No private key import is needed. It uses OpenSSH's `known_hosts`
+checks and won't show interactive SSH prompts; connect once in Terminal to trust a new host or
+unlock a key before connecting in Bergr. iPhone and iPad use the key selected in Bergr instead.
+
+Native Windows SSH hosts start `herdr-core.exe` through `cmd.exe`, preserving the binary protocol
+on stdin/stdout. Bergr finds the standard per-user installation or uses the executable on PATH.
+The chat view requires Python 3 on the host. On Windows it uses the standard per-user Python
+3.13 installation or `python.exe` on PATH. Push-alert installation still requires Unix tools.
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/ipad-dark.png">

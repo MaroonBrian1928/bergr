@@ -7,6 +7,7 @@ struct RootView: View {
     @Environment(HostStore.self) private var hosts
     @Environment(KeyLibrary.self) private var keys
     @Environment(\.scenePhase) private var scenePhase
+    @State private var wasInBackground = false
     @State private var sessions = SessionStore()
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// The machine shown in the sidebar, remembered across launches.
@@ -193,6 +194,7 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background:
+                wasInBackground = true
                 // Kept connected in the background (Settings → When Bergr isn't open): the sessions stay up, so
                 // agents that need you can alert. Otherwise they pause, as before.
                 if KeepAlive.shared.enabled {
@@ -203,7 +205,12 @@ struct RootView: View {
                 }
             case .active:
                 KeepAlive.shared.appEnteredForeground()
-                sessions.resumePaused(keys: keys)
+                if wasInBackground {
+                    wasInBackground = false
+                    sessions.resumeAfterBackground(keys: keys)
+                } else {
+                    sessions.resumePaused(keys: keys)
+                }
             default: break
             }
         }

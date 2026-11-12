@@ -72,12 +72,14 @@ private struct ChatWindowContent: View {
                 }
             } else if let agent {
                 ChatView(feed: feed, agent: agent, terminal: terminal, model: model, session: session)
-                    .task(id: "\(agent.rawValue) \(session.state == .connected)") {
+                    .task(id: "\(agent.rawValue) \(session.state == .connected) \(session.connectionRevision)") {
                         guard session.state == .connected, let terminal else { return }
                         model.wantsKeyboard = false
                         model.drawing = false
                         if !model.started {
                             model.start(session: session, address: address, cols: max(terminal.cols, 20), rows: max(terminal.rows, 5))
+                        } else {
+                            model.reconnect()
                         }
                         let front = terminal.foreground.flatMap {
                             ChatAgent.detect(name: $0.name, argv: $0.argv) == agent ? $0 : nil

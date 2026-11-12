@@ -3,6 +3,7 @@ import Foundation
 import Network
 import HerdrKit
 import Observation
+import NIOCore
 
 /// One machine's connection: SSH, herdr-core, and a live terminal snapshot kept
 /// current by the event stream. Reconnects on its own after a dropped line.
@@ -39,6 +40,8 @@ final class HostSession {
     /// The current start or retry. It owns the SSH line and the client; nothing else does.
     private var attempt: ConnectionAttempt?
     private var generation: UInt64 = 0
+    /// Changes for every successful connection, even when SwiftUI coalesces a drop/reconnect.
+    private(set) var connectionRevision: UInt64 = 0
     /// Kept for the session so reconnects do not ask for Face ID again.
     private var signingKey: SigningKey?
     private let knownHosts: any KnownHostsStore
@@ -224,6 +227,7 @@ final class HostSession {
 
     /// Whether a command can run on this machine over SSH (not the demo).
     var canRunCommands: Bool { (attempt?.connection?.ssh != nil || attempt?.connection?.isLocal == true) && !host.isDemo }
+    var isWindowsHost: Bool { attempt?.connection?.isWindows == true }
 
     /// Runs a long-lived command on the machine, beside herdr-core (the chat feed).
     func openExec(_ command: String) async throws -> ExecPipe {
@@ -299,6 +303,17 @@ final class HostSession {
         start(keys: keys)
     }
 
+    /// A background connection can look live after iOS suspended its sockets. Replace it on
+    /// return, preserving the unlocked key and chat feeds, rather than waiting for navigation.
+    func resumeAfterBackground(keys: KeyLibrary) {
+        if intent == .paused {
+            start(keys: keys)
+        } else if intent == .running, isActive {
+            stop(forgetKey: false)
+            start(keys: keys)
+        }
+    }
+
     /// The snapshot after one message, or nil when it changes nothing the screens show. Every
     /// write to the observed `snapshot` redraws each reader of `terminals`, so only a change is
     /// written. An event that leaves the terminals as they were keeps its `seq` out of the
@@ -351,6 +366,16 @@ final class HostSession {
     /// What went wrong, and what to do about it, in words: not "NIOCore.IOError error 1".
     static func describe(_ error: Error, host: Host) -> String {
         let name = host.name.isEmpty ? host.target.host : host.name
+        if let channel = error as? ChannelError {
+            switch channel {
+            case .connectTimeout:
+                return "SSH timed out connecting or signing in to \(name). Check the address, SSH server and selected key, then tap Retry."
+            case .ioOnClosedChannel, .alreadyClosed, .eof, .inputClosed, .outputClosed:
+                return "The SSH connection to \(name) closed before the operation finished. Tap Retry."
+            default:
+                return "SSH failed for \(name): \(String(describing: channel))"
+            }
+        }
         if case SSHTransportError.commandFailed(127, _) = error {
             return "herdr-core is not installed on this machine (looked on PATH and in ~/.local/bin). Install it there, then tap Retry."
         }
@@ -440,6 +465,7 @@ extension HostSession: ConnectionAttemptOwner {
         self.layout = layout
         coreName = c.coreName
         coreVersion = c.coreVersion
+        connectionRevision &+= 1
         state = .connected
         markLookedAt()
         resumeFeeds()
@@ -472,6 +498,7 @@ extension HostSession: ConnectionAttemptOwner {
 
     func attempt(_ a: ConnectionAttempt, failed error: Error, retrying: Bool) {
         guard isCurrent(a) else { return }
+        stopFeeds()
         state = .failed(Self.describe(error, host: host), retrying: retrying)
     }
 
@@ -529,5 +556,9 @@ final class SessionStore {
 
     func resumePaused(keys: KeyLibrary) {
         for session in sessions.values { session.resume(keys: keys) }
+    }
+
+    func resumeAfterBackground(keys: KeyLibrary) {
+        for session in sessions.values { session.resumeAfterBackground(keys: keys) }
     }
 }

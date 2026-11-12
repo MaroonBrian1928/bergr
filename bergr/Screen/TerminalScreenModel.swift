@@ -37,6 +37,7 @@ final class TerminalScreenModel {
     /// When the current channel attached: a reconnect right after it is the same comeback.
     private var attachedAt: Date?
     private var pump: Task<Void, Never>?
+    private var pumpConnectionRevision: UInt64?
     /// The frame waiting to be rendered, if one is scheduled.
     private var renderTask: Task<Void, Never>?
     /// What this view would like (fits its bounds); sent whenever we act.
@@ -92,6 +93,7 @@ final class TerminalScreenModel {
         self.address = address
         watching = watch
         phase = .attaching
+        pumpConnectionRevision = session.connectionRevision
         pump = Task { await run() }
     }
 
@@ -106,9 +108,13 @@ final class TerminalScreenModel {
         // back, the screen reappearing). Each one closed the channel the one before had just
         // opened, and a key sent in between went out on a channel being closed: one attach is
         // enough. Already attaching, or attached a moment ago: keep it.
-        if pump != nil, attached == nil { return }
-        if let at = attachedAt, Date.now.timeIntervalSince(at) < 3 { return }
+        if pump != nil, pumpConnectionRevision == session?.connectionRevision {
+            if attached == nil { return }
+            if let at = attachedAt, Date.now.timeIntervalSince(at) < 3 { return }
+        }
         stop()
+        phase = .attaching
+        pumpConnectionRevision = session?.connectionRevision
         pump = Task { await run() }
     }
 
@@ -117,6 +123,7 @@ final class TerminalScreenModel {
         pump = nil
         let attached = self.attached
         self.attached = nil
+        attachedAt = nil
         Task { await attached?.detach() }
     }
 

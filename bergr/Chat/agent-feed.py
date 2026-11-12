@@ -18,6 +18,7 @@
 #   {"t":"usage","model":..,"effort":..,"used":<tokens>,"limit":<tokens>|null,
 #    "session":{"percent":..,"resets_at":<epoch s>}|null,"weekly":{..}|null}   context and plan usage
 # Usage: agent-feed.py <claude|codex|antigravity> <pid> <cwd> [session-id|-]
+# Bergr sends this source and argv over stdin to a short Python bootstrap, including on Windows.
 # The session id comes from the agent's launch command (claude --resume <id>, codex resume <id>).
 # Read-only: it never writes to the agents' files.
 import html

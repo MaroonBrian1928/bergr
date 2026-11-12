@@ -24,7 +24,7 @@ public enum KeyImportError: Error, LocalizedError, Equatable {
         case .empty: "Paste a private key or choose a file."
         case .notAKey: "This doesn't look like a private key. Expected text starting with “-----BEGIN OPENSSH PRIVATE KEY-----”."
         case .passphrase:
-            "This key has a passphrase. Remove it with `ssh-keygen -p -f <file>` and import again, or create a new key in Bergr."
+            "This key is encrypted. On Bergr Mac, enable “Use this Mac's SSH” in the machine's settings to use it through ssh-agent without importing it. On iPhone or iPad, create a key in Bergr and authorize its public key on the machine."
         case .rsa: "RSA keys are not supported. Use an ed25519 or ECDSA P-256 key, or create a new key in Bergr."
         case .unsupported(let what): "Unsupported key type: \(what). Bergr supports ed25519 and ECDSA P-256."
         case .malformed: "The key data is damaged or incomplete."

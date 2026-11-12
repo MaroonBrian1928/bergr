@@ -165,8 +165,8 @@ struct TerminalScreenView: View {
         // until the terminal itself is opened.
         // (The same model attaches again: a new one would wait for the terminal to report its
         // size, which a hidden terminal behind the chat never does.)
-        .onChange(of: session.state == .connected) { _, connected in
-            if connected, model.started { model.reconnect() }
+        .onChange(of: session.connectionRevision) { _, _ in
+            if session.state == .connected, model.started { model.reconnect() }
         }
         // Kept connected in the background, the line may never visibly drop while the channel
         // died with the app suspended (back from a notification): attach again anyway.
@@ -188,7 +188,7 @@ struct TerminalScreenView: View {
         // agent runs a command, and the feed finds a new conversation in the same terminal itself.
         // Also keyed by the line being up: going to the background closes the line and ends the
         // feeds, so coming back must ask for a new one (the old one stays on screen meanwhile).
-        .task(id: chat ? agent.map { "\($0.rawValue) \(session.state == .connected)" } : nil) {
+        .task(id: chat ? agent.map { "\($0.rawValue) \(session.state == .connected) \(session.connectionRevision)" } : nil) {
             guard chat, let agent, let terminal, session.state == .connected else { return }
             model.wantsKeyboard = false
             // The agent's own process if it's in front; else the terminal's folder finds it.
