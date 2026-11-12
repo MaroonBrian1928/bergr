@@ -288,16 +288,20 @@ struct ChatView: View {
         .modifier(BounceProbe(feed: feed, terminal: terminal, model: model, state: state,
                               on: UserDefaults.standard.bool(forKey: "bergr.bounceProbe")))
         #endif
-        .onScrollGeometryChange(for: CGFloat.self) { geometry in
-            geometry.contentSize.height - geometry.visibleRect.maxY
-        } action: { _, below in
+        // Only which side of each threshold the bottom is on, not the distance itself: a value that
+        // changed every scroll frame ran this every frame (and was most of a scroll's main-thread
+        // time on the Mac). Thresholds: following within 48 pt, the jump button above 600 pt and
+        // hidden again within 150 pt.
+        .onScrollGeometryChange(for: BottomDistance.self) { geometry in
+            BottomDistance(below: geometry.contentSize.height - geometry.visibleRect.maxY)
+        } action: { _, distance in
             #if os(macOS)
             // Stop following as soon as the reader scrolls up, independently of the jump button.
-            let follows = below <= 48
+            let follows = distance.near
             if follows != followsLatest { followsLatest = follows }
             #endif
             // Shows well above the bottom, hides only near it again: no flicker at the edge.
-            let away = awayFromLatest ? below > 150 : below > 600
+            let away = awayFromLatest ? distance.beyond150 : distance.beyond600
             if away != awayFromLatest {
                 if away { seenMessages = messageCount }
                 withAnimation(motion) { awayFromLatest = away }
@@ -1848,6 +1852,12 @@ final class ImageOpener {
         made = action
         return action
     }
+}
+
+/// How far the bottom of the conversation is, in the steps the chat reacts to.
+struct BottomDistance: Equatable {
+    let near: Bool, beyond150: Bool, beyond600: Bool
+    init(below: CGFloat) { near = below <= 48; beyond150 = below > 150; beyond600 = below > 600 }
 }
 
 /// Whether the chat is scrolling, kept out of `ChatView` so a change only redraws `IdleHitTesting`.
