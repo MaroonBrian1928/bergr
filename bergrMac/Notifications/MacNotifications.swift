@@ -27,6 +27,8 @@ final class MacNotifications {
     func start(sessions: SessionStore) {
         guard notifier == nil else { return }
         UNUserNotificationCenter.current().delegate = delegate
+        // No typed replies from an alert on the Mac yet: a click opens the chat.
+        AnswerCategory.replyEnabled = false
         AnswerCategory.register()
         if Delivery.notifications { authorize() }
         let notifier = AgentNotifier(sessions: sessions)

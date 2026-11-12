@@ -108,6 +108,39 @@ class Alerts(Base):
         _, _, data = notify.relay_request(dev, "T", "B", "t1", "pop", "done")
         self.assertNotIn("q", notify.decrypt_alert(key, base64.b64decode(json.loads(data)["e"])))
 
+    def test_dangerous_command_gets_no_approve_buttons(self):
+        for cmd in ("rm -rf /tmp/x", "git push --force origin main", "sudo apt install x"):
+            state, _ = notify.alerts_for(None, line(term(state="working", turn=5)))
+            _, alerts = notify.alerts_for(state, line(term(state="blocked", turn=5, msg="Bash: " + cmd)))
+            self.assertEqual(len(alerts), 1)
+            self.assertNotIn("q", alerts[0], cmd)
+        state, _ = notify.alerts_for(None, line(term(state="working", turn=5)))
+        _, alerts = notify.alerts_for(state, line(term(state="blocked", turn=5, msg="Bash: rm file")))
+        self.assertIn("q", alerts[0])
+
+    def test_dangerous_patterns(self):
+        yes = ["rm -rf build", "rm -fr /", "rm -r -f x", "rm -Rf x", "git push --force", "git push -f origin x",
+               "git push origin main --force-with-lease", "git reset --hard HEAD~1", "git clean -fd", "sudo rm x",
+               "mkfs.ext4 /dev/sda1", "dd if=/dev/zero of=/dev/sda", "DROP TABLE users", "drop database x",
+               "TRUNCATE users", "chmod -R 777 /srv", "echo x > /dev/sda", "rails db:migrate:reset",
+               "prisma migrate reset", "artisan migrate:rollback"]
+        no = ["rm file", "rm -f file", "rm -r dir", "git push", "git push -u origin main", "git reset HEAD file",
+              "git clean -n", "pseudo sudoku", "chmod 755 x", "chmod -R 755 x", "dd of=x", "migrate up",
+              "output truncated", "ls > /dev/null", "git push --follow-tags"]
+        for t in yes:
+            self.assertIsNotNone(notify.dangerous_reason(t), t)
+        for t in no:
+            self.assertIsNone(notify.dangerous_reason(t), t)
+
+    def test_done_body_is_last_two_sentences_under_limit(self):
+        msg = "First thing. Second thing. Third thing! Final bit done."
+        _, body = notify.format_alert(term(state="done", msg=msg), "done")
+        self.assertTrue(body.endswith("Third thing! Final bit done."))
+        self.assertNotIn("First", body)
+        _, body = notify.format_alert(term(state="done", msg="word " * 100 + "end."), "done")
+        self.assertLessEqual(len(body), notify.BODY_MAX)
+        self.assertTrue(body.endswith("end."))
+
     def test_same_turn_not_repeated(self):
         state, _ = notify.alerts_for(None, line(term(state="working", turn=5)))
         state, alerts = notify.alerts_for(state, line(term(state="blocked", turn=5)))

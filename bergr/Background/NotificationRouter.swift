@@ -29,6 +29,13 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
             guard let target = Self.target(info) ?? PushRegistration.shared.target(info) else { return }
             // An answer button: the app answers (iOS), or opens the chat when it can't or the
             // question isn't the same any more.
+            if let request = AnswerCategory.replyRequest(
+                actionIdentifier: response.actionIdentifier,
+                text: (response as? UNTextInputNotificationResponse)?.userText, target: target),
+               let handler = AnswerNotificationBridge.replyHandler {
+                handler(request)
+                return
+            }
             if let request = AnswerCategory.request(
                 actionIdentifier: response.actionIdentifier, info: info, target: target),
                let handler = AnswerNotificationBridge.handler {

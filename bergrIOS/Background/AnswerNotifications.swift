@@ -55,6 +55,20 @@ struct AnswerFlow {
 
     var screen: (AnswerNotificationRequest) async -> Screen?
     var openChat: (_ host: UUID, _ address: String) -> Void
+    /// Connects for a typed reply; nil means replies just open the chat.
+    var replyScreen: ((ReplyNotificationRequest) async -> Screen?)? = nil
+
+    /// A typed reply from an alert's Reply action: typed into the agent's prompt and sent, once.
+    func reply(_ request: ReplyNotificationRequest) async {
+        let text = request.text.split(whereSeparator: \.isNewline).joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty, let screen = await replyScreen?(request) else {
+            openChat(request.host, request.address)
+            return
+        }
+        await screen.send([.text(text), .enter])
+        await screen.close()
+    }
 
     func run(_ request: AnswerNotificationRequest) async {
         guard let screen = await screen(request) else {
@@ -76,25 +90,28 @@ struct AnswerFlow {
     /// attaches to the terminal and reads its screen.
     static func live(
         sessions: SessionStore, hosts: HostStore, keys: KeyLibrary, timeout: Duration = .seconds(15)
-    ) -> (AnswerNotificationRequest) async -> Screen? {
-        { request in
-            guard let host = hosts.hosts.first(where: { $0.id == request.host }) else { return nil }
+    ) -> (UUID, String) async -> Screen? {
+        { hostID, address in
+            guard let host = hosts.hosts.first(where: { $0.id == hostID }) else { return nil }
             let session = sessions.session(for: host)
             if session.state != .connected { session.start(keys: keys) }
             let start = ContinuousClock.now
             while ContinuousClock.now - start < timeout {
-                if session.state == .connected, session.terminal(request.address) != nil { break }
+                if session.state == .connected, session.terminal(address) != nil { break }
                 try? await Task.sleep(for: .milliseconds(200))
             }
-            guard session.state == .connected, let terminal = session.terminal(request.address), terminal.isLive,
+            guard session.state == .connected, let terminal = session.terminal(address), terminal.isLive,
                   let capture = try? await ScreenCapture.open(session: session, terminal: terminal, observe: false)
             else { return nil }
             let lines = await capture.settledLines()
             return Screen(
                 // The status may have moved on while we attached.
-                status: session.terminal(request.address)?.status, lines: lines,
+                status: session.terminal(address)?.status, lines: lines,
                 send: { await capture.send($0) },
-                record: { LiveActivityController.record(question: $0, answer: $1, session: session, terminal: terminal) },
+                record: {
+                    LiveActivityController.record(
+                        question: $0, answer: $1, session: session, terminal: terminal, source: .notification)
+                },
                 close: { await capture.close() })
         }
     }
@@ -107,9 +124,11 @@ final class AnswerNotifications {
     static let shared = AnswerNotifications()
     private var flow: AnswerFlow?
     private var queued: [AnswerNotificationRequest] = []
+    private var queuedReplies: [ReplyNotificationRequest] = []
 
     static func install() {
         AnswerNotificationBridge.handler = { shared.handle($0) }
+        AnswerNotificationBridge.replyHandler = { shared.handleReply($0) }
     }
 
     func configure(_ flow: AnswerFlow) {
@@ -117,6 +136,14 @@ final class AnswerNotifications {
         let waiting = queued
         queued = []
         for request in waiting { Task { await flow.run(request) } }
+        let replies = queuedReplies
+        queuedReplies = []
+        for request in replies { Task { await flow.reply(request) } }
+    }
+
+    private func handleReply(_ request: ReplyNotificationRequest) {
+        guard let flow else { return queuedReplies.append(request) }
+        Task { await flow.reply(request) }
     }
 
     private func handle(_ request: AnswerNotificationRequest) {

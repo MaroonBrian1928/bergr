@@ -686,6 +686,9 @@ struct ChatView: View {
                     AnswerSlot(terminal: terminal, model: model, blocked: state == "blocked" && !questionOpen, palette: palette,
                                transition: arrival) { question, answer in
                         feed.recordDecision(question: question, answer: answer)
+                        ApprovalLog.record(
+                            machine: session?.host.name ?? "", agent: terminal.status?.app ?? terminal.displayName,
+                            question: question, answer: answer, source: .card)
                     }
                 }
             }

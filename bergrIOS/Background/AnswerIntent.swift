@@ -57,6 +57,9 @@ enum AnswerPolicy {
     ) -> AnswerDecision {
         let now = PromptReading.read(lines: lines, statusTitle: statusTitle)
         guard now.question == question, !now.options.isEmpty else { return .changed }
+        // A dangerous command is never answered from a button: the chat asks for a confirmation.
+        guard DangerousCommand.check(([now.question] + AnswerParser.context(in: lines)).joined(separator: "\n")) == nil
+        else { return .changed }
         if key.isEmpty {
             guard now.numbered else { return .changed }
             let choice = AnswerChoice(number: number, label: label, selected: false)
@@ -206,13 +209,20 @@ extension LiveActivityController {
         }
         if case .send(let steps, let question, let answer) = decision {
             await capture.send(steps)
-            Self.record(question: question, answer: answer, session: session, terminal: terminal)
+            Self.record(question: question, answer: answer, session: session, terminal: terminal, source: .intent)
         }
         await capture.close()
     }
 
     /// Puts the answer into the terminal's chat, if it has an agent chat.
-    static func record(question: String, answer: String, session: HostSession, terminal: Terminal) {
+    static func record(
+        question: String, answer: String, session: HostSession, terminal: Terminal,
+        source: ApprovalEntry.Source = .intent
+    ) {
+        let host = session.host
+        ApprovalLog.record(
+            machine: host.name.isEmpty ? host.target.host : host.name,
+            agent: terminal.status?.app ?? terminal.displayName, question: question, answer: answer, source: source)
         guard let agent = ChatAgent.detect(terminal) else { return }
         let front = terminal.foreground.flatMap { fg in
             ChatAgent.detect(name: fg.name, argv: fg.argv) == agent ? fg : nil

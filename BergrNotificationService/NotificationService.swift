@@ -23,6 +23,9 @@ final class NotificationService: UNNotificationServiceExtension {
                 content.categoryIdentifier = category
                 content.body = [alert.body, AnswerCategory.summary(q)].filter { !$0.isEmpty }.joined(separator: "\n")
                 content.userInfo.merge(AnswerCategory.userInfo(q)) { _, new in new }
+            } else {
+                // No buttons (done, a dangerous command, a question): a text Reply.
+                content.categoryIdentifier = AnswerCategory.replyCategory
             }
         }
         handler = nil  // delivered: iOS running out of time afterwards mustn't deliver it again

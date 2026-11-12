@@ -30,6 +30,9 @@ final class AgentNotifier {
     /// same rule as bergr-notify); other questions have their options only on the screen.
     nonisolated static func question(for status: TerminalStatus?) -> AnswerQuestion? {
         guard status?.state == "blocked", status?.kind == "permission" else { return nil }
+        // A dangerous command gets no approve buttons.
+        guard DangerousCommand.check([status?.msg, status?.title].compactMap { $0 }.joined(separator: "\n")) == nil
+        else { return nil }
         let title = [status?.msg, status?.title].compactMap { $0 }.first { !$0.isEmpty } ?? "Needs approval"
         return AnswerQuestion(title: title, options: ["Yes", "No"], keys: true)
     }
@@ -128,6 +131,8 @@ final class AgentNotifier {
         if let q = alert.question, let category = AnswerCategory.identifier(for: q) {
             content.categoryIdentifier = category
             content.userInfo.merge(AnswerCategory.userInfo(q)) { _, new in new }
+        } else if alert.kind != .error, let category = AnswerCategory.replyIdentifier {
+            content.categoryIdentifier = category
         }
         let request = UNNotificationRequest(identifier: alert.key, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)

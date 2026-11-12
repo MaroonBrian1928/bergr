@@ -8,7 +8,7 @@ import UserNotifications
 struct AnswerNotificationTests {
     let host = UUID()
     let question = AnswerQuestion(title: "Run rm?", options: ["Yes", "No"], keys: true)
-    let screen = ["Run rm -rf build? (y/n)", ""]
+    let screen = ["Run rm build? (y/n)", ""]
 
     func status(_ title: String = "Run rm?", state: String = "blocked") throws -> TerminalStatus {
         let json = "{\"state\":\"\(state)\",\"msg\":\"\(title)\",\"kind\":\"permission\"}"
@@ -44,10 +44,11 @@ struct AnswerNotificationTests {
         #expect(AnswerCategory.identifier(optionCount: 3) == "bergr.answer.3")
         #expect(AnswerCategory.identifier(optionCount: 4) == "bergr.answer.4")
         #expect(AnswerCategory.identifier(optionCount: 5) == nil)
-        #expect(AnswerCategory.categories().map(\.identifier).sorted() == ["bergr.answer.2", "bergr.answer.3", "bergr.answer.4"])
+        #expect(AnswerCategory.categories().map(\.identifier).sorted() == ["bergr.answer.2", "bergr.answer.3", "bergr.answer.4", "bergr.reply"])
         let four = AnswerCategory.categories().first { $0.identifier == "bergr.answer.4" }
-        #expect(four?.actions.count == 4)
+        #expect(four?.actions.count == 5)  // four answers and Reply
         #expect(four?.actions.allSatisfy { $0.options.contains(.foreground) && $0.options.contains(.authenticationRequired) } == true)
+        #expect(four?.actions.last is UNTextInputNotificationAction)
     }
 
     @Test func userInfoRoundTripsIntoARequest() throws {

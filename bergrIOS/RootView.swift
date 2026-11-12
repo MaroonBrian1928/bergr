@@ -170,9 +170,11 @@ struct RootView: View {
                 LiveActivityController.run(sessions: sessions)
                 PushRegistration.shared.run(sessions: sessions)
                 // Notification buttons answer through these sessions, connecting on demand.
+                let connect = AnswerFlow.live(sessions: sessions, hosts: hosts, keys: keys)
                 AnswerNotifications.shared.configure(AnswerFlow(
-                    screen: AnswerFlow.live(sessions: sessions, hosts: hosts, keys: keys),
-                    openChat: { router.pending = ($0, $1) }))
+                    screen: { await connect($0.host, $0.address) },
+                    openChat: { router.pending = ($0, $1) },
+                    replyScreen: { await connect($0.host, $0.address) }))
             }
             // Wi-Fi ↔ cellular, a VPN: lines may be dead without knowing; check them at once.
             NetworkWatcher.shared.start { [sessions, keys] in sessions.probeAll(keys: keys) }

@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -46,6 +47,39 @@ URGENCY = {"blocked": "time-sensitive", "error": "time-sensitive", "done": "pass
 KINDS = ("permission", "question", "auth")
 APP_NAMES = {"claude-code": "Claude", "codex": "Codex", "antigravity": "Antigravity"}
 BODY_MAX = 180
+
+# Commands that are hard to undo. Keep in step with Shared/DangerousCommand.swift (same patterns).
+DANGEROUS_RULES = [
+    ("recursive force delete (rm -rf)",
+     r"\brm\b(?=[^;&|\n]*\s(?:-[a-z]*r|--recursive))(?=[^;&|\n]*\s(?:-[a-z]*f|--force))"),
+    ("force push (git push --force)",
+     r"\bgit\s+push\b[^;&|\n]*\s(?:--force(?:-with-lease)?\b|-[a-z]*f[a-z]*\b)"),
+    ("hard reset (git reset --hard)", r"\bgit\s+reset\b[^;&|\n]*--hard\b"),
+    ("git clean -f deletes untracked files", r"\bgit\s+clean\b[^;&|\n]*\s-[a-z]*f"),
+    ("runs as root (sudo)", r"\bsudo\s"),
+    ("formats a disk (mkfs)", r"\bmkfs(?:\.\w+)?\b"),
+    ("raw disk write (dd if=)", r"\bdd\s+(?:\S+\s+)*?if="),
+    ("drops or empties a database (DROP / TRUNCATE)", r"\bdrop\s+(?:table|database)\b|\btruncate\b"),
+    ("opens permissions to everyone (chmod -R 777)",
+     r"\bchmod\b(?=[^;&|\n]*\s(?:-[a-z]*r|--recursive))[^;&|\n]*\b777\b"),
+    ("writes straight to a disk (> /dev/sd)", r">\s*/dev/sd"),
+    ("destructive migration (reset / rollback / drop)", r"\bmigrate\b[^;&|\n]*\b(?:reset|rollback|drop)\b"),
+]
+_DANGEROUS = [(reason, re.compile(pattern, re.I)) for reason, pattern in DANGEROUS_RULES]
+
+
+def dangerous_reason(text):
+    """Why `text` (a permission prompt's command) is dangerous, or None."""
+    for reason, regex in _DANGEROUS:
+        if regex.search(text or ""):
+            return reason
+    return None
+
+
+def last_sentences(text, count=2):
+    """The last `count` sentences of `text`."""
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+|\n+", text.strip()) if p.strip()]
+    return " ".join(parts[-count:])
 JWT_TTL = 50 * 60
 RETRY_DELAY = 5
 
@@ -130,6 +164,11 @@ def format_alert(term, state, machine=""):
         title += f" on {machine}"
     body = _text(labels.get("where")) or _text(term.get("title"))
     msg = _text(status.get("msg"))
+    if state == "done" and msg:
+        msg = last_sentences(msg)
+        room = BODY_MAX - len(body) - 3 if body else BODY_MAX
+        if len(msg) > room:  # keep the end of what the agent said
+            msg = "…" + msg[-max(room - 1, 20):]
     if msg:
         body = f"{body} — {msg}" if body else msg
     kind = status.get("kind")
@@ -151,6 +190,9 @@ def alert_question(term, state):
     if status.get("kind") != "permission":
         return None
     title = _text(status.get("msg")) or _text(status.get("title")) or "Needs approval"
+    # A dangerous command gets no approve buttons: it has to be answered in the app.
+    if dangerous_reason(_text(status.get("msg")) + "\n" + _text(status.get("title"))):
+        return None
     return {"title": title[:200], "options": ["Yes", "No"], "keys": True}
 
 

@@ -312,6 +312,16 @@ struct SettingsView: View {
                     .frame(minHeight: 44)
                 }
                 NavigationLink {
+                    ApprovalsView()
+                } label: {
+                    Label {
+                        Text("Approvals")
+                    } icon: {
+                        SettingsIcon("checkmark.shield.fill", color: .green)
+                    }
+                    .frame(minHeight: 44)
+                }
+                NavigationLink {
                     LicensesView()
                 } label: {
                     Label {

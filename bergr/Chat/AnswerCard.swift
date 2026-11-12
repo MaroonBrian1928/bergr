@@ -224,6 +224,8 @@ struct AnswerCard: View {
     @Environment(\.colorScheme) private var scheme
     @State private var tapped = 0
     @State private var changed = false
+    /// The number of a dangerous prompt's Yes that was tapped once and waits for a second tap.
+    @State private var confirming: Int?
 
     init(status: TerminalStatus?, model: TerminalScreenModel, palette: ChatPalette,
          onAnswer: ((String, String) -> Void)? = nil) {
@@ -247,6 +249,10 @@ struct AnswerCard: View {
             LoginStepCard(step: step, model: model, palette: palette)
         } else if choices.isEmpty, AnswerParser.needsLogin(in: lines) || status?.kind == "auth" {
             loginCard
+        } else if choices.isEmpty, let asked, !numberedOnly, let reason = DangerousCommand.check(asked) {
+            // The generic Yes/No buttons are no place to approve this one.
+            notice(title: "Dangerous: \(reason)",
+                   detail: "\(asked)\nOpen the terminal (top right) to answer this one.", danger: true)
         } else if choices.isEmpty, let asked, !numberedOnly {
             NeedsYouBar(status: status, model: model, dark: scheme == .dark) { answer in
                 onAnswer?(asked, answer)
@@ -330,11 +336,11 @@ struct AnswerCard: View {
         .sensoryFeedback(.impact(weight: .light), trigger: tapped)
     }
 
-    private func notice(title: String, detail: String) -> some View {
+    private func notice(title: String, detail: String, danger: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(title, systemImage: "hand.raised.fill")
+            Label(title, systemImage: danger ? "exclamationmark.triangle.fill" : "hand.raised.fill")
                 .font(.callout.weight(.semibold))
-                .foregroundStyle(palette.text)
+                .foregroundStyle(danger ? Color.red : palette.text)
             Text(detail).font(.footnote).foregroundStyle(palette.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -345,7 +351,14 @@ struct AnswerCard: View {
     }
 
     private func card(_ choices: [AnswerChoice], question: String?, context: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let danger = DangerousCommand.check(([question ?? ""] + context).joined(separator: "\n"))
+        return VStack(alignment: .leading, spacing: 8) {
+            if let danger {
+                Label("Dangerous: \(danger)", systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color.red)
+                    .padding(.horizontal, 4)
+            }
             // What is being approved, so "Yes" is never a blind answer.
             if !context.isEmpty {
                 Text(context.joined(separator: "\n"))
@@ -364,21 +377,32 @@ struct AnswerCard: View {
                 .padding(.horizontal, 4)
             ForEach(Array(choices.enumerated()), id: \.offset) { index, choice in
                 let primary = index == 0 && choice.label.lowercased().hasPrefix("yes")
-                Button { select(choice) } label: {
+                let risky = danger != nil && choice.label.lowercased().hasPrefix("yes")
+                let confirm = risky && confirming == choice.number
+                Button {
+                    // A dangerous command's Yes takes a second tap.
+                    if risky, confirming != choice.number {
+                        confirming = choice.number
+                        tapped += 1
+                    } else {
+                        confirming = nil
+                        select(choice)
+                    }
+                } label: {
                     HStack(spacing: 10) {
                         Text("\(choice.number)")
                             .font(.footnote.monospacedDigit())
                             .foregroundStyle(primary ? Color.white.opacity(0.75) : palette.secondary)
-                        Text(choice.label)
+                        Text(confirm ? "Tap again to confirm: \(choice.label)" : choice.label)
                             .font(.callout)
                             .multilineTextAlignment(.leading)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .foregroundStyle(primary ? palette.onAccent : palette.text)
+                    .foregroundStyle(risky ? Color.white : primary ? palette.onAccent : palette.text)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .frame(minHeight: PlatformMetrics.controlHeight)
-                    .background(primary ? palette.accent : palette.bubble, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .background(risky ? Color.red.opacity(confirm ? 1 : 0.7) : primary ? palette.accent : palette.bubble, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 .buttonStyle(PressStyle())
