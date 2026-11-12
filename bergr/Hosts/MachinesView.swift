@@ -14,6 +14,7 @@ struct MachinesView: View {
     @State private var editing: Host?
     @State private var showingKeys = false
     @State private var showingSettings = false
+    @State private var setupHost: Host?
 
     var body: some View {
         List {
@@ -65,6 +66,13 @@ struct MachinesView: View {
                         if !host.isDemo && !host.isLocal {
                             Button("Edit", systemImage: "pencil") { editing = host }
                         }
+                        if !host.isDemo {
+                            Button("Setup", systemImage: "checklist") {
+                                let session = sessions.session(for: host)
+                                if session.state == .idle { session.start(keys: keys) }
+                                setupHost = host
+                            }
+                        }
                         Button("Delete", systemImage: "trash", role: .destructive) {
                             if let index = hosts.hosts.firstIndex(of: host) { hosts.delete(at: [index]) }
                         }
@@ -114,6 +122,9 @@ struct MachinesView: View {
         }
         .sheet(item: $editing) { host in
             HostEditor(host: host)
+        }
+        .sheet(item: $setupHost) { host in
+            MachineSetupView(session: sessions.session(for: host))
         }
         .sheet(isPresented: $showingKeys) {
             KeysSheet { showingKeys = false }

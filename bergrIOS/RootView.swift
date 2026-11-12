@@ -176,6 +176,7 @@ struct RootView: View {
             NetworkWatcher.shared.start { [sessions, keys] in sessions.probeAll(keys: keys) }
         }
         .modifier(PushPrompts(inSettings: false))
+        .modifier(SetupAfterFirstConnect(sessions: sessions))
         // The chat on screen doesn't alert about itself.
         .onChange(of: selectedTerminal, initial: true) { _, address in
             notifier?.focusedAddress = selectedHost.wrappedValue.flatMap { host in address.map { (host, $0) } }

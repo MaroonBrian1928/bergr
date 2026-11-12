@@ -53,6 +53,9 @@ struct HostEditor: View {
     @State private var port = ""
     @State private var session = ""
     @State private var showingNewKey = false
+    #if os(macOS)
+    @State private var showingImport = false
+    #endif
     @State private var confirmDelete = false
     @State private var copied: String?
     @State private var test: HostSession?
@@ -94,6 +97,9 @@ struct HostEditor: View {
           ScrollViewReader { proxy in
             Form {
                 addressSection
+                #if os(macOS)
+                if !isExisting { importSection }
+                #endif
                 if let saveHint {
                     Section {} footer: {
                         Label(saveHint, systemImage: "info.circle").font(.footnote)
@@ -132,6 +138,9 @@ struct HostEditor: View {
             .onDisappear { stopTest(); cancelSystemSSH() }
             .onChange(of: host.target) { cancelSystemSSH() }
             .onChange(of: port) { cancelSystemSSH() }
+            #if os(macOS)
+            .sheet(isPresented: $showingImport) { SSHConfigImportView { dismiss() } }
+            #endif
             .sheet(isPresented: $showingNewKey, onDismiss: {
                 if let newest = keys.keys.last, host.keyID == nil || !keys.keys.contains(where: { $0.id == host.keyID }) {
                     host.keyID = newest.id
@@ -204,6 +213,17 @@ struct HostEditor: View {
             .autocorrectionDisabled()
         }
     }
+
+    #if os(macOS)
+    private var importSection: some View {
+        Section {
+            Button("Import from ~/.ssh/config", systemImage: "square.and.arrow.down") { showingImport = true }
+                .frame(minHeight: PlatformMetrics.controlHeight)
+        } footer: {
+            Text("Adds the machines in this Mac's SSH config in one tap each, with their HostName, User and Port.")
+        }
+    }
+    #endif
 
     private var keySection: some View {
         Section {

@@ -72,6 +72,7 @@ struct MacRootView: View {
             .frame(width: 540, height: 560)
         }
         .modifier(TrustPrompt(sessions: sessions))
+    .modifier(SetupAfterFirstConnect(sessions: sessions))
         .focusedSceneValue(\.agentRef, shell.selection)
         .focusedSceneValue(\.showAgent, { shell.selection = $0 })
         .frame(minWidth: 760, minHeight: 480)
