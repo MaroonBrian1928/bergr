@@ -1,0 +1,52 @@
+# The tests that need no Xcode: the Python script tests and the relay's. The app and HerdrKit tests
+# run on a Mac (`just test-all`); see ci.yml for the macOS job.
+name: Tests (Linux)
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python script tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Run every scripts/test_*.py
+        run: |
+          set -euo pipefail
+          for t in scripts/test_*.py; do
+            echo "::group::$t"
+            python3 -I "$t"
+            echo "::endgroup::"
+          done
+
+  relay:
+    name: Relay tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      # relay/package.json has no engines field, so Node 22 (the version used locally).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: relay/package-lock.json
+      - name: Install
+        working-directory: relay
+        run: npm ci
+      - name: Test
+        working-directory: relay
+        run: npm test

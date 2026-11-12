@@ -244,6 +244,14 @@ icon:
 test:
     cd HerdrKit && swift test
 
+# Every test suite: `just test`, the Python script tests, the relay tests, and the app's unit tests on a simulator (BERGR_SIMULATOR, default "iPhone 17 Pro")
+test-all: test
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for t in scripts/test_*.py; do python3 -I "$t"; done
+    (cd relay && npm ci && npm test)
+    xcodebuild test -project {{project}} -scheme {{scheme}} -destination "platform=iOS Simulator,name=${BERGR_SIMULATOR:-iPhone 17 Pro}" -only-testing:bergrTests CODE_SIGNING_ALLOWED=NO | xcbeautify --quiet
+
 # Stream the app's logs from the phone (the dev app; `just logs Release` for the TestFlight/App Store one)
 logs configuration="Debug":
     xcrun devicectl device process launch --device "$(just _device)" --terminate-existing --console {{ if configuration == "Debug" { dev_bundle_id } else { bundle_id } }}
