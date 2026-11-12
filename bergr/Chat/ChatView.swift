@@ -64,6 +64,7 @@ struct ChatView: View {
     @State private var seenMessages = 0
     /// Options picked on Claude's question cards, until the conversation records the answers.
     @State private var questionPicks: [String: String] = [:]
+    @State private var questionSending: Set<String> = []
     /// The search field at the top shows while searching; closing it clears the search.
     @State private var searching = false
     @FocusState private var searchFocused: Bool
@@ -363,6 +364,10 @@ struct ChatView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 if let pane { PaneHeader(chrome: pane, backdrop: palette.background) { chatButtons } }
+                if let session, session.state != .connected, !session.host.isDemo {
+                    ChatConnectionBar(session: session, palette: palette) { session.retry(keys: keys) }
+                        .transition(.opacity)
+                }
                 if searching { searchBar.transition(.opacity) }
             }
         }
@@ -636,6 +641,27 @@ struct ChatView: View {
         }
     }
 
+    private func answerCodexQuestion(_ answer: String, title: String, id: String) {
+        guard canType, questionPicks[id] == nil, !questionSending.contains(id) else { return }
+        questionSending.insert(id)
+        if model.watching { model.setWatching(false) }
+        let pending = feed.questionInfo.values.filter { $0.codexAsync && $0.answer == nil }.count
+        Task { @MainActor in
+            defer { questionSending.remove(id) }
+            await model.automate {
+                let sent = await CodexQuestionReply.send(answer, title: title, pendingCount: pending,
+                    lines: { model.frame.textLines },
+                    previous: { model.press(.left, modifiers: .shift) },
+                    paste: { model.paste($0) }, submit: { model.press(.enter) })
+                if sent {
+                    questionPicks[id] = answer
+                } else {
+                    sendError = "Couldn't select this Codex question. Your answer wasn't sent. Try again, or answer in the terminal."
+                }
+            }
+        }
+    }
+
     /// Runs a command in the agent's terminal as a `!` shell command, through the reply path (so it
     /// shows in the chat with its output); what's being written in the reply box stays there.
     private func run(_ command: String) {
@@ -808,10 +834,11 @@ struct ChatView: View {
             case .assistant:
                 key.reveal = feed.revealStart[item.id]
             case .question:
-                if let info = feed.questionInfo[item.id], info.keys {
+                key.waiting = questionSending.contains(item.id)
+                if let info = feed.questionInfo[item.id], info.keys || info.codexAsync {
                     // Claude's: picked in the terminal by number, one question after another.
                     key.info = info
-                    key.earlierOpen = info.index > 0 && info.group.map { group in
+                    key.earlierOpen = info.keys && info.index > 0 && info.group.map { group in
                         (0..<info.index).contains { i in
                             let id = "\(group)-q\(i)"
                             return feed.questionInfo[id]?.answer == nil && questionPicks[id] == nil
@@ -883,8 +910,13 @@ struct ChatView: View {
                 if let info = key.info {
                     QuestionCard(title: title, options: options, details: info.details,
                                  answer: key.answer, palette: palette,
-                                 enabled: key.canType && !key.earlierOpen) { choice in
-                        pick(choice, in: options, question: item.id, info: info)
+                                 enabled: key.canType && !key.earlierOpen && !key.waiting,
+                                 allowsText: info.codexAsync) { choice in
+                        if info.codexAsync {
+                            answerCodexQuestion(choice, title: title, id: item.id)
+                        } else {
+                            pick(choice, in: options, question: item.id, info: info)
+                        }
                     }
                 } else {
                     QuestionCard(title: title, options: options, answer: key.answer, palette: palette,
@@ -1973,7 +2005,9 @@ private struct QuestionCard: View {
     let answer: String?
     let palette: ChatPalette
     let enabled: Bool
+    var allowsText = false
     let choose: (String) -> Void
+    @State private var response = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2012,6 +2046,21 @@ private struct QuestionCard: View {
                 .buttonStyle(PressStyle())
                 .disabled(answer != nil || !enabled)
                 .opacity(answer != nil && !picked ? 0.5 : 1)
+            }
+            if allowsText {
+                if let answer {
+                    Text(answer).font(.callout).foregroundStyle(palette.secondary)
+                } else {
+                    TextField("Your answer", text: $response, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .lineLimit(1...5)
+                        .padding(10)
+                        .background(palette.field, in: RoundedRectangle(cornerRadius: 10))
+                        .accessibilityIdentifier("codex-question-answer")
+                    Button("Send Answer", systemImage: "arrow.up") { choose(response) }
+                        .disabled(!enabled || response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("codex-question-send")
+                }
             }
         }
         .padding(12)
@@ -2358,3 +2407,50 @@ private struct ArriveIn: ViewModifier {
 /// bounced on opening a chat: rows realized near the bottom changed the estimated height, the
 /// bottom anchor moved, more rows realized… The Mac shows fewer rows at a time instead (`rowPage`).
 typealias ChatRows<Content: View> = VStack<Content>
+
+/// Above the chat while its machine's line is down: what the app is doing about it and how old
+/// what's on screen is, so a frozen chat says so instead of looking current.
+struct ChatConnectionBar: View {
+    let session: HostSession
+    let palette: ChatPalette
+    let retry: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if case .failed(_, retrying: false) = session.state {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(Self.title(session.state, machine: session.host.name))
+                    .font(.footnote.weight(.semibold)).foregroundStyle(palette.text)
+                if let heard = session.lastHeardAt {
+                    // Ticks by itself: "last update 2 min ago" stays true while the line is down.
+                    TimelineView(.periodic(from: .now, by: 15)) { _ in
+                        Text("Last update \(heard, format: .relative(presentation: .named))")
+                            .font(.caption).foregroundStyle(palette.secondary)
+                    }
+                }
+            }
+            Spacer(minLength: 8)
+            if case .failed(_, retrying: false) = session.state {
+                Button("Retry", action: retry).font(.footnote.weight(.semibold))
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(palette.bubble)
+        .accessibilityElement(children: .combine)
+    }
+
+    static func title(_ state: HostSession.State, machine: String) -> String {
+        switch state {
+        case .connected: "Connected"
+        case .idle: "Not connected to \(machine)"
+        case .connecting: "Reconnecting to \(machine)…"
+        case .failed(let why, retrying: true): "Reconnecting to \(machine)… (\(why))"
+        case .failed(let why, retrying: false): why
+        }
+    }
+}

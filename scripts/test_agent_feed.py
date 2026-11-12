@@ -97,7 +97,34 @@ class CodexQuestion(Base):
                 "name": "request_user_input_async",
                 "arguments": json.dumps({"questions": [{"title": "Which?", "options": ["Keep", "Commit"]}]})}}
         evs = list(src.parse(line)) if src else []
-        self.assertEqual(evs, [{"t": "question", "id": "fc1-q0", "title": "Which?", "options": ["Keep", "Commit"]}])
+        self.assertEqual(evs, [{"t": "question", "id": "fc1-q0", "title": "Which?", "options": ["Keep", "Commit"],
+                               "async": True, "group": "fc1", "index": 0, "count": 1}])
+
+    def test_freeform_async_question_and_targeted_answer(self):
+        m = load("codex", self.home)
+        src = m["Codex"]()
+        question = {"type": "response_item", "payload": {"type": "function_call", "call_id": "call-test",
+                    "name": "functions.request_user_input_async",
+                    "arguments": json.dumps({"questions": [{"title": "Where is the file?"}]})}}
+        evs = list(src.parse(question))
+        self.assertTrue(evs[0]["async"])
+        self.assertEqual(evs[0]["options"], [])
+        body = json.dumps([{"answer": "src/example.swift", "question": "Where is the file?",
+                            "questionItemId": json.dumps(["request_user_input_async", "call-test", 0])}])
+        reply = {"type": "response_item", "payload": {"type": "message", "role": "user", "id": "reply-test",
+                 "content": [{"type": "input_text", "text": "<send_user_message_question_reply>\n" + body
+                               + "\n</send_user_message_question_reply>"}]}}
+        answered = list(src.parse(reply))
+        self.assertEqual(answered[0]["id"], evs[0]["id"])
+        self.assertEqual(answered[0]["answer"], "src/example.swift")
+        self.assertEqual(answered[1]["text"], "src/example.swift")
+
+    def test_blocking_question_uses_question_text(self):
+        src = load("codex", self.home)["Codex"]()
+        evs = list(src.parse({"type": "response_item", "payload": {"type": "function_call", "id": "q",
+            "name": "request_user_input", "arguments": json.dumps({"questions": [{"header": "Location",
+            "question": "Which file should change?", "options": [{"label": "First"}]}]})}}))
+        self.assertEqual(evs[0]["title"], "Which file should change?")
 
 
 class MemoryCitations(Base):

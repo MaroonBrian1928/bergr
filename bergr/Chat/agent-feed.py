@@ -859,6 +859,25 @@ class Codex:
             text = "".join(c.get("text") or "" for c in p.get("content") or []
                            if c.get("type") in ("input_text", "output_text", "text"))
             if p["role"] == "user":
+                if text.strip().startswith("<send_user_message_question_reply>"):
+                    try:
+                        replies = json.loads(text.split(">", 1)[1].rsplit("</", 1)[0])
+                    except (ValueError, IndexError):
+                        replies = []
+                    for i, reply in enumerate(replies if isinstance(replies, list) else []):
+                        if not isinstance(reply, dict) or not isinstance(reply.get("answer"), str):
+                            continue
+                        original = None
+                        try:
+                            identity = reply.get("questionItemId")
+                            identity = json.loads(identity) if isinstance(identity, str) else identity
+                            original = self.__dict__.get("questions", {}).get((identity[1], identity[2]))
+                        except (ValueError, TypeError, IndexError):
+                            pass
+                        if original:
+                            yield dict(original, answer=reply["answer"])
+                        yield {"t": "msg", "id": f"{pid}-answer{i}", "role": "user", "text": reply["answer"]}
+                    return
                 shell = shell_text(text)
                 if shell and shell[0] == "shell":
                     yield {"t": "msg", "id": pid, "role": "user", "text": shell[1][0]}
@@ -897,17 +916,23 @@ class Codex:
             args = p.get("arguments") or p.get("input") or p.get("action") or ""
             if p.get("call_id"):
                 self.__dict__.setdefault("calls", {})[p["call_id"]] = pid
-            if (p.get("name") or "").startswith("request_user_input"):
+            question_tool = (p.get("name") or "").rsplit(".", 1)[-1]
+            if question_tool.startswith("request_user_input"):
                 # Codex asking the user (A/B/C): a question card, not a tool step.
                 try:
                     qs = json.loads(args).get("questions") if isinstance(args, str) else args.get("questions")
                 except Exception:
                     qs = None
                 for i, q in enumerate(qs or []):
-                    if isinstance(q, dict) and q.get("title"):
+                    if isinstance(q, dict) and (q.get("question") or q.get("title")):
                         opts = [o if isinstance(o, str) else (o.get("label") or o.get("title") or "")
                                 for o in q.get("options") or []]
-                        yield {"t": "question", "id": f"{pid}-q{i}", "title": q["title"], "options": [o for o in opts if o]}
+                        event = {"t": "question", "id": f"{pid}-q{i}",
+                                 "title": q.get("question") or q["title"], "options": [o for o in opts if o]}
+                        if question_tool.endswith("_async"):
+                            event.update({"async": True, "group": pid, "index": i, "count": len(qs)})
+                            self.__dict__.setdefault("questions", {})[(p.get("call_id") or pid, i)] = event
+                        yield event
                 if qs:
                     return
             name = p.get("name") or "shell"

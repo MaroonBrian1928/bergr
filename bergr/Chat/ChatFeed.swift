@@ -182,6 +182,7 @@ final class ChatFeed {
         var index = 0
         var count = 1
         var answer: String?
+        var codexAsync = false
     }
     private(set) var questionInfo: [String: QuestionInfo] = [:]
     /// The backlog is in: items that arrive from now on are live.
@@ -532,7 +533,7 @@ final class ChatFeed {
             }
         } else if type == "question" {
             kind = .question(title: event["title"] as? String ?? "", options: event["options"] as? [String] ?? [])
-            if event["keys"] as? Bool == true || event["answer"] != nil {
+            if event["keys"] as? Bool == true || event["async"] as? Bool == true || event["answer"] != nil {
                 var info = questionInfo[id] ?? QuestionInfo()
                 if let d = event["details"] as? [String] { info.details = d }
                 if let k = event["keys"] as? Bool { info.keys = k }
@@ -540,6 +541,7 @@ final class ChatFeed {
                 if let i = event["index"] as? Int { info.index = i }
                 if let c = event["count"] as? Int { info.count = c }
                 if let a = event["answer"] as? String { info.answer = a }
+                if let a = event["async"] as? Bool { info.codexAsync = a }
                 if questionInfo[id] != info { questionInfo[id] = info }
             }
         } else if type == "tool" {

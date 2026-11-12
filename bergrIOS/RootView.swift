@@ -166,6 +166,8 @@ struct RootView: View {
                 LiveActivityController.run(sessions: sessions)
                 PushRegistration.shared.run(sessions: sessions)
             }
+            // Wi-Fi ↔ cellular, a VPN: lines may be dead without knowing; check them at once.
+            NetworkWatcher.shared.start { [sessions, keys] in sessions.probeAll(keys: keys) }
         }
         .modifier(PushPrompts(inSettings: false))
         // The chat on screen doesn't alert about itself.

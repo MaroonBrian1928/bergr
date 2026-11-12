@@ -37,6 +37,11 @@ struct ChatPreviewScreen: View {
         }
         .onAppear {
             feed.loadSample()
+            if UserDefaults.standard.bool(forKey: "bergr.previewAsyncQuestion") {
+                feed.loadItems([])
+                feed.applyDemo(["t": "question", "id": "preview-question", "title": "Which file should I update?",
+                                "options": [], "async": true, "group": "preview", "index": 0, "count": 1])
+            }
             // `-bergr.chatPreviewShort YES`: a conversation shorter than the screen.
             if UserDefaults.standard.bool(forKey: "bergr.chatPreviewShort") {
                 feed.loadItems(Array(feed.items.prefix(2)))

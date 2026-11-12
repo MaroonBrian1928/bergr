@@ -64,6 +64,9 @@ final class HostSession {
         self.timing = timing
     }
 
+    /// When herdr-core was last heard from on the current or last line (for "last update … ago").
+    private(set) var lastHeardAt: Date?
+
     var isActive: Bool { attempt != nil }
 
     private var client: HerdrClient? { attempt?.connection?.client }
@@ -305,6 +308,24 @@ final class HostSession {
 
     /// A background connection can look live after iOS suspended its sockets. Replace it on
     /// return, preserving the unlocked key and chat feeds, rather than waiting for navigation.
+    /// Checks the line now (the network just changed): no answer from herdr-core within 3 s means
+    /// it's gone, so reconnect at once instead of waiting out the 40 s silence limit. herdr-core's
+    /// heartbeat comes every 15 s, so silence alone can't be judged any faster than that.
+    func probe(keys: KeyLibrary) {
+        guard state == .connected, !probing, let client = try? connectedClient() else { return }
+        probing = true
+        let attempt = self.attempt
+        Task { @MainActor in
+            defer { probing = false }
+            let alive = await Deadline.answers(within: .seconds(3)) { _ = try await client.listTerminals() }
+            // Still the same line, and it didn't answer: replace it.
+            guard !alive, self.attempt === attempt, state == .connected else { return }
+            retry(keys: keys)
+        }
+    }
+
+    @ObservationIgnored private var probing = false
+
     func resumeAfterBackground(keys: KeyLibrary) {
         if intent == .paused {
             start(keys: keys)
@@ -473,6 +494,8 @@ extension HostSession: ConnectionAttemptOwner {
 
     func attempt(_ a: ConnectionAttempt, received message: EventMessage) async {
         guard isCurrent(a) else { return }
+        // Coarse: it's only shown as "… ago", and each write redraws whoever shows it.
+        if lastHeardAt.map({ Date.now.timeIntervalSince($0) > 5 }) ?? true { lastHeardAt = .now }
         if let current = snapshot, let next = Self.snapshot(after: message, from: current) { snapshot = next }
         markLookedAt()
         guard let client = a.connection?.client else { return }
@@ -560,5 +583,10 @@ final class SessionStore {
 
     func resumeAfterBackground(keys: KeyLibrary) {
         for session in sessions.values { session.resumeAfterBackground(keys: keys) }
+    }
+
+    /// The network changed: every connected machine checks its line now.
+    func probeAll(keys: KeyLibrary) {
+        for session in sessions.values { session.probe(keys: keys) }
     }
 }

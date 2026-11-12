@@ -30,6 +30,8 @@ struct MenuBarLabel: View {
         .task {
             delegate.reopen = { openWindow(id: "main") }
             connectAll()
+            // Wi-Fi ↔ Ethernet, a VPN: lines may be dead without knowing; check them at once.
+            NetworkWatcher.shared.start { [sessions, keys] in sessions.probeAll(keys: keys) }
         }
         .onChange(of: hosts.hosts) { _, current in
             // Edited or deleted machines get a fresh session.
