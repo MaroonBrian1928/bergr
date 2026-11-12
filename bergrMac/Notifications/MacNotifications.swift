@@ -27,6 +27,7 @@ final class MacNotifications {
     func start(sessions: SessionStore) {
         guard notifier == nil else { return }
         UNUserNotificationCenter.current().delegate = delegate
+        AnswerCategory.register()
         if Delivery.notifications { authorize() }
         let notifier = AgentNotifier(sessions: sessions)
         notifier.start()

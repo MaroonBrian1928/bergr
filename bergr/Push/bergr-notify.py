@@ -140,6 +140,20 @@ def format_alert(term, state, machine=""):
     return title, body
 
 
+def alert_question(term, state):
+    """The question a blocked agent asks, for the alert's answer buttons: {"title", "options",
+    "keys"} or None. The helper only sees `hc events`, not the screen, so only a permission prompt
+    (status kind "permission") is reliable: Yes / No, answered by key. Other questions (kind
+    "question") have their options only on the screen, so they get no buttons."""
+    if state != "blocked":
+        return None
+    status = term.get("status") if isinstance(term.get("status"), dict) else {}
+    if status.get("kind") != "permission":
+        return None
+    title = _text(status.get("msg")) or _text(status.get("title")) or "Needs approval"
+    return {"title": title[:200], "options": ["Yes", "No"], "keys": True}
+
+
 def apns_payload(title, body, address, host, state=None):
     payload = {
         "aps": {
@@ -256,7 +270,11 @@ def alerts_for(prev_state, line, machine=""):
             continue
         sent.add(key)
         title, body = format_alert(term, state, machine)
-        alerts.append({"address": address, "turn": turn, "state": state, "title": title, "body": body})
+        alert = {"address": address, "turn": turn, "state": state, "title": title, "body": body}
+        question = alert_question(term, state)
+        if question:
+            alert["q"] = question
+        alerts.append(alert)
 
     last = {a: s for a, s in last.items() if a in present}
     sent = {k for k in sent if k[0] in present}
@@ -484,7 +502,7 @@ def _keystream(enc, nonce, length):
     return b"".join(_hmac(enc, nonce + i.to_bytes(4, "big")) for i in range((length + 31) // 32))
 
 
-def encrypt_alert(key_bytes, title, body, nonce=None):
+def encrypt_alert(key_bytes, title, body, nonce=None, q=None):
     """Base64 blob the phone's Notification Service Extension decrypts (see Shared/PushAlertKey.swift).
     Version 2, standard library only: 0x02 || nonce (16) || ciphertext || tag (32). With the 64-byte
     alert key: enc = HMAC-SHA256(key, "bergr-enc"), mac = HMAC-SHA256(key, "bergr-mac"); keystream
@@ -495,7 +513,10 @@ def encrypt_alert(key_bytes, title, body, nonce=None):
     nonce = os.urandom(16) if nonce is None else bytes(nonce)
     if len(nonce) != 16:
         raise ValueError("nonce must be 16 bytes")
-    plain = json.dumps({"title": title, "body": body}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    content = {"title": title, "body": body}
+    if q:
+        content["q"] = q  # {"title", "options" (up to 4), "keys"}: the phone's answer buttons
+    plain = json.dumps(content, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     enc, mac = _hmac(key_bytes, b"bergr-enc"), _hmac(key_bytes, b"bergr-mac")
     cipher = bytes(a ^ b for a, b in zip(plain, _keystream(enc, nonce, len(plain))))
     signed = b"\x02" + nonce + cipher
@@ -514,7 +535,7 @@ def decrypt_alert(key_bytes, blob):
     return json.loads(bytes(a ^ b for a, b in zip(cipher, stream)))
 
 
-def relay_request(device, title, body, address, host, state=None):
+def relay_request(device, title, body, address, host, state=None, q=None):
     """(url, headers, body bytes) for a push through the relay."""
     url = device["relay"].rstrip("/") + "/v1/push"
     payload = {"title": title[:100], "body": body[:400], "address": address[:64], "host": host[:100]}
@@ -522,7 +543,7 @@ def relay_request(device, title, body, address, host, state=None):
         # Never send the text in the clear when the phone has a key; fall back to a generic alert.
         try:
             key = base64.b64decode(device["key"], validate=True)
-            payload = {"e": encrypt_alert(key, title[:100], body[:400]), "address": address[:64], "host": host[:100]}
+            payload = {"e": encrypt_alert(key, title[:100], body[:400], q=q),"address": address[:64], "host": host[:100]}
         except Exception as e:
             log(f"alert encryption failed ({type(e).__name__}); sending without text")
             payload = {"title": "Bergr", "body": "An agent needs you", "address": address[:64], "host": host[:100]}
@@ -534,9 +555,9 @@ def relay_request(device, title, body, address, host, state=None):
     return url, headers, json.dumps(payload).encode("utf-8")
 
 
-def send_relay(device, title, body, address, host, state=None):
+def send_relay(device, title, body, address, host, state=None, q=None):
     """Sends one push through the device's relay. Returns the relay's reply (see ActivityPoster.learn)."""
-    url, headers, data = relay_request(device, title, body, address, host, state)
+    url, headers, data = relay_request(device, title, body, address, host, state, q)
     req = urllib.request.Request(url, data=data, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -547,7 +568,7 @@ def send_relay(device, title, body, address, host, state=None):
         raise RuntimeError(f"relay HTTP {e.code}: {e.read()[:200].decode('utf-8', 'replace')}")
 
 
-def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None, state=None):
+def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None, state=None, q=None):
     """Sends one alert to every device (through its relay, or straight to APNs with a key on this
     machine) or to the ntfy topic. Returns the successful sends. on_reply(secret, reply) gets each
     relay's reply."""
@@ -559,7 +580,7 @@ def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None, state=
     for device in [d for d in devices if d.get("relay") and d.get("secret") and d.get("alerts", True) is not False]:
         try:
             # The app's own id for this machine when it gave one, so a tap opens the right one.
-            reply = send_relay(device, title, body, address, device.get("host_id") or host, state)
+            reply = send_relay(device, title, body, address, device.get("host_id") or host, state, q)
             sent += 1
             if on_reply and isinstance(reply, dict):
                 on_reply(device["secret"], reply)
@@ -621,7 +642,7 @@ def run():
                     for a in alerts:
                         log(f"alert for {a['address']}: {a['title']}")
                         send_alert(cfg, a["title"], a["body"], a["address"], host, jwt_cache,
-                                   on_reply=poster.learn, state=a["state"])
+                                   on_reply=poster.learn, state=a["state"], q=a.get("q"))
             finally:
                 if proc.poll() is None:
                     proc.kill()

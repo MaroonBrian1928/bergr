@@ -27,6 +27,14 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         await MainActor.run {
             // Local alerts carry Bergr's host id; pushes name the machine by hostname.
             guard let target = Self.target(info) ?? PushRegistration.shared.target(info) else { return }
+            // An answer button: the app answers (iOS), or opens the chat when it can't or the
+            // question isn't the same any more.
+            if let request = AnswerCategory.request(
+                actionIdentifier: response.actionIdentifier, info: info, target: target),
+               let handler = AnswerNotificationBridge.handler {
+                handler(request)
+                return
+            }
             NotificationRouter.shared.pending = target
         }
     }

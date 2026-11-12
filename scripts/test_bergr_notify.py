@@ -81,6 +81,33 @@ class Alerts(Base):
         self.assertEqual(alerts[0]["title"], "Claude needs you")
         self.assertEqual(alerts[0]["body"], "~ / 1 — needs approval (permission)")
 
+    def test_blocked_permission_carries_question(self):
+        state, _ = notify.alerts_for(None, line(term(state="working", turn=5)))
+        _, alerts = notify.alerts_for(state, line(term(state="blocked", turn=5)))
+        self.assertEqual(alerts[0]["q"], {"title": "needs approval", "options": ["Yes", "No"], "keys": True})
+
+    def test_other_alerts_carry_no_question(self):
+        state, _ = notify.alerts_for(None, line(term(state="working", turn=5)))
+        _, alerts = notify.alerts_for(state, line(term(state="blocked", turn=5, kind="question")))
+        self.assertNotIn("q", alerts[0])
+        for end in ("done", "error"):
+            state, _ = notify.alerts_for(None, line(term(state="working", turn=5)))
+            _, alerts = notify.alerts_for(state, line(term(state=end, turn=5)))
+            self.assertEqual(len(alerts), 1)
+            self.assertNotIn("q", alerts[0])
+
+    def test_question_is_encrypted_with_the_alert(self):
+        import base64
+        key = bytes(range(64))
+        q = {"title": "Run it?", "options": ["Yes", "No"], "keys": True}
+        dev = {"relay": "https://r.example", "secret": "s", "key": base64.b64encode(key).decode()}
+        _, _, data = notify.relay_request(dev, "T", "B", "t1", "pop", "blocked", q)
+        self.assertNotIn(b"Run it", data)
+        blob = base64.b64decode(json.loads(data)["e"])
+        self.assertEqual(notify.decrypt_alert(key, blob)["q"], q)
+        _, _, data = notify.relay_request(dev, "T", "B", "t1", "pop", "done")
+        self.assertNotIn("q", notify.decrypt_alert(key, base64.b64decode(json.loads(data)["e"])))
+
     def test_same_turn_not_repeated(self):
         state, _ = notify.alerts_for(None, line(term(state="working", turn=5)))
         state, alerts = notify.alerts_for(state, line(term(state="blocked", turn=5)))
@@ -385,7 +412,7 @@ class RelayTests(unittest.TestCase):
     def test_relay_sends_host_id(self):
         hosts = []
         orig = notify.send_relay
-        notify.send_relay = lambda d, t, b, a, h, s=None: hosts.append(h)
+        notify.send_relay = lambda d, t, b, a, h, s=None, q=None: hosts.append(h)
         try:
             notify.send_alert({"devices": [dict(self.DEVICE, host_id="UUID-1")]}, "t", "b", "t1", "pop", notify.JwtCache())
         finally:

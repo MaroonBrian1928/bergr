@@ -20,8 +20,18 @@ final class AgentNotifier {
         let kind: Kind
         let title: String
         let body: String
+        /// The question, when it is known from the status alone (a permission prompt): answer buttons.
+        var question: AnswerQuestion?
         /// host + address + turn/statusMs: one alert per transition.
         let key: String
+    }
+
+    /// Yes / No for a permission prompt, the one question the status alone describes reliably (the
+    /// same rule as bergr-notify); other questions have their options only on the screen.
+    nonisolated static func question(for status: TerminalStatus?) -> AnswerQuestion? {
+        guard status?.state == "blocked", status?.kind == "permission" else { return nil }
+        let title = [status?.msg, status?.title].compactMap { $0 }.first { !$0.isEmpty } ?? "Needs approval"
+        return AnswerQuestion(title: title, options: ["Yes", "No"], keys: true)
     }
 
     /// Alerts for terminals that moved to blocked ("needs you"), to error, or to an unread done
@@ -59,7 +69,9 @@ final class AgentNotifier {
             case .finished: "\(name) is done"
             }
             if let machine, !machine.isEmpty { title += " on \(machine)" }
-            result.append(Alert(host: host, address: terminal.address, kind: kind, title: title, body: body, key: key))
+            result.append(Alert(
+                host: host, address: terminal.address, kind: kind, title: title, body: body,
+                question: kind == .needsYou ? question(for: terminal.status) : nil, key: key))
         }
         return result
     }
@@ -113,6 +125,10 @@ final class AgentNotifier {
         content.interruptionLevel = alert.kind.interruptionLevel
         content.threadIdentifier = alert.host.uuidString
         content.userInfo = ["host": alert.host.uuidString, "address": alert.address]
+        if let q = alert.question, let category = AnswerCategory.identifier(for: q) {
+            content.categoryIdentifier = category
+            content.userInfo.merge(AnswerCategory.userInfo(q)) { _, new in new }
+        }
         let request = UNNotificationRequest(identifier: alert.key, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
     }

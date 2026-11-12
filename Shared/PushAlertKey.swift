@@ -14,7 +14,7 @@ import Foundation
 /// Version 1 (older helpers, still opened): iv (16) ‖ AES-256-CBC/PKCS7 ciphertext ‖ HMAC-SHA256
 /// over iv ‖ ciphertext; the first 32 key bytes encrypt, the last 32 authenticate. It has no
 /// version byte, so a blob starting with 0x02 is tried as v2 first, then as v1.
-/// The plaintext is JSON `{"title": …, "body": …}`.
+/// The plaintext is JSON `{"title": …, "body": …}`, plus `"q": {"title", "options", "keys"}` for a question.
 nonisolated enum PushAlertKey {
     /// Where the key used to live (App Group defaults). Read once to migrate, then deleted.
     static let defaultsKey = "bergr.push.alertKey"
@@ -86,6 +86,8 @@ nonisolated enum PushAlertKey {
     struct Alert: Codable, Equatable {
         var title: String
         var body: String
+        /// The question of a blocked agent, when the helper knows it (answer buttons).
+        var q: AnswerQuestion?
     }
 
     /// Decrypts an `e` blob; nil if it was changed, made with another key, or isn't one.

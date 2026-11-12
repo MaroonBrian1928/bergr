@@ -206,13 +206,13 @@ extension LiveActivityController {
         }
         if case .send(let steps, let question, let answer) = decision {
             await capture.send(steps)
-            record(question: question, answer: answer, session: session, terminal: terminal)
+            Self.record(question: question, answer: answer, session: session, terminal: terminal)
         }
         await capture.close()
     }
 
     /// Puts the answer into the terminal's chat, if it has an agent chat.
-    private func record(question: String, answer: String, session: HostSession, terminal: Terminal) {
+    static func record(question: String, answer: String, session: HostSession, terminal: Terminal) {
         guard let agent = ChatAgent.detect(terminal) else { return }
         let front = terminal.foreground.flatMap { fg in
             ChatAgent.detect(name: fg.name, argv: fg.argv) == agent ? fg : nil

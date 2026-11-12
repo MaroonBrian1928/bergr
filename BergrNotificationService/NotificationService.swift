@@ -17,6 +17,13 @@ final class NotificationService: UNNotificationServiceExtension {
            let alert = PushAlertKey.decrypt(blob, key: key) {
             content.title = alert.title
             content.body = alert.body
+            // A question with 2 to 4 options gets answer buttons (the app registers the category);
+            // the body says what each number answers.
+            if let q = alert.q, let category = AnswerCategory.identifier(for: q) {
+                content.categoryIdentifier = category
+                content.body = [alert.body, AnswerCategory.summary(q)].filter { !$0.isEmpty }.joined(separator: "\n")
+                content.userInfo.merge(AnswerCategory.userInfo(q)) { _, new in new }
+            }
         }
         handler = nil  // delivered: iOS running out of time afterwards mustn't deliver it again
         contentHandler(content)

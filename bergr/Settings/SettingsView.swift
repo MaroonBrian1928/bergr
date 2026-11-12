@@ -139,7 +139,7 @@ struct SettingsView: View {
             } footer: {
                 Text(keepAlive.enabled
                      ? "Bergr keeps running in the background and watches your computers itself. Agents' questions appear on the Lock Screen with buttons to answer them. Uses more battery, and needs \"Always\" location access to keep running. Bergr never stores or sends your location."
-                     : "A small helper on each computer tells your phone what its agents are doing. Easy on the battery. You can see what agents are doing, but you can't answer them from the Lock Screen.")
+                     : "A small helper on each computer tells your phone what its agents are doing. Easy on the battery. When an agent asks for permission, the notification has buttons that open Bergr and answer it. Questions with more choices open the chat.")
             }
             #endif
 
