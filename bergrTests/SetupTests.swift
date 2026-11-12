@@ -1,3 +1,4 @@
+import NIOCore
 import SSHTransport
 import Testing
 @testable import bergr
@@ -164,5 +165,15 @@ struct SetupCheckTests {
     @Test func installCommandsOnlyWhereKnown() {
         #expect(AgentCLI.codex.installCommand(windows: false) == "npm install -g @openai/codex")
         #expect(AgentCLI.antigravity.installCommand(windows: false) == nil)
+    }
+}
+
+struct ChannelClosedTests {
+    @Test func closedChannelErrorsEndTheOutput() {
+        #expect(HostSession.isChannelClosed(NIOCore.ChannelError.alreadyClosed))
+        #expect(HostSession.isChannelClosed(NIOCore.ChannelError.inputClosed))
+        #expect(HostSession.isChannelClosed(NIOCore.ChannelError.eof))
+        #expect(!HostSession.isChannelClosed(NIOCore.ChannelError.connectPending))
+        #expect(!HostSession.isChannelClosed(CommandTimeout()))
     }
 }

@@ -51,7 +51,7 @@ final class MachineSetup {
 
     private func pythonState() async -> CheckState {
         do {
-            let output = try await session.commandOutput(SetupCheck.pythonCommand(windows: windows))
+            let output = try await run(SetupCheck.pythonCommand(windows: windows))
             if let version = SetupCheck.parsePython(output) { return .ready("Python \(version)") }
             return .missing("Not found. Install Python 3 on the machine, then check again.")
         } catch {
@@ -59,9 +59,19 @@ final class MachineSetup {
         }
     }
 
+    /// A check's command output, tried twice: a channel can fail to open or close early once.
+    private func run(_ command: String) async throws -> String {
+        do {
+            return try await session.commandOutput(command)
+        } catch {
+            try await Task.sleep(for: .milliseconds(300))
+            return try await session.commandOutput(command)
+        }
+    }
+
     private func agentState(_ agent: AgentCLI) async -> CheckState {
         do {
-            let output = try await session.commandOutput(SetupCheck.agentCommand(agent, windows: windows))
+            let output = try await run(SetupCheck.agentCommand(agent, windows: windows))
             let found = SetupCheck.parseAgent(output)
             guard found.installed else { return .missing("Not installed") }
             return .ready(found.version ?? "installed")
@@ -76,7 +86,7 @@ final class MachineSetup {
             return .failed("the installer is missing from the app")
         }
         do {
-            let output = try await session.commandOutput(PushRegistration.installerCommand(installer: source, op: "status"))
+            let output = try await run(PushRegistration.installerCommand(installer: source, op: "status"))
             guard let status = SetupCheck.parseHelper(output) else { return .failed("no answer from the machine") }
             guard status.installed else { return .missing("Not installed. Push alerts need it.") }
             if let version = status.version, let bundled = PushRegistration.bundledVersion, version < bundled {
@@ -90,7 +100,7 @@ final class MachineSetup {
 
     private func statusLineState() async -> CheckState {
         do {
-            let output = try await session.commandOutput(SetupCheck.statusLineCommand(windows: windows))
+            let output = try await run(SetupCheck.statusLineCommand(windows: windows))
             return SetupCheck.parseStatusLine(output)
                 ? .ready("Saved, and set in Claude Code's settings")
                 : .missing("Shows Claude's context and plan usage in the chat.")
