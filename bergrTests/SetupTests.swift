@@ -1,3 +1,4 @@
+import Foundation
 import NIOCore
 import SSHTransport
 import Testing
@@ -175,5 +176,18 @@ struct ChannelClosedTests {
         #expect(HostSession.isChannelClosed(NIOCore.ChannelError.eof))
         #expect(!HostSession.isChannelClosed(NIOCore.ChannelError.connectPending))
         #expect(!HostSession.isChannelClosed(CommandTimeout()))
+    }
+}
+
+struct SameMachineTests {
+    @Test func laterEntryWithTheSameCoreIsHiddenLocalPreferred() {
+        let local = Host.makeLocal()
+        var ssh = Host.makeLocal(); ssh.id = UUID(); ssh.name = "192.168.1.251"; ssh.local = false
+        var other = Host.makeLocal(); other.id = UUID(); other.name = "pop"; other.local = false
+        // The SSH entry is first in the list, but the local connection wins.
+        let hidden = SameMachine.duplicates([(ssh, "mac"), (other, "pop-os"), (local, "mac")])
+        #expect(hidden.keys.sorted { $0.uuidString < $1.uuidString } == [ssh.id])
+        #expect(hidden[ssh.id]?.id == local.id)
+        #expect(SameMachine.duplicates([(ssh, nil), (local, nil)]).isEmpty)
     }
 }

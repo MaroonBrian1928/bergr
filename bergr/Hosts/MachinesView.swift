@@ -16,6 +16,10 @@ struct MachinesView: View {
     @State private var showingSettings = false
     @State private var setupHost: Host?
 
+    private var duplicates: [UUID: Host] {
+        SameMachine.duplicates(hosts.hosts.map { ($0, sessions.existing($0.id)?.coreName) })
+    }
+
     var body: some View {
         List {
             if hosts.hosts.isEmpty {
@@ -51,7 +55,7 @@ struct MachinesView: View {
                         }
                     } label: {
                         HStack {
-                            MachineRow(host: host, session: sessions.existing(host.id))
+                            MachineRow(host: host, session: sessions.existing(host.id), sameAs: duplicates[host.id])
                             if host.id == selection {
                                 Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(.tint)
                             }
@@ -73,11 +77,18 @@ struct MachinesView: View {
                                 setupHost = host
                             }
                         }
+                        Divider()
+                        Button("Move Up", systemImage: "arrow.up") { withAnimation { hosts.move(host, by: -1) } }
+                            .disabled(hosts.hosts.first == host)
+                        Button("Move Down", systemImage: "arrow.down") { withAnimation { hosts.move(host, by: 1) } }
+                            .disabled(hosts.hosts.last == host)
+                        Divider()
                         Button("Delete", systemImage: "trash", role: .destructive) {
                             if let index = hosts.hosts.firstIndex(of: host) { hosts.delete(at: [index]) }
                         }
                     }
                 }
+                .onMove { hosts.move(fromOffsets: $0, toOffset: $1) }
                 .onDelete { hosts.delete(at: $0) }
                 if !hosts.hosts.isEmpty {
                     Button {
@@ -189,6 +200,8 @@ struct MachineRow: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     let host: Host
     let session: HostSession?
+    /// Another saved machine that reaches the same herdr-core; the agent list shows that one.
+    var sameAs: Host? = nil
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -196,6 +209,10 @@ struct MachineRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(host.name).lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
                 Text(host.subtitle).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+                if let sameAs {
+                    Label("Same machine as \(sameAs.name); its agents show there", systemImage: "rectangle.on.rectangle")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 if let reason = failure {
                     Text(reason).font(.footnote).foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)

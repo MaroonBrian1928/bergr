@@ -106,6 +106,21 @@ final class HostStore {
         return demo
     }
 
+    /// Reorders the machines (the agent list follows this order).
+    func move(fromOffsets source: IndexSet, toOffset destination: Int) {
+        hosts.move(fromOffsets: source, toOffset: destination)
+        persist()
+    }
+
+    /// Moves one machine a place up (-1) or down (+1).
+    func move(_ host: Host, by step: Int) {
+        guard let index = hosts.firstIndex(of: host) else { return }
+        let target = index + step
+        guard hosts.indices.contains(target) else { return }
+        hosts.swapAt(index, target)
+        persist()
+    }
+
     func delete(at offsets: IndexSet) {
         hosts.remove(atOffsets: offsets)
         persist()
@@ -113,5 +128,23 @@ final class HostStore {
 
     private func persist() {
         defaults.set(try? JSONEncoder().encode(hosts), forKey: key)
+    }
+}
+
+
+/// Two saved machines that reach the same herdr-core (this Mac directly, and the same Mac over
+/// SSH): the agent list shows it once.
+enum SameMachine {
+    /// The machines to leave out, each with the one it duplicates: a later entry with the same
+    /// core name as an earlier one, preferring the local connection.
+    static func duplicates(_ machines: [(host: Host, coreName: String?)]) -> [UUID: Host] {
+        var kept: [String: Host] = [:]
+        var hidden: [UUID: Host] = [:]
+        let ordered = machines.filter { $0.host.isLocal } + machines.filter { !$0.host.isLocal }
+        for (host, name) in ordered {
+            guard let name, !name.isEmpty, !host.isDemo else { continue }
+            if let first = kept[name] { hidden[host.id] = first } else { kept[name] = host }
+        }
+        return hidden
     }
 }

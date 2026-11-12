@@ -44,6 +44,31 @@ nonisolated enum AgentCatalog {
         let more = snapshot.needsYou - listed.count
         return head + names + (more > 0 ? ", and \(more) more" : "") + "."
     }
+
+    /// The spoken "What needs me": the on-device model's sentence about the listed rows, or
+    /// `needsYouText` when nothing needs you, the model is unavailable, or it takes longer than `timeout`.
+    /// Nothing needing you makes no model call.
+    static func needsYouSpeech(_ snapshot: AgentsSnapshot, writer: OnDeviceTextWriting,
+                               timeout: Duration = .seconds(2)) async -> String {
+        let fallback = needsYouText(snapshot)
+        let listed = needingYou(snapshot)
+        guard snapshot.needsYou > 0, !listed.isEmpty else { return fallback }
+        let lines = listed.map { row in
+            "- agent \(row.title) (\(row.kind)) on machine \(row.machine), status: \(row.status.isEmpty ? "none" : row.status)"
+        }
+        let unlisted = snapshot.needsYou - listed.count
+        let prompt = """
+        \(snapshot.needsYou) agent\(snapshot.needsYou == 1 ? " needs" : "s need") the user. Listed:
+        \(lines.joined(separator: "\n"))
+        \(unlisted > 0 ? "Not listed: \(unlisted) more." : "Every one is listed.")
+        """
+        let instructions = """
+        You write what a phone's voice assistant says when asked what needs the user. Answer in one or two \
+        plain sentences, with no lists, markdown or quotes. Name each listed agent with its machine, and say \
+        what it is blocked on or what went wrong, using only the given status. Mention any unlisted ones as a count.
+        """
+        return await writer.write(instructions: instructions, prompt: prompt, timeout: timeout) ?? fallback
+    }
 }
 
 /// An agent on one machine, for "Send to agent" and the agent entity queries.
@@ -97,7 +122,7 @@ nonisolated struct WhatNeedsMeIntent: AppIntent {
     static let openAppWhenRun = false
 
     func perform() async throws -> some ReturnsValue<String> & ProvidesDialog {
-        let text = AgentCatalog.needsYouText(AgentsSnapshot.load())
+        let text = await AgentCatalog.needsYouSpeech(AgentsSnapshot.load(), writer: OnDeviceText.shared)
         return .result(value: text, dialog: IntentDialog(stringLiteral: text))
     }
 }

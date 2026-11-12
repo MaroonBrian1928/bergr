@@ -156,7 +156,8 @@ struct AgentsView: View {
     /// Every machine's terminals, live and in the agents list's order, split into this core's
     /// own and the linked machines' (`laptop/t3`). Worked out once per body.
     private var machineLists: [MachineLists] {
-        hosts.hosts.map { host in
+        let hidden = SameMachine.duplicates(hosts.hosts.map { ($0, sessions.existing($0.id)?.coreName) })
+        return hosts.hosts.filter { !hidden.keys.contains($0.id) }.map { host in
             let session = sessions.session(for: host)
             let live = session.terminals.filter(\.isLive)
             let ordered = AgentsOrdering.ordered(live)
@@ -455,6 +456,8 @@ private struct MachineHeader: View {
     let session: HostSession
     let count: Int
     private let monitor = MachineHealthMonitor.shared
+    @State private var showingSetup = false
+    @Environment(HostStore.self) private var hosts
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -473,6 +476,17 @@ private struct MachineHeader: View {
         .textCase(nil)
         .accessibilityElement(children: .combine)
         .task { monitor.track(session) }
+        .contextMenu {
+            if !host.isDemo {
+                Button("Set Up \(host.name)…", systemImage: "checklist") { showingSetup = true }
+            }
+            Divider()
+            Button("Move Up", systemImage: "arrow.up") { withAnimation { hosts.move(host, by: -1) } }
+                .disabled(hosts.hosts.first == host)
+            Button("Move Down", systemImage: "arrow.down") { withAnimation { hosts.move(host, by: 1) } }
+                .disabled(hosts.hosts.last == host)
+        }
+        .sheet(isPresented: $showingSetup) { MachineSetupView(session: session) }
     }
 
     private var color: Color {
