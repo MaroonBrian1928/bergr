@@ -454,18 +454,25 @@ private struct MachineHeader: View {
     let host: Host
     let session: HostSession
     let count: Int
+    private let monitor = MachineHealthMonitor.shared
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle().fill(color).frame(width: 8, height: 8)
-            // The machine's name leads; its state and count are quieter.
-            Text(host.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-            if let text = stateText { Text(text).font(.footnote).foregroundStyle(.secondary) }
-            Spacer()
-            Text("\(count)").font(.footnote).monospacedDigit().foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Circle().fill(color).frame(width: 8, height: 8)
+                // The machine's name leads; its state and count are quieter.
+                Text(host.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                if let text = stateText { Text(text).font(.footnote).foregroundStyle(.secondary) }
+                Spacer()
+                Text("\(count)").font(.footnote).monospacedDigit().foregroundStyle(.secondary)
+            }
+            if let health = monitor.health[host.id], !health.parts.isEmpty {
+                MachineHealthLine(health: health)
+            }
         }
         .textCase(nil)
         .accessibilityElement(children: .combine)
+        .task { monitor.track(session) }
     }
 
     private var color: Color {
@@ -484,6 +491,24 @@ private struct MachineHeader: View {
         case .failed(_, let retrying): retrying ? "Reconnecting…" : "Can't connect"
         case .idle: "Not connected"
         }
+    }
+}
+
+/// A machine's health under its name: "load 1.2 · mem 63% · 41 GB free", low disk in orange.
+private struct MachineHealthLine: View {
+    let health: MachineHealth
+
+    private var line: Text {
+        var text = Text("")
+        for (index, part) in health.parts.enumerated() {
+            if index > 0 { text = text + Text(" · ").foregroundStyle(.secondary) }
+            text = text + Text(part.text).foregroundStyle(part.warning ? Color.orange : Color.secondary)
+        }
+        return text
+    }
+
+    var body: some View {
+        line.font(.caption).monospacedDigit().lineLimit(1)
     }
 }
 
