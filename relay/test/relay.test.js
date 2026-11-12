@@ -226,6 +226,25 @@ test("encrypted push forwards opaque blob with placeholder alert", async () => {
   });
 });
 
+test("push sets interruption-level from state: time-sensitive for blocked/error, passive for done", async () => {
+  const { env } = await makeEnv();
+  const { secret } = await (await reg(env)).json();
+  for (const [state, level] of [["blocked", "time-sensitive"], ["error", "time-sensitive"], ["done", "passive"]]) {
+    calls.length = 0;
+    assert.equal((await doPush(env, secret, { state })).status, 200);
+    assert.equal(JSON.parse(calls[0].init.body).aps["interruption-level"], level);
+    calls.length = 0;
+    const e = "QUJD".repeat(100);
+    const p = await handle(req("/v1/push", "POST", { e, state, address: "a", host: "h" }, { authorization: `Bearer ${secret}` }), env);
+    assert.equal(p.status, 200);
+    assert.equal(JSON.parse(calls[0].init.body).aps["interruption-level"], level);
+  }
+  calls.length = 0;
+  await doPush(env, secret);
+  assert.equal("interruption-level" in JSON.parse(calls[0].init.body).aps, false);
+  assert.equal((await doPush(env, secret, { state: "bogus" })).status, 400);
+});
+
 test("encrypted push rejects oversize or non-base64 e", async () => {
   const { env } = await makeEnv();
   const { secret } = await (await reg(env)).json();

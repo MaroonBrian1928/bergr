@@ -3,9 +3,9 @@
 
 Runs next to herdr-core as a long-lived user service. It follows `hc events --json` (one JSON
 object per line, each with the full current "terminals" list) and sends a push when a terminal's
-status changes to blocked or done and the user has not looked at it yet (turn > herdr.seen).
+status changes to blocked, error or done and the user has not looked at it yet (turn > herdr.seen).
 
-Config: ~/.config/bergr/push.json, re-read when its mtime changes. Modes: "apns" (curl to APNs,
+Config: ~/.config/bergr/push.json (on Windows also %LOCALAPPDATA%\\bergr\\push.json), re-read when its mtime changes. Modes: "apns" (curl to APNs,
 ES256 JWT signed with the openssl CLI;
 separate sandbox and production keys under apns.sandbox / apns.production) and "ntfy" (POST to a topic).
 
@@ -25,9 +25,24 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 10
+VERSION = 11
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
-ALERT_STATES = ("blocked", "done")
+
+
+def default_config_path():
+    """~/.config/bergr/push.json, where the app writes it; on Windows, %LOCALAPPDATA%\\bergr\\push.json
+    when that exists and the first doesn't."""
+    local = os.environ.get("LOCALAPPDATA")
+    if os.name == "nt" and local:
+        alt = os.path.join(local, "bergr", "push.json")
+        if not os.path.exists(CONFIG_PATH) and os.path.exists(alt):
+            return alt
+    return CONFIG_PATH
+
+
+ALERT_STATES = ("blocked", "error", "done")
+# Passive for a finished agent, time-sensitive when someone has to act.
+URGENCY = {"blocked": "time-sensitive", "error": "time-sensitive", "done": "passive"}
 KINDS = ("permission", "question", "auth")
 APP_NAMES = {"claude-code": "Claude", "codex": "Codex", "antigravity": "Antigravity"}
 BODY_MAX = 180
@@ -105,12 +120,14 @@ def make_jwt(team_id, key_id, key_path, now):
     return unsigned + "." + b64url(der_to_raw(out.stdout))
 
 
-def format_alert(term, state):
-    """(title, body) for a terminal that just became `state` (blocked or done)."""
+def format_alert(term, state, machine=""):
+    """(title, body) for a terminal that just became `state` (blocked, error or done)."""
     status = term.get("status") if isinstance(term.get("status"), dict) else {}
     labels = term.get("labels") if isinstance(term.get("labels"), dict) else {}
     app = APP_NAMES.get(_text(status.get("app")), _text(status.get("app")) or "Agent")
-    title = f"{app} needs you" if state == "blocked" else f"{app} finished"
+    title = {"blocked": f"{app} needs you", "error": f"{app} hit an error"}.get(state, f"{app} finished")
+    if machine:
+        title += f" on {machine}"
     body = _text(labels.get("where")) or _text(term.get("title"))
     msg = _text(status.get("msg"))
     if msg:
@@ -123,8 +140,8 @@ def format_alert(term, state):
     return title, body
 
 
-def apns_payload(title, body, address, host):
-    return {
+def apns_payload(title, body, address, host, state=None):
+    payload = {
         "aps": {
             "alert": {"title": title, "body": body},
             "sound": "default",
@@ -133,6 +150,9 @@ def apns_payload(title, body, address, host):
         "address": address,
         "host": host,
     }
+    if state in URGENCY:
+        payload["aps"]["interruption-level"] = URGENCY[state]
+    return payload
 
 
 def apply_event(terms, line):
@@ -185,7 +205,7 @@ def apply_event(terms, line):
     return terms
 
 
-def alerts_for(prev_state, line):
+def alerts_for(prev_state, line, machine=""):
     """Processes one `hc events` line. Returns (new_state, alerts); alerts are dicts with
     address, turn, state, title, body. A malformed line leaves the state unchanged."""
     prev = prev_state if prev_state is not None else initial_state()
@@ -235,7 +255,7 @@ def alerts_for(prev_state, line):
         if key in sent:
             continue
         sent.add(key)
-        title, body = format_alert(term, state)
+        title, body = format_alert(term, state, machine)
         alerts.append({"address": address, "turn": turn, "state": state, "title": title, "body": body})
 
     last = {a: s for a, s in last.items() if a in present}
@@ -426,12 +446,12 @@ class JwtCache:
         return token
 
 
-def send_apns(cfg, device, title, body, address, host, jwt_cache, now):
+def send_apns(cfg, device, title, body, address, host, jwt_cache, now, state=None):
     token = jwt_cache.get(apns_key(cfg["apns"], bool(device.get("sandbox"))), now)
     server = "api.sandbox.push.apple.com" if device.get("sandbox") else "api.push.apple.com"
     url = f"https://{server}/3/device/{device['token']}"
-    payload = json.dumps(apns_payload(title, body, address, host)).encode("utf-8")
-    cmd = ["curl", "--http2", "-sS", "-o", "/dev/stderr", "-w", "%{http_code}", url,
+    payload = json.dumps(apns_payload(title, body, address, host, state)).encode("utf-8")
+    cmd = ["curl", "--http2", "-sS", "-o", "NUL" if os.name == "nt" else "/dev/stderr", "-w", "%{http_code}", url,
            "-H", f"authorization: bearer {token}",
            "-H", f"apns-topic: {device['bundle_id']}",
            "-H", "apns-push-type: alert",
@@ -456,25 +476,45 @@ def send_ntfy(cfg, title, body, address):
         resp.read()
 
 
-def encrypt_alert(key_bytes, title, body, iv=None):
-    """Base64 blob the phone's Notification Service Extension decrypts (see Shared/PushAlertKey.swift):
-    iv16 || AES-256-CBC/PKCS7(JSON {title, body}) || HMAC-SHA256(iv || ct). key_bytes: 32 enc || 32 mac."""
+def _hmac(key, data):
+    return hmac.new(key, data, hashlib.sha256).digest()
+
+
+def _keystream(enc, nonce, length):
+    return b"".join(_hmac(enc, nonce + i.to_bytes(4, "big")) for i in range((length + 31) // 32))
+
+
+def encrypt_alert(key_bytes, title, body, nonce=None):
+    """Base64 blob the phone's Notification Service Extension decrypts (see Shared/PushAlertKey.swift).
+    Version 2, standard library only: 0x02 || nonce (16) || ciphertext || tag (32). With the 64-byte
+    alert key: enc = HMAC-SHA256(key, "bergr-enc"), mac = HMAC-SHA256(key, "bergr-mac"); keystream
+    block i = HMAC-SHA256(enc, nonce || uint32be(i)); ciphertext = plaintext XOR keystream;
+    tag = HMAC-SHA256(mac, 0x02 || nonce || ciphertext)."""
     if len(key_bytes) != 64:
         raise ValueError("alert key must be 64 bytes")
-    iv = os.urandom(16) if iv is None else bytes(iv)
+    nonce = os.urandom(16) if nonce is None else bytes(nonce)
+    if len(nonce) != 16:
+        raise ValueError("nonce must be 16 bytes")
     plain = json.dumps({"title": title, "body": body}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    # openssl needs -K/-iv as hex in argv (visible to local ps); the iv is public and the key is
-    # only visible to the same user, which is the account holding push.json anyway.
-    r = subprocess.run(["openssl", "enc", "-aes-256-cbc", "-K", key_bytes[:32].hex(), "-iv", iv.hex()],
-                       input=plain, capture_output=True, timeout=10)
-    if r.returncode != 0 or not r.stdout:
-        raise RuntimeError("openssl enc failed")
-    signed = iv + r.stdout
-    mac = hmac.new(key_bytes[32:], signed, hashlib.sha256).digest()
-    return base64.b64encode(signed + mac).decode("ascii")
+    enc, mac = _hmac(key_bytes, b"bergr-enc"), _hmac(key_bytes, b"bergr-mac")
+    cipher = bytes(a ^ b for a, b in zip(plain, _keystream(enc, nonce, len(plain))))
+    signed = b"\x02" + nonce + cipher
+    return base64.b64encode(signed + _hmac(mac, signed)).decode("ascii")
 
 
-def relay_request(device, title, body, address, host):
+def decrypt_alert(key_bytes, blob):
+    """Inverse of encrypt_alert (for tests). Raises ValueError when the tag doesn't match."""
+    if len(key_bytes) != 64 or len(blob) < 1 + 16 + 32 or blob[0] != 2:
+        raise ValueError("not a v2 blob")
+    signed, tag = blob[:-32], blob[-32:]
+    if not hmac.compare_digest(_hmac(_hmac(key_bytes, b"bergr-mac"), signed), tag):
+        raise ValueError("bad tag")
+    nonce, cipher = signed[1:17], signed[17:]
+    stream = _keystream(_hmac(key_bytes, b"bergr-enc"), nonce, len(cipher))
+    return json.loads(bytes(a ^ b for a, b in zip(cipher, stream)))
+
+
+def relay_request(device, title, body, address, host, state=None):
     """(url, headers, body bytes) for a push through the relay."""
     url = device["relay"].rstrip("/") + "/v1/push"
     payload = {"title": title[:100], "body": body[:400], "address": address[:64], "host": host[:100]}
@@ -486,15 +526,17 @@ def relay_request(device, title, body, address, host):
         except Exception as e:
             log(f"alert encryption failed ({type(e).__name__}); sending without text")
             payload = {"title": "Bergr", "body": "An agent needs you", "address": address[:64], "host": host[:100]}
+    if state in URGENCY:
+        payload["state"] = state  # in the clear: the relay needs it for the interruption level
     # Cloudflare turns away Python's default User-Agent (error 1010), so name ourselves.
     headers = {"authorization": "Bearer " + device["secret"], "content-type": "application/json",
                "user-agent": f"bergr-notify/{VERSION}"}
     return url, headers, json.dumps(payload).encode("utf-8")
 
 
-def send_relay(device, title, body, address, host):
+def send_relay(device, title, body, address, host, state=None):
     """Sends one push through the device's relay. Returns the relay's reply (see ActivityPoster.learn)."""
-    url, headers, data = relay_request(device, title, body, address, host)
+    url, headers, data = relay_request(device, title, body, address, host, state)
     req = urllib.request.Request(url, data=data, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -505,7 +547,7 @@ def send_relay(device, title, body, address, host):
         raise RuntimeError(f"relay HTTP {e.code}: {e.read()[:200].decode('utf-8', 'replace')}")
 
 
-def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None):
+def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None, state=None):
     """Sends one alert to every device (through its relay, or straight to APNs with a key on this
     machine) or to the ntfy topic. Returns the successful sends. on_reply(secret, reply) gets each
     relay's reply."""
@@ -517,7 +559,7 @@ def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None):
     for device in [d for d in devices if d.get("relay") and d.get("secret") and d.get("alerts", True) is not False]:
         try:
             # The app's own id for this machine when it gave one, so a tap opens the right one.
-            reply = send_relay(device, title, body, address, device.get("host_id") or host)
+            reply = send_relay(device, title, body, address, device.get("host_id") or host, state)
             sent += 1
             if on_reply and isinstance(reply, dict):
                 on_reply(device["secret"], reply)
@@ -528,7 +570,7 @@ def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None):
         now = int(time.time())
         for device in cfg.get("devices") or []:
             try:
-                send_apns(cfg, device, title, body, address, host, jwt_cache, now)
+                send_apns(cfg, device, title, body, address, host, jwt_cache, now, state)
                 sent += 1
             except Exception as e:
                 name = device.get("name", "device") if isinstance(device, dict) else "device"
@@ -545,7 +587,7 @@ def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None):
 
 
 def run():
-    watcher = ConfigWatcher(CONFIG_PATH)
+    watcher = ConfigWatcher(default_config_path())
     jwt_cache = JwtCache()
     host = socket.gethostname()
     state = initial_state()
@@ -563,7 +605,7 @@ def run():
                     if not line:
                         continue
                     try:
-                        state, alerts = alerts_for(state, line)
+                        state, alerts = alerts_for(state, line, host)
                     except Exception as e:
                         log(f"could not process event line: {e}")
                         continue
@@ -579,7 +621,7 @@ def run():
                     for a in alerts:
                         log(f"alert for {a['address']}: {a['title']}")
                         send_alert(cfg, a["title"], a["body"], a["address"], host, jwt_cache,
-                                   on_reply=poster.learn)
+                                   on_reply=poster.learn, state=a["state"])
             finally:
                 if proc.poll() is None:
                     proc.kill()
@@ -593,7 +635,7 @@ def main(argv):
         print(VERSION)
         return 0
     if "--test" in argv:
-        cfg = ConfigWatcher(CONFIG_PATH).get()
+        cfg = ConfigWatcher(default_config_path()).get()
         if cfg is None:
             return 1
         sent = send_alert(cfg, "Bergr test", "Push alerts work", "test", socket.gethostname(), JwtCache())

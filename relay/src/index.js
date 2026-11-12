@@ -357,6 +357,9 @@ async function unregister(request, env) {
 
 const LIMITS = { title: 100, body: 400, address: 64, host: 100 };
 const E_MAX = 3000;
+// How urgent an alert is, from the state the helper sends in the clear (the text is encrypted).
+// Old helpers send none: no level, the system default.
+const INTERRUPTION = { blocked: "time-sensitive", error: "time-sensitive", done: "passive" };
 const E_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 async function apnsReason(res) {
@@ -387,6 +390,8 @@ async function push(request, env) {
   if (encrypted && (typeof body.e !== "string" || !body.e || body.e.length > E_MAX || !E_RE.test(body.e))) {
     return err(400, "invalid e");
   }
+  if (body.state !== undefined && !Object.hasOwn(INTERRUPTION, body.state)) return err(400, "invalid state");
+  const level = body.state === undefined ? {} : { "interruption-level": INTERRUPTION[body.state] };
   const d = await call(env, hash, { op: "push" });
   if (!d) return err(401, "unauthorized");
   if (d.limited) return err(429, "rate limited");
@@ -421,6 +426,7 @@ async function push(request, env) {
                 "mutable-content": 1,
                 sound: "default",
                 "thread-id": body.address,
+                ...level,
               },
               e: body.e,
               address: body.address,
@@ -431,6 +437,7 @@ async function push(request, env) {
                 alert: { title: body.title, body: body.body },
                 sound: "default",
                 "thread-id": body.address,
+                ...level,
               },
               address: body.address,
               host: body.host,

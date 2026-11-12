@@ -115,6 +115,18 @@ class Alerts(Base):
         state, alerts = notify.alerts_for(state, line(term(state="blocked", turn=5, seen="abc")))
         self.assertEqual(len(alerts), 1)
 
+    def test_error_alerts_once_with_machine_in_title(self):
+        state, _ = notify.alerts_for(None, line(term(state="working")), "pop")
+        state, alerts = notify.alerts_for(state, line(term(state="error", msg="crashed")), "pop")
+        self.assertEqual([a["title"] for a in alerts], ["Claude hit an error on pop"])
+        self.assertEqual(alerts[0]["state"], "error")
+        _, again = notify.alerts_for(state, line(term(state="error", msg="crashed")), "pop")
+        self.assertEqual(again, [])
+
+    def test_titles_name_the_machine(self):
+        self.assertEqual(notify.format_alert(term(state="blocked"), "blocked", "pop")[0], "Claude needs you on pop")
+        self.assertEqual(notify.format_alert(term(state="done"), "done", "pop")[0], "Claude finished on pop")
+
     def test_done_alert_text(self):
         state, _ = notify.alerts_for(None, line(term(state="working", turn=3)))
         state, alerts = notify.alerts_for(state, line(term(state="done", turn=3, kind=None,
@@ -297,11 +309,43 @@ class RelayTests(unittest.TestCase):
         self.assertNotIn("token", payload)
 
     KEY = bytes(range(64))
-    # Same vector is asserted in bergrTests/PushAlertKeyTests.swift.
-    VECTOR = "AAECAwQFBgcICQoLDA0ODxNVq97wh/GLkAxEMJ7AXen/gWiU2YHklMcDCLwbK3tmDUM82gsiA4U1kYZzXM+PU6MMSTcmxMr/pFssU3PRmdc="
+    # Same vector is asserted in bergrTests/PushAlertV2Tests.swift (key 0..63, nonce 0..15, title T, body B).
+    VECTOR = "AgABAgMEBQYHCAkKCwwNDg8BGrgqFxuhYcg/RAosGAW89KEcGJy32QB42sNYgJdhGxLagnREd3oaxkvJy0KpFqLcQfc5fD/rqQ=="
 
     def test_encrypt_vector(self):
-        self.assertEqual(notify.encrypt_alert(self.KEY, "T", "B", iv=bytes(range(16))), self.VECTOR)
+        self.assertEqual(notify.encrypt_alert(self.KEY, "T", "B", nonce=bytes(range(16))), self.VECTOR)
+
+    def test_v2_round_trip_long_text(self):
+        body = "é" * 300  # several keystream blocks, multibyte
+        blob = base64.b64decode(notify.encrypt_alert(self.KEY, "Title", body))
+        self.assertEqual(blob[0], 2)
+        self.assertEqual(notify.decrypt_alert(self.KEY, blob), {"title": "Title", "body": body})
+
+    def test_v2_tamper_is_rejected(self):
+        blob = bytearray(base64.b64decode(self.VECTOR))
+        for i in (0, 5, 20, len(blob) - 1):
+            bad = bytearray(blob)
+            bad[i] ^= 1
+            with self.assertRaises(ValueError):
+                notify.decrypt_alert(self.KEY, bytes(bad))
+        with self.assertRaises(ValueError):
+            notify.decrypt_alert(bytes(reversed(self.KEY)), bytes(blob))
+
+    def test_encrypt_no_openssl(self):
+        with mock.patch.object(notify.subprocess, "run", side_effect=AssertionError("subprocess used")):
+            notify.encrypt_alert(self.KEY, "T", "B")
+
+    def test_relay_request_carries_state(self):
+        for state, level in (("blocked", "time-sensitive"), ("error", "time-sensitive"), ("done", "passive")):
+            _, _, data = notify.relay_request(self.DEVICE, "T", "B", "t1", "pop", state)
+            self.assertEqual(json.loads(data)["state"], state)
+            self.assertEqual(notify.URGENCY[state], level)
+        _, _, data = notify.relay_request(self.DEVICE, "T", "B", "t1", "pop")
+        self.assertNotIn("state", json.loads(data))
+
+    def test_apns_payload_interruption_level(self):
+        self.assertEqual(notify.apns_payload("T", "B", "t1", "m", "error")["aps"]["interruption-level"], "time-sensitive")
+        self.assertEqual(notify.apns_payload("T", "B", "t1", "m", "done")["aps"]["interruption-level"], "passive")
 
     def test_relay_request_encrypted(self):
         import base64
@@ -341,7 +385,7 @@ class RelayTests(unittest.TestCase):
     def test_relay_sends_host_id(self):
         hosts = []
         orig = notify.send_relay
-        notify.send_relay = lambda d, t, b, a, h: hosts.append(h)
+        notify.send_relay = lambda d, t, b, a, h, s=None: hosts.append(h)
         try:
             notify.send_alert({"devices": [dict(self.DEVICE, host_id="UUID-1")]}, "t", "b", "t1", "pop", notify.JwtCache())
         finally:

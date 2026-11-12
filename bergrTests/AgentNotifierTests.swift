@@ -1,6 +1,7 @@
 import Foundation
 import HerdrKit
 import Testing
+import UserNotifications
 @testable import bergr
 
 struct AgentNotifierTests {
@@ -49,5 +50,15 @@ struct AgentNotifierTests {
         #expect(AgentNotifier.alerts(host: host, old: [try terminal("working", turn: 1, seen: 1)], new: [early]).isEmpty)
         let alerts = AgentNotifier.alerts(host: host, old: [early], new: [try terminal("done", turn: 2, seen: 1)])
         #expect(alerts.map(\.title) == ["api is done"])
+    }
+
+    @Test func errorAlertsOnceAndNamesTheMachine() throws {
+        let old = [try terminal("working")], new = [try terminal("error", ms: 200)]
+        let alerts = AgentNotifier.alerts(host: host, old: old, new: new, machine: "pop")
+        #expect(alerts.map(\.title) == ["api hit an error on pop"])
+        #expect(alerts[0].kind == .error)
+        #expect(alerts[0].kind.interruptionLevel == .timeSensitive)
+        #expect(AgentNotifier.Kind.finished.interruptionLevel == .passive)
+        #expect(AgentNotifier.alerts(host: host, old: old, new: new, delivered: Set(alerts.map(\.key))).isEmpty)
     }
 }

@@ -26,6 +26,7 @@ class InstallHelperTests(unittest.TestCase):
 
     def run_op(self, op, os_name="linux", with_hc=True, **extra):
         env = {"HOME": self.home, "BERGR_HELPER_DRY_RUN": "1", "BERGR_HELPER_OS": os_name,
+               "LOCALAPPDATA": os.path.join(self.home, "AppData", "Local"),
                "PATH": (self.bin + ":" if with_hc else "") + "/usr/bin:/bin", "SHELL": "/nonexistent"}
         args = base64.b64encode(json.dumps(dict(op=op, **extra)).encode()).decode()
         installer = base64.b64encode(open(INSTALLER, "rb").read()).decode()
@@ -60,6 +61,22 @@ class InstallHelperTests(unittest.TestCase):
         self.assertIn(self.bin + ":/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin", plist)
         self.assertIn("bergr-notify.log", plist)
         self.assertTrue(any(c.startswith("launchctl bootstrap gui/") for c in r["planned"]))
+
+    def test_windows_install_registers_scheduled_task(self):
+        r = self.run_op("install", os_name="windows", script=self.script)
+        self.assertTrue(r["ok"])
+        script = self.path("AppData", "Local", "bergr", "bergr-notify.py")
+        self.assertTrue(os.path.exists(script))
+        create = next(c for c in r["planned"] if c.startswith("schtasks /Create"))
+        self.assertIn("/TN BergrNotify", create)
+        self.assertIn("/SC ONLOGON", create)
+        self.assertIn("/RL LIMITED", create)
+        self.assertIn(script, create)
+        self.assertIn("schtasks /Run /TN BergrNotify", r["planned"])
+        self.assertFalse(any("systemctl" in c or "launchctl" in c for c in r["planned"]))
+        u = self.run_op("uninstall", os_name="windows")
+        self.assertIn("schtasks /Delete /TN BergrNotify /F", u["planned"])
+        self.assertFalse(os.path.exists(script))
 
     def test_status(self):
         r = self.run_op("status")

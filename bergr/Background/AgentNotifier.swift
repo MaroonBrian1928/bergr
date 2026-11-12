@@ -3,10 +3,16 @@ import HerdrKit
 import Observation
 import UserNotifications
 
-/// Watches every session and posts a local notification when an agent needs the user or finishes.
+/// Watches every session and posts a local notification when an agent needs the user, hits an
+/// error or finishes.
 @MainActor
 final class AgentNotifier {
-    enum Kind: String { case needsYou, finished }
+    enum Kind: String {
+        case needsYou, finished, error
+
+        /// Time-sensitive when the user has to act, passive for a finished agent.
+        var interruptionLevel: UNNotificationInterruptionLevel { self == .finished ? .passive : .timeSensitive }
+    }
 
     struct Alert: Equatable {
         let host: UUID
@@ -18,11 +24,12 @@ final class AgentNotifier {
         let key: String
     }
 
-    /// Alerts for terminals that moved to blocked ("needs you") or to an unread done ("finished")
-    /// between `old` and `new`. Terminals not in `old` are a first look, not a transition.
+    /// Alerts for terminals that moved to blocked ("needs you"), to error, or to an unread done
+    /// ("finished") between `old` and `new`; titles end in " on <machine>" when `machine` is given.
+    /// Terminals not in `old` are a first look, not a transition.
     nonisolated static func alerts(
         host: UUID, old: [Terminal], new: [Terminal],
-        focused: String? = nil, delivered: Set<String> = []
+        focused: String? = nil, delivered: Set<String> = [], machine: String? = nil
     ) -> [Alert] {
         let before = Dictionary(old.map { ($0.address, $0) }, uniquingKeysWith: { a, _ in a })
         var result: [Alert] = []
@@ -37,6 +44,7 @@ final class AgentNotifier {
             let kind: Kind
             switch state {
             case "blocked": kind = .needsYou
+            case "error": kind = .error
             // Same "unread" rule as the list: done and not yet seen (herdr.seen vs turn).
             case "done" where terminal.agentState == .done: kind = .finished
             default: continue
@@ -45,10 +53,13 @@ final class AgentNotifier {
             guard !delivered.contains(key) else { continue }
             let name = terminal.displayName
             let body = [terminal.status?.title, terminal.status?.msg].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
-            result.append(Alert(
-                host: host, address: terminal.address, kind: kind,
-                title: kind == .needsYou ? "\(name) needs you" : "\(name) is done",
-                body: body, key: key))
+            var title = switch kind {
+            case .needsYou: "\(name) needs you"
+            case .error: "\(name) hit an error"
+            case .finished: "\(name) is done"
+            }
+            if let machine, !machine.isEmpty { title += " on \(machine)" }
+            result.append(Alert(host: host, address: terminal.address, kind: kind, title: title, body: body, key: key))
         }
         return result
     }
@@ -72,7 +83,8 @@ final class AgentNotifier {
     private func observe() {
         let current = withObservationTracking {
             sessions.ids.compactMap { id in
-                sessions.existing(id).map { (id: id, hasSnapshot: $0.snapshot != nil, terminals: $0.terminals) }
+                sessions.existing(id).map { (id: id, hasSnapshot: $0.snapshot != nil, terminals: $0.terminals,
+                         machine: $0.host.name.isEmpty ? $0.host.target.host : $0.host.name) }
             }
         } onChange: { [weak self] in
             Task { @MainActor in self?.observe() }
@@ -80,7 +92,7 @@ final class AgentNotifier {
         for item in current where item.hasSnapshot {
             if let old = last[item.id] {
                 let focus = focusedAddress.flatMap { $0.host == item.id ? $0.address : nil }
-                for alert in Self.alerts(host: item.id, old: old, new: item.terminals, focused: focus, delivered: delivered) {
+                for alert in Self.alerts(host: item.id, old: old, new: item.terminals, focused: focus, delivered: delivered, machine: item.machine) {
                     delivered.insert(alert.key)
                     post(alert)
                 }
@@ -98,6 +110,7 @@ final class AgentNotifier {
         content.title = alert.title
         content.body = alert.body
         content.sound = .default
+        content.interruptionLevel = alert.kind.interruptionLevel
         content.threadIdentifier = alert.host.uuidString
         content.userInfo = ["host": alert.host.uuidString, "address": alert.address]
         let request = UNNotificationRequest(identifier: alert.key, content: content, trigger: nil)

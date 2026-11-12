@@ -56,7 +56,8 @@ unlock a key before connecting in Bergr. iPhone and iPad use the key selected in
 Native Windows SSH hosts start `herdr-core.exe` through `cmd.exe`, preserving the binary protocol
 on stdin/stdout. Bergr finds the standard per-user installation or uses the executable on PATH.
 The chat view requires Python 3 on the host. On Windows it uses the standard per-user Python
-3.13 installation or `python.exe` on PATH. Push-alert installation still requires Unix tools.
+3.13 installation or `python.exe` on PATH. Push alerts on Windows run `bergr-notify` as a Scheduled
+Task (at logon, current user) through the relay; no `openssl` is needed.
 
 <p align="center">
   <picture>
@@ -98,8 +99,11 @@ lists the other commands.
 
 Push alerts are optional (Settings → Push alerts). When they're on, Bergr offers to install a small
 helper, `bergr-notify`, on each machine: a Python script that runs as a user service (systemd on
-Linux, a LaunchAgent on macOS), follows `hc events`, and sends an alert when an agent finishes a
-turn or needs you. The alert text is encrypted on the machine with a key only your phone holds;
+Linux, a LaunchAgent on macOS, a Scheduled Task on Windows), follows `hc events`, and sends an alert when an agent finishes a
+turn, hits an error or needs you; titles name the machine, and alerts that need you are
+time-sensitive while finished ones are passive. The alert text is encrypted on the machine (Python
+standard library only, HMAC-SHA256 keystream plus tag) with a key only your phone holds, kept in its
+keychain;
 the relay in [`relay/`](relay) (a Cloudflare Worker) and Apple only pass an opaque blob along.
 
 Building it yourself, push alerts need your own relay and APNs key: deploy `relay/` as its
