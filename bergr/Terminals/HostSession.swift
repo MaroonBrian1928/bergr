@@ -166,7 +166,10 @@ final class HostSession {
     /// Feeds whose line went away (the app went to the background): kept, not their tasks, so
     /// coming back follows the conversation into the same feed. The chat keeps showing what it
     /// had while the conversation is read again, instead of going blank and rebuilding.
-    @ObservationIgnored private var pausedFeeds: [String: (agent: ChatAgent, feed: ChatFeed)] = [:]
+    @ObservationIgnored private var pausedFeeds: [String: (agent: ChatAgent, feed: ChatFeed, start: FeedStart)] = [:]
+    /// What a feed was started with, so the session can start it again by itself.
+    struct FeedStart { let pid: Int32; let cwd: String; let sessionHint: String? }
+    @ObservationIgnored private var feedStarts: [String: FeedStart] = [:]
     /// Each feed is an SSH channel (sshd allows 10 per connection by default; herdr-core uses one).
     private static let maxFeeds = 4
 
@@ -189,7 +192,20 @@ final class HostSession {
             await feed.run(session: self, agent: agent, pid: pid, cwd: cwd, sessionHint: sessionHint)
         }
         feeds[address] = (agent, feed, task, .now)
+        feedStarts[address] = FeedStart(pid: pid, cwd: cwd, sessionHint: sessionHint)
         return feed
+    }
+
+    /// Back on the line: follow again the conversations that were open when it went away. Done
+    /// here, not by the screens: a chat on screen while the app was in the background never saw the
+    /// line drop and come back (no redraws in the background), so it never asked again, and the chat
+    /// stayed frozen until you left it and came back.
+    @MainActor
+    private func resumeFeeds() {
+        for (address, paused) in pausedFeeds {
+            _ = chatFeed(address: address, agent: paused.agent, pid: paused.start.pid,
+                         cwd: paused.start.cwd, sessionHint: paused.start.sessionHint)
+        }
     }
 
     /// Sub-agents running under a terminal's agent, from its chat feed if one is being followed.
@@ -201,7 +217,7 @@ final class HostSession {
     private func stopFeeds() {
         for (address, entry) in feeds {
             entry.task.cancel()
-            pausedFeeds[address] = (entry.agent, entry.feed)
+            if let start = feedStarts[address] { pausedFeeds[address] = (entry.agent, entry.feed, start) }
         }
         feeds = [:]
     }
@@ -426,6 +442,7 @@ extension HostSession: ConnectionAttemptOwner {
         coreVersion = c.coreVersion
         state = .connected
         markLookedAt()
+        resumeFeeds()
     }
 
     func attempt(_ a: ConnectionAttempt, received message: EventMessage) async {

@@ -247,7 +247,9 @@ final class ChatFeed {
         while !Task.isCancelled {
             stalled = false
             do {
-                let pipe = try await session.openExec(command)
+                // Bounded: on a connection that died quietly, opening a channel never answers.
+                // The loop below tries again; the session's own watchdog replaces the connection.
+                let pipe = try await Self.openExec(timeout: .seconds(10)) { try await session.openExec(command) }
                 // The helper pings every second. A channel that died quietly (the phone or the
                 // machine slept) sends nothing and never errors, so without pings for a while,
                 // close it and follow the conversation again; otherwise the chat and its
@@ -279,6 +281,45 @@ final class ChatFeed {
                 if working.isEmpty { phase = .failed(Self.describe(error)) }
             }
             try? await Task.sleep(for: .seconds(3))
+        }
+    }
+
+    struct TimedOut: Error {}
+
+    /// Opens the helper's channel, or throws `TimedOut` after `limit`. Returns at the limit even if
+    /// the open never answers (a task group would wait for it); a channel that opens too late is
+    /// closed.
+    static func openExec(timeout limit: Duration, _ open: @escaping @Sendable () async throws -> ExecPipe) async throws -> ExecPipe {
+        let gate = OpenGate()
+        return try await withCheckedThrowingContinuation { continuation in
+            let work = Task {
+                do {
+                    let pipe = try await open()
+                    if !gate.finish(continuation, with: .success(pipe)) { pipe.close() }
+                } catch {
+                    _ = gate.finish(continuation, with: .failure(error))
+                }
+            }
+            Task {
+                try? await Task.sleep(for: limit)
+                if gate.finish(continuation, with: .failure(TimedOut())) { work.cancel() }
+            }
+        }
+    }
+
+    /// Lets exactly one of the open and the timer answer.
+    private final class OpenGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false
+
+        func finish(_ continuation: CheckedContinuation<ExecPipe, Error>, with result: Result<ExecPipe, Error>) -> Bool {
+            let first = lock.withLock { () -> Bool in
+                if done { return false }
+                done = true
+                return true
+            }
+            if first { continuation.resume(with: result) }
+            return first
         }
     }
 

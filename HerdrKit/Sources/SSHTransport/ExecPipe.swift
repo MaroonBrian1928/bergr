@@ -43,6 +43,9 @@ public final class ExecPipe: @unchecked Sendable {
     static func open(command: String, on client: SSHClient) async throws -> ExecPipe {
         let (output, outputContinuation) = AsyncThrowingStream<Data, Error>.makeStream()
         let lifetime = Lifetime()
+        // Closing ends the output at once: over a channel that died quietly, cancelling the task
+        // below may never reach its read, and a reader would wait on this stream forever.
+        lifetime.onCancel = { outputContinuation.finish(throwing: CancellationError()) }
 
         // Citadel scopes the channel to a closure; keep that closure running in a
         // task for as long as the pipe lives, and hand the writer out once it starts.
@@ -83,6 +86,7 @@ private final class Lifetime: @unchecked Sendable {
     private let lock = NSLock()
     private var task: Task<Void, Never>?
     private var cancelled = false
+    var onCancel: (@Sendable () -> Void)?
 
     func set(_ task: Task<Void, Never>) {
         let cancelNow = lock.withLock {
@@ -93,11 +97,12 @@ private final class Lifetime: @unchecked Sendable {
     }
 
     func cancel() {
-        let task = lock.withLock {
+        let (task, finish) = lock.withLock {
             cancelled = true
-            return self.task
+            return (self.task, onCancel)
         }
         task?.cancel()
+        finish?()
     }
 }
 
