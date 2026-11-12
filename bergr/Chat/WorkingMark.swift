@@ -16,6 +16,8 @@ struct WorkingMark: View {
     let color: Color
     var size: CGFloat = 20
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// False once the mark has left the screen (a lazy list removes it): its timeline then stops.
+    @State private var onScreen = true
 
     static let count = Pattern.allCases.count
     /// How long one picture takes to become the next: slow enough to watch it happen.
@@ -31,10 +33,12 @@ struct WorkingMark: View {
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
+        .onAppear { onScreen = true }
+        .onDisappear { onScreen = false }
     }
 
     private var canvas: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion || !onScreen)) { context in
             Canvas { gc, canvas in
                 let r = min(canvas.width, canvas.height) / 2
                 let center = CGPoint(x: canvas.width / 2, y: canvas.height / 2)
@@ -104,6 +108,7 @@ final class MarkView: NSView {
     var color = CGColor(gray: 0, alpha: 1)
     var reduceMotion = false
     private var timer: Timer?
+    private var observers: [NSObjectProtocol] = []
 
     // Top-left origin, like the canvas the pictures were made for.
     override var isFlipped: Bool { true }
@@ -111,12 +116,39 @@ final class MarkView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        observeVisibility()
         schedule()
     }
 
-    /// Redraws 30 times a second while in a window (and not with Reduce Motion: then it stands still).
+    /// Visible on screen: its window is not occluded or minimized, and it is scrolled into view.
+    private var isOnScreen: Bool {
+        guard let window, window.occlusionState.contains(.visible) else { return false }
+        return !visibleRect.isEmpty
+    }
+
+    /// Re-checks `schedule()` when the window's occlusion or the enclosing scroll position changes.
+    private func observeVisibility() {
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        observers = []
+        guard let window else { return }
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification,
+                                            object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.schedule() }
+        })
+        if let clip = enclosingScrollView?.contentView {
+            clip.postsBoundsChangedNotifications = true
+            observers.append(center.addObserver(forName: NSView.boundsDidChangeNotification,
+                                                object: clip, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.schedule() }
+            })
+        }
+    }
+
+    /// Redraws 30 times a second while on screen (and not with Reduce Motion: then it stands still).
+    /// Off screen the timer is stopped, so nothing wakes up for it.
     func schedule() {
-        let wanted = window != nil && !reduceMotion
+        let wanted = window != nil && !reduceMotion && isOnScreen
         if wanted, timer == nil {
             let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.needsDisplay = true }

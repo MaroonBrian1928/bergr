@@ -148,8 +148,15 @@ struct ImageBubble: View {
 enum ImageThumbs {
     private static let cache = NSCache<NSString, PlatformImage>()
 
-    /// Width and height in points from the file's header, without decoding it.
-    static func pixelSize(_ data: Data) -> CGSize? {
+    /// Each image's pixel size, read once (see `PixelSizeCache`). Used from `body`, so it must
+    /// stay a cache hit there.
+    @MainActor private static let sizes = PixelSizeCache(read: readPixelSize)
+
+    /// Width and height in points, from the cache: the file's header is read once per image.
+    @MainActor static func pixelSize(_ data: Data) -> CGSize? { sizes.size(of: data) }
+
+    /// The file's header, read without decoding the image.
+    static func readPixelSize(_ data: Data) -> CGSize? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               var w = props[kCGImagePropertyPixelWidth] as? CGFloat,
@@ -158,9 +165,14 @@ enum ImageThumbs {
         return CGSize(width: w, height: h)
     }
 
+    /// Identifies an image by its size and its first and last 64 bytes.
+    static func cacheKey(_ data: Data) -> String {
+        "\(data.count)-\(data.prefix(64).hashValue)-\(data.suffix(64).hashValue)"
+    }
+
     /// A copy at most 260 points (in screen pixels) on its long side, decoded off the main thread.
     static func thumbnail(_ data: Data) async -> PlatformImage? {
-        let key = "\(data.count)-\(data.prefix(64).hashValue)-\(data.suffix(64).hashValue)" as NSString
+        let key = cacheKey(data) as NSString
         if let hit = cache.object(forKey: key) { return hit }
         let maxPixels = 260 * 3
         let image = await Task.detached(priority: .userInitiated) { () -> PlatformImage? in
@@ -175,6 +187,28 @@ enum ImageThumbs {
         }.value
         if let image { cache.setObject(image, forKey: key) }
         return image
+    }
+}
+
+/// Pixel sizes of images, read once per image: `read` runs on the first request for an image and
+/// its answer (or "not an image") is kept for the rest.
+@MainActor
+final class PixelSizeCache {
+    /// Stored for data that is not an image: `.zero` is never a real size.
+    private var sizes: [String: CGSize] = [:]
+    private let read: (Data) -> CGSize?
+    /// How many times `read` has run.
+    private(set) var reads = 0
+
+    init(read: @escaping (Data) -> CGSize?) { self.read = read }
+
+    func size(of data: Data) -> CGSize? {
+        let key = ImageThumbs.cacheKey(data)
+        if let hit = sizes[key] { return hit == .zero ? nil : hit }
+        reads += 1
+        let size = read(data)
+        sizes[key] = size ?? .zero
+        return size
     }
 }
 
