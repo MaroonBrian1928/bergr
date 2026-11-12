@@ -42,6 +42,7 @@ enum MacStress {
             ChatFeed.stressEvents = 0
             if UserDefaults.standard.bool(forKey: "bergr.stressScroll") { Task { await scroll() } }
             if let path = UserDefaults.standard.string(forKey: "bergr.stressShot") { shoot(to: path) }
+            if UserDefaults.standard.bool(forKey: "bergr.stressCheck") { Task { await check() } }
             while true {
                 try? await Task.sleep(for: .seconds(5))
                 report()
@@ -78,17 +79,60 @@ enum MacStress {
         fflush(stdout)
     }
 
-    /// The chat's scroll view: the tallest scrolling one in the main window.
+    private static weak var cachedScrollView: NSScrollView?
+
+    /// The chat's scroll view (its table's, see `ChatTable`), found once and kept while it is
+    /// in a window: walking the window's views on every event was part of what this measured.
     private static func chatScrollView() -> NSScrollView? {
-        func find(_ view: NSView) -> [NSScrollView] {
-            var found: [NSScrollView] = []
-            if let scroll = view as? NSScrollView, let doc = scroll.documentView,
-               doc.frame.height > scroll.contentSize.height + 200 { found.append(scroll) }
-            for child in view.subviews { found += find(child) }
-            return found
+        if let view = cachedScrollView, view.window != nil { return view }
+        func find(_ view: NSView) -> NSScrollView? {
+            if let scroll = view as? ChatTableScrollView { return scroll }
+            for child in view.subviews { if let found = find(child) { return found } }
+            return nil
         }
-        return NSApp.windows.compactMap(\.contentView).flatMap(find)
-            .max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
+        cachedScrollView = NSApp.windows.lazy.compactMap { $0.contentView.flatMap(find) }.first
+        return cachedScrollView
+    }
+
+    /// `-bergr.stressCheck YES`: the table's behaviour, step by step, printed as `[check]` lines:
+    /// opening at the bottom, scrolling up (stops following), loading earlier messages (the row
+    /// on top stays put), resizing the window (remeasured, still in place), and jumping back.
+    private static func check() async {
+        guard let view = chatScrollView() as? ChatTableScrollView, let table = view.table, let window = view.window else {
+            print("[check] no chat table"); fflush(stdout); return
+        }
+        func state(_ label: String) { print("[check] \(label): \(table.debugState)"); fflush(stdout) }
+        func pause(_ s: Double) async { try? await Task.sleep(for: .seconds(s)) }
+        state("opened")
+        for _ in 0..<40 {
+            if let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 60, wheel2: 0, wheel3: 0) {
+                e.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+                if let wheel = NSEvent(cgEvent: e) { view.scrollWheel(with: wheel) }
+            }
+            await pause(0.016)
+        }
+        await pause(0.5)
+        state("scrolled up")
+        table.debugScroll(to: -view.contentInsets.top)
+        await pause(0.5)
+        state("at the top")
+        table.debugClick(row: 0)
+        await pause(1)
+        state("earlier loaded")
+        let frame = window.frame
+        window.setFrame(NSRect(x: frame.minX, y: frame.minY, width: frame.width - 300, height: frame.height), display: true)
+        await pause(1)
+        state("narrower")
+        window.setFrame(frame, display: true)
+        await pause(1)
+        state("restored")
+        table.scrollToBottom(animated: true)
+        await pause(0.12)
+        state("jumping")
+        await pause(1)
+        state("jumped")
+        await pause(3)
+        state("followed")
     }
 
     /// Up through the conversation and back down, over and over, 60 events a second.

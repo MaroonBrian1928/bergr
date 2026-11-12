@@ -58,7 +58,14 @@ struct ChatView: View {
     /// Scrolled well up from the latest message: a button brings it back.
     @State private var awayFromLatest = false
     #if os(macOS)
-    @State private var followsLatest = true
+    @State private var scrollControl = ChatScrollControl()
+    /// The heights of the header and the reply bar over the table, in whole points.
+    @State private var macBars = (top: CGFloat(0), bottom: CGFloat(0))
+    #else
+    private var macBars: (top: CGFloat, bottom: CGFloat) {
+        get { (0, 0) }
+        nonmutating set {}
+    }
     #endif
     /// Messages in the chat when you scrolled away from the latest: the ones after it are new.
     @State private var seenMessages = 0
@@ -124,6 +131,146 @@ struct ChatView: View {
         #if DEBUG
         let _ = RenderProbe.hit("ChatView")
         #endif
+        conversationLayer
+        // Over the conversation, not in the bar below it: showing it mustn't move the list (which
+        // would change the distance to the bottom and hide it again, over and over).
+        .overlay(alignment: .bottomTrailing) { jumpLayer }
+        #if os(iOS)
+        .scrollDismissesKeyboard(.interactively)
+        #endif
+        // A reply being written stays with its agent: switching away and back finds it again.
+        .onChange(of: draftKey, initial: true) { _, key in draft = ReplyDrafts.text(for: key) }
+        .onChange(of: draft) { _, text in ReplyDrafts.set(text, for: draftKey) }
+        // Where the conversation meets the floating bars, it softens under them instead of a hard cut.
+        #if os(iOS)
+        .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+        #else
+        .scrollEdgeEffectStyle(.hard, for: .top)
+        // None below: the Mac draws the edge as a lighter band across the whole window behind the
+        // reply bar, which floats on its own.
+        .scrollEdgeEffectHidden(true, for: .bottom)
+        #endif
+        #if os(macOS)
+        // An empty chat's message in the middle of the window; in the list it sat at the bottom,
+        // where the list's anchoring holds the newest message.
+        .overlay { placeholderLayer }
+        #endif
+        // A problem is felt as well as read; a change that went through is felt as done.
+        .sensoryFeedback(.error, trigger: sendError) { _, new in new != nil }
+        // Watching the feed in a view of its own: reading `feed.items` here would run the
+        // chat's body on every streamed token.
+        .background(watcherLayer)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                if let pane { PaneHeader(chrome: pane, backdrop: palette.background) { chatButtons } }
+                if let session, session.state != .connected, !session.host.isDemo {
+                    ConnectionBar(session: session, text: palette.text, secondary: palette.secondary,
+                                  background: palette.bubble) { session.retry(keys: keys) }
+                        .transition(.opacity)
+                }
+                if searching { searchBar.transition(.opacity) }
+            }
+            .macBarHeight { macBars.top = $0 }
+        }
+        // The reply bar floats over the conversation, which scrolls on under it.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            bottomBar
+                .macBarHeight { macBars.bottom = $0 }
+        }
+        .background(palette.background)
+        .onDisappear { outbox.cancelAll() }
+        // The store keeps this view for building rows: let go of it with the chat (and take it
+        // back when the chat shows again without having been rebuilt).
+        .onAppear { rowStore.chat = self }
+        .onDisappear { rowStore.chat = nil }
+        .onChange(of: state, initial: true) { _, now in workingSeen = now == "working" ? (workingSeen ?? .now) : nil }
+        .toolbar { if pane == nil { chatToolbar } }
+        .sheet(isPresented: $showingModels) {
+            ModelSheet(models: feed.models, current: currentModel,
+                       effort: feed.usage?.effort ?? agyStatus?.effort ?? feed.chosenEffort) { option, effort in
+                Task {
+                    if let problem = await ModelSwitcher.apply(agent: agent, model: model, option: option, effort: effort) {
+                        sendError = problem
+                    } else if let effort {
+                        feed.chosenEffort = effort
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingUsage) {
+            UsageSheet(usage: feed.usage, agent: agent, machine: session?.host.name,
+                       setUp: session.map { session in { try await session.setUpClaudeStatusLine() } })
+        }
+        #if os(iOS)
+        .sheet(item: $selecting) { SelectTextSheet(text: $0.text) }
+        #endif
+        // Images open from here, not from their rows (see `showImage`).
+        .environment(\.showImage, imageOpener.action($viewing))
+        .platformCover(item: $viewing) { ImageViewer(image: $0.image) }
+    }
+
+    /// To the latest message, with the count of those that arrived meanwhile (read in a view of
+    /// its own: counting reads the whole feed).
+    @ViewBuilder
+    private var jumpButton: some View {
+            let unseen = max(messageCount - seenMessages, 0)
+            Button {
+                scrollToLatest(animated: true)
+            } label: {
+                HStack(spacing: 6) {
+                    if unseen > 0 {
+                        Text("\(unseen) new")
+                            .font(.subheadline.weight(.semibold))
+                            .contentTransition(.numericText())
+                            .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .trailing)))
+                    }
+                    Image(systemName: "arrow.down")
+                        .font(.body.weight(.semibold))
+                }
+                .foregroundStyle(palette.text)
+                .padding(.horizontal, unseen > 0 ? 14 : 0)
+                .frame(minWidth: 40, minHeight: 40)
+                .glassEffect(.regular, in: Capsule())
+                .frame(minWidth: PlatformMetrics.controlHeight, minHeight: PlatformMetrics.controlHeight)
+                .contentShape(Capsule())
+                .animation(motion, value: unseen)
+            }
+            .macPlainButton()
+            .accessibilityLabel(unseen > 0 ? "\(unseen) new message\(unseen == 1 ? "" : "s"), jump to latest" : "Jump to latest")
+            .padding(.trailing, 16)
+            .padding(.bottom, 8)
+    }
+
+    /// On the Mac the conversation reads the feed in a view of its own: a streamed token runs
+    /// that, not the whole chat (its bars, toolbar and the window's layout).
+    @ViewBuilder private var conversationLayer: some View {
+        #if os(macOS)
+        Isolated { conversationContent() }
+        #else
+        conversationContent()
+        #endif
+    }
+    private var watcherLayer: some View { Isolated { feedWatcher } }
+    @ViewBuilder private var placeholderLayer: some View {
+        if search == nil { Isolated { placeholder } }
+    }
+    @ViewBuilder private var jumpLayer: some View {
+        if awayFromLatest {
+            Isolated { jumpButton }
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+        }
+    }
+
+    private var feedWatcher: some View {
+        let lastID: String? = feed.items.last?.id
+        return Color.clear
+            .sensoryFeedback(.success, trigger: lastID) { _, _ in
+                if case .decision? = feed.items.last?.kind { return true } else { return false }
+            }
+            .onChange(of: feed.items) { outbox.feedChanged(feed.items) }
+    }
+
+    private func conversationContent() -> some View {
         let allRows = rows
         let all = shownRows(allRows)
         let state = self.state
@@ -135,6 +282,17 @@ struct ChatView: View {
         let epoch = rowStore.update(shown.map { rowKey($0, tools: tools, canType: canType, state: state) },
                                     chat: self, isNew: isNew)
         let shownReplies = outbox.shown(in: feed.items, search: search)
+        return conversation(shown: shown, hidden: hidden, epoch: epoch, loose: loose, shownReplies: shownReplies, state: state)
+    }
+
+    /// The conversation's scroll view: an AppKit table on the Mac (see `ChatTable`), SwiftUI elsewhere.
+    @ViewBuilder
+    private func conversation(shown: [Row], hidden: Int, epoch: Int, loose: [ChatFeed.SubagentInfo],
+                              shownReplies: [ReplyDelivery], state: String?) -> some View {
+        let noMatches = search != nil && shown.isEmpty && shownReplies.isEmpty
+        #if os(macOS)
+        macTable(shown: shown, hidden: hidden, loose: loose, shownReplies: shownReplies, noMatches: noMatches, state: state)
+        #else
         ScrollView {
             // Not lazy: every row is measured, so the list never grows by an estimate and shrinks
             // back (a jump on every arrival), and a conversation about one screen tall doesn't flip
@@ -167,95 +325,7 @@ struct ChatView: View {
                 // The read conversation arrives in one step: fade it in where it lands (no slide).
                 .opacity(feed.items.isEmpty ? 0 : 1)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: feed.items.isEmpty)
-                // Sub-agents whose starting tool call isn't in the conversation (yet).
-                if !loose.isEmpty {
-                    SubagentGroup(agents: loose, palette: palette)
-                }
-                // A sent reply shows at once; when the conversation has it, the real one takes
-                // its place without moving, and this one goes in the same instant.
-                ForEach(shownReplies) { reply in
-                    VStack(alignment: .trailing, spacing: 6) {
-                        UserBubble(text: reply.text, palette: palette)
-                            .opacity(0.55)
-                            // Sent while the agent works, it waits in the agent's queue: long-press
-                            // can stop the agent so it's read now.
-                            .contextMenu {
-                                if state == "working", reply.phase != .failed {
-                                    Button("Send Now", systemImage: "bolt.fill") { pushNow() }
-                                }
-                                copyButton(reply.text)
-                            }
-                            .accessibilityLabel(reply.phase == .failed ? "Not delivered: \(reply.text)" : "Sending: \(reply.text)")
-                        if reply.phase == .queued || reply.phase == .pushed {
-                            Label(reply.phase == .pushed ? "Sending now" : "Queued, the agent reads it after this step",
-                                  systemImage: reply.phase == .pushed ? "bolt.fill" : "clock")
-                                .font(.caption)
-                                .foregroundStyle(reply.phase == .pushed ? palette.accent : palette.secondary)
-                                .contentTransition(.symbolEffect(.replace))
-                                .transition(.opacity)
-                        }
-                        if reply.phase == .failed {
-                            HStack(spacing: 12) {
-                                Label("Not delivered", systemImage: "exclamationmark.circle")
-                                    .font(.footnote).foregroundStyle(palette.secondary)
-                                Button("Retry") { prepared().retry(reply.id) }
-                                    .font(.footnote.weight(.semibold))
-                                    .frame(minHeight: PlatformMetrics.controlHeight)
-                                Button("Discard", systemImage: "xmark") {
-                                    withAnimation(motion) { outbox.discard(reply.id) }
-                                }
-                                .labelStyle(.iconOnly)
-                                .font(.footnote)
-                                .foregroundStyle(palette.secondary)
-                                .frame(minWidth: PlatformMetrics.controlHeight, minHeight: PlatformMetrics.controlHeight)
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .modifier(ArriveIn(active: true))
-                    .transition(.identity)
-                }
-                // Queued in the agent from elsewhere (typed in its terminal, another device):
-                // shown like ours, without Retry. Ours are already above.
-                if search == nil {
-                    ForEach(Array(othersQueued(shownReplies).enumerated()), id: \.offset) { _, text in
-                        VStack(alignment: .trailing, spacing: 6) {
-                            UserBubble(text: text, palette: palette)
-                                .opacity(0.55)
-                                .contextMenu {
-                                    if state == "working" {
-                                        Button("Send Now", systemImage: "bolt.fill") { pushNow() }
-                                    }
-                                    copyButton(text)
-                                }
-                                .accessibilityLabel("Queued: \(text)")
-                            Label("Queued, the agent reads it after this step", systemImage: "clock")
-                                .font(.caption)
-                                .foregroundStyle(palette.secondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .modifier(ArriveIn(active: true))
-                        .transition(.identity)
-                    }
-                }
-                if search == nil, state == "working" {
-                    // herdr's status is mostly the agent's description of its current tool, which
-                    // the live tool run above already shows; it only adds something between tools.
-                    WorkingRow(agent: agent,
-                               detail: liveRunID == nil ? terminal?.status?.msg ?? terminal?.status?.title : nil,
-                               palette: palette, since: workingSince)
-                        // Fades in by drawing alone, and makes way for the reply at once.
-                        .modifier(ArriveIn(active: true, rise: false))
-                        .transition(.identity)
-                }
-                if search != nil, shown.isEmpty, shownReplies.isEmpty {
-                    Text("No matches")
-                        .font(.footnote)
-                        .foregroundStyle(palette.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 48)
-                        .transition(.opacity)
-                }
+                trailingRows(shownReplies: shownReplies, loose: loose, noMatches: noMatches, state: state)
             }
             .modifier(IdleHitTesting(state: scroll))
             // Not a scroll target layout: with one, the scroll position followed the top row as
@@ -276,14 +346,8 @@ struct ChatView: View {
         .onScrollPhaseChange { _, phase in
             if scroll.scrolling != phase.isScrolling { scroll.scrolling = phase.isScrolling }
         }
-        #if os(macOS)
-        .defaultScrollAnchor(.bottom, for: .initialOffset)
-        .defaultScrollAnchor(.bottom, for: .alignment)
-        .defaultScrollAnchor(followsLatest ? .bottom : nil, for: .sizeChanges)
-        #else
         .defaultScrollAnchor(.bottom)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
-        #endif
         #if DEBUG
         .modifier(BounceProbe(feed: feed, terminal: terminal, model: model, state: state,
                               on: UserDefaults.standard.bool(forKey: "bergr.bounceProbe")))
@@ -295,122 +359,187 @@ struct ChatView: View {
         .onScrollGeometryChange(for: BottomDistance.self) { geometry in
             BottomDistance(below: geometry.contentSize.height - geometry.visibleRect.maxY)
         } action: { _, distance in
-            #if os(macOS)
-            // Stop following as soon as the reader scrolls up, independently of the jump button.
-            let follows = distance.near
-            if follows != followsLatest { followsLatest = follows }
-            #endif
-            // Shows well above the bottom, hides only near it again: no flicker at the edge.
-            let away = awayFromLatest ? distance.beyond150 : distance.beyond600
-            if away != awayFromLatest {
-                if away { seenMessages = messageCount }
-                withAnimation(motion) { awayFromLatest = away }
-            }
+            bottomChanged(distance)
         }
-        // Over the conversation, not in the bar below it: showing it mustn't move the list (which
-        // would change the distance to the bottom and hide it again, over and over).
-        .overlay(alignment: .bottomTrailing) {
-            if awayFromLatest {
-                let unseen = max(messageCount - seenMessages, 0)
-                Button {
-                    withAnimation(motion) { position.scrollTo(edge: .bottom) }
+        #endif
+    }
+
+    /// The jump-to-latest button shows well above the bottom, and hides only near it again: no
+    /// flicker at the edge.
+    private func bottomChanged(_ distance: BottomDistance) {
+        let away = awayFromLatest ? distance.beyond150 : distance.beyond600
+        if away != awayFromLatest {
+            if away { seenMessages = messageCount }
+            withAnimation(motion) { awayFromLatest = away }
+        }
+    }
+
+    private func scrollToLatest(animated: Bool) {
+        #if os(macOS)
+        scrollControl.scrollToBottom(animated: animated)
+        #else
+        if animated { withAnimation(motion) { position.scrollTo(edge: .bottom) } } else { position.scrollTo(edge: .bottom) }
+        #endif
+    }
+
+    #if os(macOS)
+    /// The rows as the Mac's table shows them (see `ChatTable`): "Earlier messages", the
+    /// conversation's rows (each rebuilt only when its `RowStore` version changes), and one row
+    /// for what follows them.
+    private func macTable(shown: [Row], hidden: Int, loose: [ChatFeed.SubagentInfo], shownReplies: [ReplyDelivery],
+                          noMatches: Bool, state: String?) -> some View {
+        var items: [ChatTableItem] = []
+        items.reserveCapacity(rowStore.slots.count + 2)
+        if hidden > 0 {
+            let palette = palette
+            items.append(ChatTableItem(id: "chat.earlier", version: hidden) {
+                AnyView(Button {
+                    // The table keeps the rows you look at still as earlier ones land above.
+                    rowLimit += Self.rowPage
                 } label: {
-                    HStack(spacing: 6) {
-                        if unseen > 0 {
-                            Text("\(unseen) new")
-                                .font(.subheadline.weight(.semibold))
-                                .contentTransition(.numericText())
-                                .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .trailing)))
-                        }
-                        Image(systemName: "arrow.down")
-                            .font(.body.weight(.semibold))
-                    }
-                    .foregroundStyle(palette.text)
-                    .padding(.horizontal, unseen > 0 ? 14 : 0)
-                    .frame(minWidth: 40, minHeight: 40)
-                    .glassEffect(.regular, in: Capsule())
-                    .frame(minWidth: PlatformMetrics.controlHeight, minHeight: PlatformMetrics.controlHeight)
-                    .contentShape(Capsule())
-                    .animation(motion, value: unseen)
+                    Label("Earlier messages", systemImage: "arrow.up")
+                        .font(.footnote.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: PlatformMetrics.controlHeight)
                 }
                 .macPlainButton()
-                .accessibilityLabel(unseen > 0 ? "\(unseen) new message\(unseen == 1 ? "" : "s"), jump to latest" : "Jump to latest")
-                .padding(.trailing, 16)
-                .padding(.bottom, 8)
-                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                .foregroundStyle(palette.secondary)
+                .accessibilityHint("\(hidden) more"))
+            })
+        }
+        for slot in rowStore.slots {
+            items.append(ChatTableItem(id: slot.id, version: slot.version) {
+                AnyView(RowSlot(box: slot.box, version: slot.version)
+                    .contentShape(.rect)
+                    .modifier(ArriveIn(active: slot.new)))
+            })
+        }
+        let others = search == nil ? othersQueued(shownReplies) : []
+        let working = search == nil && state == "working"
+        if !loose.isEmpty || !shownReplies.isEmpty || !others.isEmpty || working || noMatches {
+            var hasher = Hasher()
+            hasher.combine(colorScheme == .dark)
+            hasher.combine(noMatches)
+            hasher.combine(state)
+            if !loose.isEmpty { hasher.combine(String(describing: loose)) }
+            for reply in shownReplies {
+                hasher.combine(reply.id)
+                hasher.combine(String(describing: reply.phase))
+                hasher.combine(reply.text)
             }
+            hasher.combine(others)
+            if working {
+                hasher.combine(liveRunID == nil ? terminal?.status?.msg ?? terminal?.status?.title : nil)
+                hasher.combine(workingSince)
+            }
+            items.append(ChatTableItem(id: "chat.trailing", version: hasher.finalize()) {
+                AnyView(VStack(alignment: .leading, spacing: 18) {
+                    trailingRows(shownReplies: shownReplies, loose: loose, noMatches: noMatches, state: state)
+                })
+            })
         }
-        #if os(iOS)
-        .scrollDismissesKeyboard(.interactively)
-        #endif
-        // A reply being written stays with its agent: switching away and back finds it again.
-        .onChange(of: draftKey, initial: true) { _, key in draft = ReplyDrafts.text(for: key) }
-        .onChange(of: draft) { _, text in ReplyDrafts.set(text, for: draftKey) }
-        // Where the conversation meets the floating bars, it softens under them instead of a hard cut.
-        #if os(iOS)
-        .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
-        #else
-        .scrollEdgeEffectStyle(.hard, for: .top)
-        // None below: the Mac draws the edge as a lighter band across the whole window behind the
-        // reply bar, which floats on its own.
-        .scrollEdgeEffectHidden(true, for: .bottom)
-        #endif
-        #if os(macOS)
-        // An empty chat's message in the middle of the window; in the list it sat at the bottom,
-        // where the list's anchoring holds the newest message.
-        .overlay { if search == nil { placeholder } }
-        #endif
-        // A problem is felt as well as read; a change that went through is felt as done.
-        .sensoryFeedback(.error, trigger: sendError) { _, new in new != nil }
-        .sensoryFeedback(.success, trigger: feed.items.last?.id) { _, _ in
-            if case .decision? = feed.items.last?.kind { return true } else { return false }
+        // Under the bars, which the table keeps its rows clear of as content insets: the reply
+        // bar's and the header's measured heights (the toolbar's the table reads from the window).
+        return ChatTable(items: items, insets: EdgeInsets(top: macBars.top, leading: 0, bottom: macBars.bottom, trailing: 0),
+                         control: scrollControl) { distance in
+            bottomChanged(distance)
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            VStack(spacing: 0) {
-                if let pane { PaneHeader(chrome: pane, backdrop: palette.background) { chatButtons } }
-                if let session, session.state != .connected, !session.host.isDemo {
-                    ConnectionBar(session: session, text: palette.text, secondary: palette.secondary,
-                                  background: palette.bubble) { session.retry(keys: keys) }
+        .ignoresSafeArea(.container, edges: .vertical)
+    }
+    #endif
+
+    /// What follows the rows: sub-agents without a row, sent replies, the working line, "No matches".
+    @ViewBuilder
+    private func trailingRows(shownReplies: [ReplyDelivery], loose: [ChatFeed.SubagentInfo], noMatches: Bool,
+                              state: String?) -> some View {
+        // Sub-agents whose starting tool call isn't in the conversation (yet).
+        if !loose.isEmpty {
+            SubagentGroup(agents: loose, palette: palette)
+        }
+        // A sent reply shows at once; when the conversation has it, the real one takes
+        // its place without moving, and this one goes in the same instant.
+        ForEach(shownReplies) { reply in
+            VStack(alignment: .trailing, spacing: 6) {
+                UserBubble(text: reply.text, palette: palette)
+                    .opacity(0.55)
+                    // Sent while the agent works, it waits in the agent's queue: long-press
+                    // can stop the agent so it's read now.
+                    .contextMenu {
+                        if state == "working", reply.phase != .failed {
+                            Button("Send Now", systemImage: "bolt.fill") { pushNow() }
+                        }
+                        copyButton(reply.text)
+                    }
+                    .accessibilityLabel(reply.phase == .failed ? "Not delivered: \(reply.text)" : "Sending: \(reply.text)")
+                if reply.phase == .queued || reply.phase == .pushed {
+                    Label(reply.phase == .pushed ? "Sending now" : "Queued, the agent reads it after this step",
+                          systemImage: reply.phase == .pushed ? "bolt.fill" : "clock")
+                        .font(.caption)
+                        .foregroundStyle(reply.phase == .pushed ? palette.accent : palette.secondary)
+                        .contentTransition(.symbolEffect(.replace))
                         .transition(.opacity)
                 }
-                if searching { searchBar.transition(.opacity) }
-            }
-        }
-        // The reply bar floats over the conversation, which scrolls on under it.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            bottomBar
-        }
-        .background(palette.background)
-        .onChange(of: feed.items) { outbox.feedChanged(feed.items) }
-        .onDisappear { outbox.cancelAll() }
-        // The store keeps this view for building rows: let go of it with the chat (and take it
-        // back when the chat shows again without having been rebuilt).
-        .onAppear { rowStore.chat = self }
-        .onDisappear { rowStore.chat = nil }
-        .onChange(of: state, initial: true) { _, now in workingSeen = now == "working" ? (workingSeen ?? .now) : nil }
-        .toolbar { if pane == nil { chatToolbar } }
-        .sheet(isPresented: $showingModels) {
-            ModelSheet(models: feed.models, current: currentModel,
-                       effort: feed.usage?.effort ?? agyStatus?.effort ?? feed.chosenEffort) { option, effort in
-                Task {
-                    if let problem = await ModelSwitcher.apply(agent: agent, model: model, option: option, effort: effort) {
-                        sendError = problem
-                    } else if let effort {
-                        feed.chosenEffort = effort
+                if reply.phase == .failed {
+                    HStack(spacing: 12) {
+                        Label("Not delivered", systemImage: "exclamationmark.circle")
+                            .font(.footnote).foregroundStyle(palette.secondary)
+                        Button("Retry") { prepared().retry(reply.id) }
+                            .font(.footnote.weight(.semibold))
+                            .frame(minHeight: PlatformMetrics.controlHeight)
+                        Button("Discard", systemImage: "xmark") {
+                            withAnimation(motion) { outbox.discard(reply.id) }
+                        }
+                        .labelStyle(.iconOnly)
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                        .frame(minWidth: PlatformMetrics.controlHeight, minHeight: PlatformMetrics.controlHeight)
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .modifier(ArriveIn(active: true))
+            .transition(.identity)
         }
-        .sheet(isPresented: $showingUsage) {
-            UsageSheet(usage: feed.usage, agent: agent, machine: session?.host.name,
-                       setUp: session.map { session in { try await session.setUpClaudeStatusLine() } })
+        // Queued in the agent from elsewhere (typed in its terminal, another device):
+        // shown like ours, without Retry. Ours are already above.
+        if search == nil {
+            ForEach(Array(othersQueued(shownReplies).enumerated()), id: \.offset) { _, text in
+                VStack(alignment: .trailing, spacing: 6) {
+                    UserBubble(text: text, palette: palette)
+                        .opacity(0.55)
+                        .contextMenu {
+                            if state == "working" {
+                                Button("Send Now", systemImage: "bolt.fill") { pushNow() }
+                            }
+                            copyButton(text)
+                        }
+                        .accessibilityLabel("Queued: \(text)")
+                    Label("Queued, the agent reads it after this step", systemImage: "clock")
+                        .font(.caption)
+                        .foregroundStyle(palette.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .modifier(ArriveIn(active: true))
+                .transition(.identity)
+            }
         }
-        #if os(iOS)
-        .sheet(item: $selecting) { SelectTextSheet(text: $0.text) }
-        #endif
-        // Images open from here, not from their rows (see `showImage`).
-        .environment(\.showImage, imageOpener.action($viewing))
-        .platformCover(item: $viewing) { ImageViewer(image: $0.image) }
+        if search == nil, state == "working" {
+            // herdr's status is mostly the agent's description of its current tool, which
+            // the live tool run above already shows; it only adds something between tools.
+            WorkingRow(agent: agent,
+                       detail: liveRunID == nil ? terminal?.status?.msg ?? terminal?.status?.title : nil,
+                       palette: palette, since: workingSince)
+                // Fades in by drawing alone, and makes way for the reply at once.
+                .modifier(ArriveIn(active: true, rise: false))
+                .transition(.identity)
+        }
+        if noMatches {
+            Text("No matches")
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 48)
+                .transition(.opacity)
+        }
     }
 
     @ToolbarContentBuilder
@@ -547,9 +676,11 @@ struct ChatView: View {
             if let terminal, terminal.isLive {
                 // Not while a question card is open: the cards answer it, and the screen-guessed
                 // buttons (Yes, No, Return, Esc) only showed without the question.
-                AnswerSlot(terminal: terminal, model: model, blocked: state == "blocked" && !questionOpen, palette: palette,
-                           transition: arrival) { question, answer in
-                    feed.recordDecision(question: question, answer: answer)
+                Isolated {
+                    AnswerSlot(terminal: terminal, model: model, blocked: state == "blocked" && !questionOpen, palette: palette,
+                               transition: arrival) { question, answer in
+                        feed.recordDecision(question: question, answer: answer)
+                    }
                 }
             }
             inputBar
@@ -1300,7 +1431,7 @@ struct ChatView: View {
         }
         // What you just sent is where you want to be: straight there, then the list's own
         // bottom anchoring follows it as it grows (an animated scroll would chase a moving end).
-        position.scrollTo(edge: .bottom)
+        scrollToLatest(animated: false)
     }
 }
 
@@ -2437,6 +2568,24 @@ private struct ArriveIn: ViewModifier {
                 withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.35)) { landed = true }
             }
     }
+}
+
+private extension View {
+    /// The Mac's chat table keeps its rows clear of the bars over it: their heights, in whole points.
+    @ViewBuilder func macBarHeight(_ changed: @escaping (CGFloat) -> Void) -> some View {
+        #if os(macOS)
+        onGeometryChange(for: CGFloat.self) { $0.size.height.rounded() } action: { changed($0) }
+        #else
+        self
+        #endif
+    }
+}
+
+/// Its content's reads of observable state run this view's body, not its parent's.
+struct Isolated<Content: View>: View {
+    let content: () -> Content
+    init(@ViewBuilder _ content: @escaping () -> Content) { self.content = content }
+    var body: some View { content() }
 }
 
 /// The chat's row stack: eager everywhere (see the comment where it's used). Lazy on the Mac
