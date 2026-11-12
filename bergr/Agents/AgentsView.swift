@@ -82,6 +82,10 @@ struct AgentsView: View {
         groupingSetting.isEmpty ? DeviceName.isPhone : groupingSetting == "attention"
     }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var searchText = ""
+    @State private var searchModel = TranscriptSearchModel()
+    @State private var digest = AwayDigestModel()
 
     init(sessions: SessionStore, openBeside: ((_ host: Host.ID, _ address: String) -> Void)? = nil,
          open: @escaping (_ host: Host.ID, _ address: String) -> Void) {
@@ -94,7 +98,35 @@ struct AgentsView: View {
         // Worked out once per body, and read by the sections, the animation and the attention lists.
         let lists = machineLists
         List(selection: listSelection) {
+            if !searchText.isEmpty {
+                SearchResultsSections(model: searchModel, sessions: sessions, open: open)
+            } else {
+            if !digest.entries.isEmpty {
+                Section { DigestCard(model: digest, open: open) }
+            }
             if byAttention { attentionSections(lists) } else { machineSections(lists) }
+            }
+        }
+        .searchable(text: $searchText, prompt: "Search conversations")
+        .onSubmit(of: .search) {
+            searchModel.search(searchText, machines: hosts.hosts.map { ($0, sessions.session(for: $0)) })
+        }
+        .onChange(of: searchText) { if searchText.isEmpty { searchModel.clear() } }
+        .modifier(SearchResultsSections.InfoAlert(hit: $searchModel.info))
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { digest.appDidLeave() }
+            if phase == .active {
+                digest.appDidReturn {
+                    machineLists.flatMap { list in
+                        list.ordered.map { t in
+                            AwayDigestModel.Candidate(
+                                host: list.host,
+                                machine: t.address.contains("/") ? String(t.address.prefix { $0 != "/" }) : list.host.name,
+                                terminal: t, lines: list.session.digestLines(address: t.address))
+                        }
+                    }
+                }
+            }
         }
         #if os(iOS)
         .toolbar {

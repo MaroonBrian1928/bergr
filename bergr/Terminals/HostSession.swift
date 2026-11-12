@@ -228,6 +228,22 @@ final class HostSession {
         feeds[address]?.feed.runningSubagents ?? 0
     }
 
+    /// The last chat items of a terminal's feed (live or paused), for the "while you were away"
+    /// digest; nil when no conversation is being followed.
+    @MainActor
+    func digestLines(address: String, limit: Int = 20) -> [DigestLine]? {
+        guard let feed = feeds[address]?.feed ?? pausedFeeds[address]?.feed else { return nil }
+        let lines: [DigestLine] = feed.items.compactMap { item in
+            switch item.kind {
+            case .user(let text): DigestLine(role: .user, text: text)
+            case .assistant(let text, _): DigestLine(role: .assistant, text: text)
+            case .tool(let name, let summary): DigestLine(role: .tool, text: "\(name) \(summary)")
+            default: nil
+            }
+        }
+        return lines.isEmpty ? nil : Array(lines.suffix(limit))
+    }
+
     private func stopFeeds() {
         for (address, entry) in feeds {
             entry.task.cancel()
