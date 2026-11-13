@@ -84,6 +84,33 @@ final class LiveActivityController {
             prompt: PromptBuilder.prompt(machines: machines, screens: screens))
     }
 
+    /// Up to 4 live agents (needs-you first, then working, then done) with their last status sentence,
+    /// for the medium widget.
+    static func snapshotAgents(machines: [LiveActivityMachine], limit: Int = 4) -> [AgentsSnapshot.Agent] {
+        var out: [(rank: Int, agent: AgentsSnapshot.Agent)] = []
+        for machine in machines {
+            for terminal in machine.terminals where terminal.isLive {
+                guard let state = terminal.agentState else { continue }
+                let (word, rank): (String, Int)
+                switch state {
+                case .needsYou, .error: (word, rank) = ("needsYou", 0)
+                case .working: (word, rank) = ("working", 1)
+                case .done: (word, rank) = ("done", 2)
+                case .idle:
+                    guard ChatAgent.detect(terminal) != nil, !QuietAgents.isQuiet(terminal) else { continue }
+                    (word, rank) = ("done", 2)
+                }
+                let text = [terminal.status?.msg, terminal.status?.title].compactMap { $0 }.first { !$0.isEmpty } ?? ""
+                out.append((rank, AgentsSnapshot.Agent(
+                    state: word, name: terminal.displayName, machine: machine.name,
+                    lastLine: AwayDigest.truncate(AwayDigest.lastSentence(of: text), to: 120),
+                    host: machine.host.uuidString, address: terminal.address)))
+            }
+        }
+        return Array(out.enumerated().sorted { ($0.element.rank, $0.offset) < ($1.element.rank, $1.offset) }
+            .prefix(limit).map(\.element.agent))
+    }
+
     /// What each machine's helper would post for the relay to sum, keyed by host id (the helper's
     /// `machine`): the per-machine counts `content` gives, and rows only in full mode. Seeded when
     /// the relay starts an activity, so a machine that stays quiet still counts toward the first push.
@@ -190,7 +217,10 @@ final class LiveActivityController {
 
     /// Writes the Home Screen widget's data and reloads it when it changed.
     private func writeSnapshot() {
-        let snapshot = AgentsSnapshot(Self.content(machines: machines()), updated: .now)
+        let current = machines()
+        let snapshot = AgentsSnapshot(
+            Self.content(machines: current), updated: .now, agents: Self.snapshotAgents(machines: current),
+            machines: Dictionary(current.map { ($0.host.uuidString, $0.name) }, uniquingKeysWith: { a, _ in a }))
         var previous = lastSnapshot
         previous?.updated = snapshot.updated
         guard previous != snapshot else { return }

@@ -16,4 +16,24 @@ nonisolated enum AgentWidgetContent {
         if snapshot.working > 0 { parts.append("\(snapshot.working) working") }
         return parts.isEmpty ? "Nothing needs you" : parts.joined(separator: " · ")
     }
+
+    /// Medium widget: up to `limit` agents, needs-you first, then working, then done (stable within
+    /// a state). Snapshots from older builds have no `agents`: their rows stand in.
+    static func mediumAgents(_ snapshot: AgentsSnapshot, limit: Int = 4) -> [AgentsSnapshot.Agent] {
+        let source = snapshot.agents.isEmpty ? snapshot.rows.map {
+            AgentsSnapshot.Agent(state: $0.needsYou ? "needsYou" : "working", name: $0.title, machine: $0.machine,
+                                 lastLine: $0.status, host: $0.host, address: $0.address)
+        } : snapshot.agents
+        func rank(_ a: AgentsSnapshot.Agent) -> Int { ["needsYou": 0, "working": 1, "done": 2][a.state] ?? 3 }
+        let ordered = source.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+        return Array(ordered.map(\.element).prefix(limit))
+    }
+
+    static func stateWord(_ state: String) -> String {
+        switch state {
+        case "needsYou": "Needs you"
+        case "working": "Working"
+        default: "Done"
+        }
+    }
 }

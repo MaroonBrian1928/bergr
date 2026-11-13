@@ -5,13 +5,13 @@ import FoundationModels
 #endif
 
 /// One chat item as the digest sees it.
-struct DigestLine: Equatable, Sendable {
+nonisolated struct DigestLine: Equatable, Sendable {
     enum Role: Sendable { case user, assistant, tool }
     let role: Role
     let text: String
 }
 
-enum DigestKind: String, Sendable {
+nonisolated enum DigestKind: String, Sendable {
     case finished, needsYou, error
 
     var label: String {
@@ -34,7 +34,7 @@ enum DigestKind: String, Sendable {
 
 /// What the summary is written from: the agent's last chat items when its chat is followed, plus
 /// its status message.
-struct DigestContext: Sendable {
+nonisolated struct DigestContext: Sendable {
     var title: String
     var kind: DigestKind
     var lines: [DigestLine]
@@ -42,12 +42,12 @@ struct DigestContext: Sendable {
 }
 
 /// Writes the one-sentence summary. A fake stands in for the model in tests.
-protocol DigestSummarizing: Sendable {
+nonisolated protocol DigestSummarizing: Sendable {
     /// Nil when it can't (model unavailable, or it failed): the caller falls back.
     func summarize(_ context: DigestContext) async -> String?
 }
 
-enum AwayDigest {
+nonisolated enum AwayDigest {
     /// Away this long (seconds) before the card shows.
     static let threshold: TimeInterval = 15 * 60
 
@@ -87,29 +87,65 @@ enum AwayDigest {
     }
 }
 
-/// Apple's on-device model. Unavailable (Apple Intelligence off, unsupported device) returns nil.
-struct FoundationModelsSummarizer: DigestSummarizing {
+/// Apple's on-device model, through `OnDeviceText` (3 s timeout, refusals dropped). Unavailable
+/// (Apple Intelligence off, unsupported device) returns nil.
+nonisolated struct FoundationModelsSummarizer: DigestSummarizing {
+    var writer: OnDeviceTextWriting = OnDeviceText.shared
+    var timeout: Duration = .seconds(3)
+
     func summarize(_ context: DigestContext) async -> String? {
-        #if canImport(FoundationModels)
-        guard case .available = SystemLanguageModel.default.availability else { return nil }
-        let transcript = context.lines.suffix(20).map { line -> String in
-            let who = switch line.role { case .user: "User"; case .assistant: "Agent"; case .tool: "Tool" }
-            return "\(who): \(AwayDigest.truncate(line.text, to: 400))"
-        }.joined(separator: "\n")
-        let material = transcript.isEmpty ? (context.statusMessage ?? "") : transcript
+        let material = AwayDigest.material(context)
         guard !material.isEmpty else { return nil }
-        let session = LanguageModelSession(instructions:
-            "Summarize in one short sentence what a coding agent did, from its recent conversation. Plain text, no markdown, under 25 words.")
-        do {
-            let r = try await session.respond(to: "Agent \"\(context.title)\" is now \(context.kind.label.lowercased()).\n\n\(material)")
-            let text = r.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            return text.isEmpty ? nil : text
-        } catch {
-            return nil
+        return await writer.write(
+            instructions: "Summarize in one short sentence what a coding agent did, from its recent conversation. Plain text, no markdown, under 25 words.",
+            prompt: "Agent \"\(context.title)\" is now \(context.kind.label.lowercased()).\n\n\(material)",
+            timeout: timeout)
+    }
+}
+
+extension AwayDigest {
+    /// Total transcript characters sent to the model per agent.
+    static let maxInputCharacters = 2000
+
+    /// The newest chat lines that fit in `limit` characters (each cut to 400), oldest first; the
+    /// status message when there is no chat.
+    static func material(_ context: DigestContext, limit: Int = maxInputCharacters) -> String {
+        var picked: [String] = []
+        var total = 0
+        for line in context.lines.reversed() {
+            let who = switch line.role { case .user: "User"; case .assistant: "Agent"; case .tool: "Tool" }
+            var text = "\(who): \(truncate(line.text, to: 400))"
+            let room = limit - total - (picked.isEmpty ? 0 : 1)
+            if room <= 0 { break }
+            if text.count > room { text = String(text.prefix(room)) }
+            picked.append(text)
+            total += text.count + (picked.count > 1 ? 1 : 0)
         }
-        #else
-        return nil
-        #endif
+        let transcript = picked.reversed().joined(separator: "\n")
+        return transcript.isEmpty ? truncate(context.statusMessage ?? "", to: limit) : transcript
+    }
+
+    /// Summaries for `contexts`, at most `maxConcurrent` at a time, each cut off at `timeout` and
+    /// replaced by the plain fallback when the summarizer is nil, fails or is too slow.
+    static func summaries(
+        _ contexts: [(id: String, context: DigestContext)], summarizer: DigestSummarizing,
+        maxConcurrent: Int = 2, timeout: Duration = .seconds(3),
+        deliver: @escaping @Sendable (String, String) async -> Void
+    ) async {
+        await withTaskGroup(of: Void.self) { group in
+            var next = 0
+            func add(_ item: (id: String, context: DigestContext)) {
+                group.addTask {
+                    let text = await OnDeviceText.race(timeout: timeout) { await summarizer.summarize(item.context) }
+                    await deliver(item.id, text ?? fallbackSummary(item.context))
+                }
+            }
+            while next < min(max(1, maxConcurrent), contexts.count) { add(contexts[next]); next += 1 }
+            while await group.next() != nil {
+                if Task.isCancelled { group.cancelAll(); continue }
+                if next < contexts.count { add(contexts[next]); next += 1 }
+            }
+        }
     }
 }
 
@@ -171,16 +207,11 @@ final class AwayDigestModel {
         guard !contexts.isEmpty else { return }
         task?.cancel()
         let summarizer = summarizer
+        let items = contexts.map { (id: $0.0.id, context: $0.1) }
         task = Task { [weak self] in
-            await withTaskGroup(of: (String, String).self) { group in
-                for (entry, context) in contexts {
-                    group.addTask {
-                        let text = await summarizer.summarize(context) ?? AwayDigest.fallbackSummary(context)
-                        return (entry.id, text)
-                    }
-                }
-                for await (id, text) in group {
-                    guard !Task.isCancelled, let self, let i = self.entries.firstIndex(where: { $0.id == id }) else { continue }
+            await AwayDigest.summaries(items, summarizer: summarizer) { id, text in
+                await MainActor.run {
+                    guard let self, let i = self.entries.firstIndex(where: { $0.id == id }) else { return }
                     self.entries[i].summary = text
                 }
             }

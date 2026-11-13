@@ -82,34 +82,55 @@ private struct AgentsWidgetView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .widgetURL(snapshot.rows.first(where: \.needsYou)?.url)
         } else {
-            HStack(alignment: .top, spacing: 14) {
+            let agents = AgentWidgetContent.mediumAgents(snapshot)
+            if agents.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Agents").font(.subheadline.weight(.semibold))
-                    counts
+                    Text(snapshot.working > 0 ? "\(snapshot.working) working" : "Nothing needs you")
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    let needing = Array(snapshot.rows.filter(\.needsYou).prefix(3))
-                    if needing.isEmpty {
-                        Text(snapshot.working > 0 ? "\(snapshot.working) working" : "Nothing needs you")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    }
-                    ForEach(needing, id: \.url) { row in
-                        Link(destination: row.url) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "exclamationmark.bubble.fill").foregroundStyle(Color.needsYou)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(row.title).font(.subheadline.weight(.medium)).lineLimit(1)
-                                    Text(row.status.isEmpty ? row.machine : "\(row.status) · \(row.machine)")
-                                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(agents, id: \.url) { agent in
+                        Link(destination: agent.url) {
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: Self.symbol(agent.state)).foregroundStyle(Self.tint(agent.state))
+                                    .frame(width: 16)
+                                VStack(alignment: .leading, spacing: 0) {
+                                    HStack(spacing: 4) {
+                                        Text(agent.name).font(.caption.weight(.semibold)).lineLimit(1)
+                                        Text(AgentWidgetContent.stateWord(agent.state))
+                                            .font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                    if !agent.lastLine.isEmpty {
+                                        Text(agent.lastLine).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                    }
                                 }
                                 Spacer(minLength: 0)
                             }
                         }
                     }
+                    Spacer(minLength: 0)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private static func symbol(_ state: String) -> String {
+        switch state {
+        case "needsYou": "exclamationmark.bubble.fill"
+        case "working": "circle.dotted"
+        default: "checkmark.circle.fill"
+        }
+    }
+
+    private static func tint(_ state: String) -> Color {
+        switch state {
+        case "needsYou": .needsYou
+        case "working": .working
+        default: .done
         }
     }
 

@@ -13,6 +13,11 @@ final class NotificationService: UNNotificationServiceExtension {
         // Older installed helpers or relay versions may still mark alerts time-sensitive.
         // Keep those as ordinary notifications without requiring the optional entitlement.
         if content.interruptionLevel == .timeSensitive { content.interruptionLevel = .active }
+        // One stack per machine: "3 more from <machine>".
+        if let group = PushGrouping.result(userInfo: request.content.userInfo, machines: AgentsSnapshot.load().machines) {
+            content.threadIdentifier = group.thread
+            content.summaryArgument = group.summaryArgument
+        }
         best = content
         if let e = request.content.userInfo["e"] as? String,
            let blob = Data(base64Encoded: e),

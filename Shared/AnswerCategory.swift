@@ -78,11 +78,13 @@ nonisolated enum AnswerCategory {
             }
             if replyEnabled { actions.append(replyButton()) }
             return UNNotificationCategory(
-                identifier: "\(prefix)\(count)", actions: actions, intentIdentifiers: [], options: [])
+                identifier: "\(prefix)\(count)", actions: actions, intentIdentifiers: [],
+                hiddenPreviewsBodyPlaceholder: nil, categorySummaryFormat: PushGrouping.summaryFormat, options: [])
         })
         if replyEnabled {
             set.insert(UNNotificationCategory(
-                identifier: replyCategory, actions: [replyButton()], intentIdentifiers: [], options: []))
+                identifier: replyCategory, actions: [replyButton()], intentIdentifiers: [],
+                hiddenPreviewsBodyPlaceholder: nil, categorySummaryFormat: PushGrouping.summaryFormat, options: []))
         }
         return set
     }
