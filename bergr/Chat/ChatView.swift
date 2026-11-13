@@ -581,6 +581,12 @@ struct ChatView: View {
                 }
                 .help("Search Conversation (⌘F)")
             }
+            ToolbarItem(placement: .trailingAction) {
+                Menu("Conversation", systemImage: "square.and.arrow.up") {
+                    ConversationExportButtons(feed: feed, agent: agent)
+                }
+                .menuIndicator(.hidden)
+            }
         #else
             ToolbarItem(placement: .trailingAction) { changesButton }
             ToolbarItem(placement: .trailingAction) { moreMenu }
@@ -815,6 +821,7 @@ struct ChatView: View {
     private func copyButton(_ text: String) -> some View {
         // The copies together: the message, then each command in it, then Select Text.
         Button("Copy", systemImage: "doc.on.doc") { Pasteboard.copy(text) }
+        ShareLink("Share…", item: TranscriptExport.plain(text))
         commandButtons(Commands.cachedIn(text))
         #if os(iOS)
         Button("Select Text", systemImage: "selection.pin.in.out") { selecting = SelectableMessage(text: text) }
@@ -1334,6 +1341,7 @@ struct ChatView: View {
                 }
                 .padding(.leading, session == nil ? 6 : 0)
                 Spacer(minLength: 0)
+                DictationButton(draft: $draft, palette: palette, enabled: canType)
                 // One button in one place: stop while the agent works and nothing is typed, send otherwise.
                 let stops = state == "working" && draft.isBlank && attachments.isEmpty
                 Button {
@@ -2474,6 +2482,7 @@ private struct MoreMenuSlot: View {
             currentMode: PermissionModes.current(agent, in: model.textLines, saved: feed.usage?.mode),
             saved: feed.usage?.mode, canSetMode: canSetMode, canManage: canManage,
             search: search, usage: usage, permissions: { choosingMode = true }, info: info,
+            exporting: { ConversationExportButtons(feed: feed, agent: agent) },
             restart: { lifecycle.confirming = .restart }, end: { lifecycle.confirming = .end })
         .equatable()
         .agentLifecycleDialogs(lifecycle, name: agent.displayName, end: end, restart: restart)
@@ -2505,6 +2514,7 @@ private struct MoreMenu: View, Equatable {
     let usage: () -> Void
     let permissions: () -> Void
     let info: () -> Void
+    let exporting: () -> ConversationExportButtons
     let restart: () -> Void
     let end: () -> Void
 
@@ -2530,6 +2540,7 @@ private struct MoreMenu: View, Equatable {
             if hasInfo {
                 Button("Info", systemImage: "info.circle", action: info)
             }
+            exporting()
             if canManage {
                 Divider()
                 if agent != .antigravity {
@@ -2542,6 +2553,25 @@ private struct MoreMenu: View, Equatable {
         }
         // One glyph in the toolbar: the Mac's menu chevron beside it read as a second control.
         .menuIndicator(.hidden)
+    }
+}
+
+/// "Copy conversation as Markdown" and "Share conversation…". The text is built when it's used,
+/// not when the menu draws.
+private struct ConversationExportButtons: View {
+    let feed: ChatFeed
+    let agent: ChatAgent
+
+    var body: some View {
+        Button("Copy Conversation as Markdown", systemImage: "doc.on.doc") {
+            Pasteboard.copy(TranscriptExport.markdown(items: feed.items, agent: agent.displayName))
+        }
+        ShareLink(
+            "Share Conversation…",
+            item: TranscriptShare { [feed, name = agent.displayName] in
+                TranscriptExport.markdown(items: feed.items, agent: name)
+            },
+            preview: SharePreview("Conversation with \(agent.displayName)"))
     }
 }
 

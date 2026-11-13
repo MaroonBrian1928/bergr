@@ -80,6 +80,8 @@
         "INFOPLIST_KEY_CFBundleDisplayName": "bergr$(BERGR_NAME_SUFFIX)",
         "INFOPLIST_KEY_ITSAppUsesNonExemptEncryption": "NO",
         "INFOPLIST_KEY_NSFaceIDUsageDescription": "Face ID unlocks your SSH key when you connect to a machine.",
+        "INFOPLIST_KEY_NSMicrophoneUsageDescription": "Bergr listens while you dictate a message to an agent.",
+        "INFOPLIST_KEY_NSSpeechRecognitionUsageDescription": "Bergr turns your speech into text for the message you are writing, on this device when it can.",
         "INFOPLIST_KEY_NSLocalNetworkUsageDescription": "Bergr connects over SSH to machines on your local network.",
         "INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription": "Bergr uses a low-accuracy location session only to stay running in the background, so it can alert you when an agent needs you or finishes. Your location is never stored or sent anywhere.",
         "INFOPLIST_KEY_NSLocationWhenInUseUsageDescription": "Bergr uses a low-accuracy location session only to stay running in the background, so it can alert you when an agent needs you or finishes. Your location is never stored or sent anywhere.",
@@ -134,6 +136,8 @@
         "GENERATE_INFOPLIST_FILE": "YES",
         "INFOPLIST_FILE": "Config/Mac-Info.plist",
         "INFOPLIST_KEY_CFBundleDisplayName": "Bergr$(BERGR_NAME_SUFFIX)",
+        "INFOPLIST_KEY_NSMicrophoneUsageDescription": "Bergr listens while you dictate a message to an agent.",
+        "INFOPLIST_KEY_NSSpeechRecognitionUsageDescription": "Bergr turns your speech into text for the message you are writing, on this device when it can.",
         "INFOPLIST_KEY_NSLocalNetworkUsageDescription": "Bergr connects over SSH to machines on your local network.",
         "LD_RUNPATH_SEARCH_PATHS": [
           "$(inherited)",
