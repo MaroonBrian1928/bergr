@@ -31,7 +31,8 @@ final class ReplySuggestions {
         guard !Task.isCancelled else { asked.remove(messageID); return }
         let found = reply.flatMap { $0.data(using: .utf8) }
             .flatMap { try? JSONDecoder().decode(ReplySuggestionPlan.self, from: $0) }
-            .map { Self.validated($0, text: text, userRequest: userRequest) } ?? []
+            .map { Self.validated($0, text: text, userRequest: userRequest) }?
+            .filter { !OnDeviceText.isRefusal($0) } ?? []
         if !found.isEmpty { chips[messageID] = found }
     }
 

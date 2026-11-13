@@ -39,7 +39,8 @@ final class ConversationTitles {
         self.defaults = defaults
         if let data = defaults.data(forKey: Self.storageKey),
            let saved = try? JSONDecoder().decode([SavedTitle].self, from: data) {
-            for entry in saved.suffix(Self.limit) where titles[entry.id] == nil {
+            // Titles saved before refusals were caught ("I'm sorry, but I can't…") are dropped.
+            for entry in saved.suffix(Self.limit) where titles[entry.id] == nil && OnDeviceText.title(entry.title) != nil {
                 titles[entry.id] = entry.title
                 order.append(entry.id)
             }
@@ -61,8 +62,11 @@ final class ConversationTitles {
             prompt: Self.prompt(title: title, snippet: snippet),
             timeout: Self.timeout)
         guard !Task.isCancelled else { return }
-        if let reply, !reply.isEmpty {
-            store(id, reply)
+        // Nil means the model was off, not ready, failed or slow: try again later. Only a reply
+        // that came back unusable (a refusal, a question, too long) marks the conversation failed.
+        guard let reply else { return }
+        if let title = OnDeviceText.title(reply) {
+            store(id, title)
         } else {
             failed.insert(id)
         }
@@ -97,6 +101,9 @@ final class ConversationTitles {
             Task { @MainActor in self.cancelWaiting(token) }
         }
     }
+
+    /// Writes queued for a slot (for tests).
+    var waitingCount: Int { waiting.count }
 
     private func cancelWaiting(_ token: UUID) {
         guard let i = waiting.firstIndex(where: { $0.token == token }) else { return }

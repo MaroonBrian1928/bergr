@@ -70,15 +70,43 @@ struct ConversationTitlesTests {
         }
     }
 
-    @Test func nilReplyKeepsTheFallback() async {
+    @Test func nilReplyKeepsTheFallbackAndIsNotMarkedFailed() async {
         await withDefaults { defaults in
+            // Nil: the model was off, not ready, failed or slow. Try again later.
             let writer = FakeTitleWriter(reply: nil)
             let titles = ConversationTitles(writer: writer, defaults: defaults)
             await titles.resolve(id: "n", title: "Some first message", snippet: "")
             #expect(titles.titles["n"] == nil)
-            // Not asked again this session, so scrolling doesn't re-run the model.
+            await writer.setReply("Fix flaky login test")
             await titles.resolve(id: "n", title: "Some first message", snippet: "")
+            #expect(await writer.prompts.count == 2)
+            #expect(titles.titles["n"] == "Fix flaky login test")
+        }
+    }
+
+    @Test(arguments: ["I'm sorry, but I can't assist with that request.",
+                      "Could you tell me more about the task?",
+                      "This conversation is about fixing a very long list of things"])
+    func rejectedReplyIsNotStoredAndNotRetried(_ reply: String) async {
+        await withDefaults { defaults in
+            let writer = FakeTitleWriter(reply: reply)
+            let titles = ConversationTitles(writer: writer, defaults: defaults)
+            await titles.resolve(id: "r", title: "Some first message", snippet: "")
+            #expect(titles.titles["r"] == nil)
+            #expect(defaults.data(forKey: ConversationTitles.storageKey) == nil)
+            // Not asked again this session, so scrolling doesn't re-run the model.
+            await titles.resolve(id: "r", title: "Some first message", snippet: "")
             #expect(await writer.prompts.count == 1)
+        }
+    }
+
+    @Test func storedRefusalTitlesAreDroppedOnLoad() async throws {
+        try await withDefaults { defaults in
+            let saved = [["id": "a", "title": "I'm sorry, but I can't assist with that request."],
+                         ["id": "b", "title": "Fix flaky login test"]]
+            defaults.set(try JSONEncoder().encode(saved), forKey: ConversationTitles.storageKey)
+            let titles = ConversationTitles(writer: FakeTitleWriter(), defaults: defaults)
+            #expect(titles.titles == ["b": "Fix flaky login test"])
         }
     }
 
@@ -126,16 +154,20 @@ struct ConversationTitlesTests {
 
     @Test func cancelledWhileQueuedWritesNothing() async {
         await withDefaults { defaults in
-            let writer = FakeTitleWriter()
+            let writer = HeldWriter()
             let titles = ConversationTitles(writer: writer, defaults: defaults)
-            let busy = (0..<3).map { i in
+            let busy = (0..<ConversationTitles.maxConcurrent).map { i in
                 Task { @MainActor in await titles.resolve(id: "b\(i)", title: "Busy \(i)", snippet: "") }
             }
-            try? await Task.sleep(for: .milliseconds(10))
+            await waitUntil { await writer.active == ConversationTitles.maxConcurrent }
             let queued = Task { @MainActor in await titles.resolve(id: "q", title: "Queued message", snippet: "") }
+            await waitUntil { titles.waitingCount == 1 }
             queued.cancel()
             await queued.value
+            #expect(titles.waitingCount == 0)
+            await writer.releaseAll()
             for task in busy { await task.value }
+            #expect(await writer.prompts.count == ConversationTitles.maxConcurrent)
             #expect(await writer.prompts.allSatisfy { !$0.contains("Queued message") })
             #expect(titles.titles["q"] == nil)
         }

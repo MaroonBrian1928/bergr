@@ -39,7 +39,8 @@ final class ToolOutputSummaries {
     func request(id: String, finished: Bool, name: String, command: String, output: String) async {
         guard finished, Self.isLong(output), !asked.contains(id) else { return }
         asked.insert(id)
-        await gate.acquire()
+        // A row scrolled away cancels its request: forget it so it is asked again when it returns.
+        guard await gate.acquire() else { asked.remove(id); return }
         let prompt = """
         Tool: \(name) \(OnDeviceText.truncate(command, to: 200))
         Its output, last lines:
@@ -47,10 +48,14 @@ final class ToolOutputSummaries {
         """
         let reply = await writer.write(instructions: Self.instructions, prompt: prompt, timeout: Self.timeout)
         await gate.release()
+        if Task.isCancelled, reply == nil { asked.remove(id); return }
         if let reply, let line = OnDeviceText.clean(reply, maxCharacters: 120) {
             lines[id] = line
         }
     }
+
+    /// Requests waiting for a slot (for tests).
+    var waitingCount: Int { get async { await gate.waitingCount } }
 
     static let instructions = """
     You summarize the output of a tool a coding agent ran, in one plain line of at most 12 words. \
@@ -59,30 +64,51 @@ final class ToolOutputSummaries {
     """
 }
 
-/// Lets at most `limit` holders in at once; the rest wait in order.
+/// Lets at most `limit` holders in at once; the rest wait in order. A waiter cancelled while
+/// queued leaves the line and gets false.
 private actor ConcurrencyGate {
     private let limit: Int
     private var available: Int
-    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var waiting: [(token: UUID, resume: CheckedContinuation<Bool, Never>)] = []
 
     init(limit: Int) {
         self.limit = limit
         available = limit
     }
 
-    func acquire() async {
+    var waitingCount: Int { waiting.count }
+
+    /// False when cancelled before getting a slot (no slot is held then).
+    func acquire() async -> Bool {
+        guard !Task.isCancelled else { return false }
         if available > 0 {
             available -= 1
-            return
+            return true
         }
-        await withCheckedContinuation { waiting.append($0) }
+        let token = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (resume: CheckedContinuation<Bool, Never>) in
+                if Task.isCancelled {
+                    resume.resume(returning: false)
+                } else {
+                    waiting.append((token, resume))
+                }
+            }
+        } onCancel: {
+            Task { await self.cancel(token) }
+        }
+    }
+
+    private func cancel(_ token: UUID) {
+        guard let i = waiting.firstIndex(where: { $0.token == token }) else { return }
+        waiting.remove(at: i).resume.resume(returning: false)
     }
 
     func release() {
         if waiting.isEmpty {
             available = min(available + 1, limit)
         } else {
-            waiting.removeFirst().resume()
+            waiting.removeFirst().resume.resume(returning: true)
         }
     }
 }

@@ -12,13 +12,19 @@ struct DeadlineTests {
     }
 
     @Test func returnsAtTheLimitEvenIfTheWorkNeverAnswers() async {
+        // Ignores cancellation, like a request on a dead SSH channel. Released after the check so
+        // the work does not leak a never-resumed continuation into later tests.
+        let latch = TestLatch()
         let start = ContinuousClock.now
-        // Ignores cancellation, like a request on a dead SSH channel.
         let ok = await Deadline.answers(within: .milliseconds(100)) {
-            await withCheckedContinuation { (_: CheckedContinuation<Void, Never>) in }
+            await latch.wait()
         }
+        let elapsed = ContinuousClock.now - start
+        latch.release()
         #expect(ok == false)
-        #expect(ContinuousClock.now - start < .seconds(2))
+        // Generous bound: on a loaded simulator the timer task may start late. A task group
+        // would never return here at all.
+        #expect(elapsed < .seconds(10))
     }
 
     @Test func networkSignatureIgnoresOrder() {

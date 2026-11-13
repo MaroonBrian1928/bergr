@@ -28,23 +28,14 @@ nonisolated struct ReplySuggestionPlan: Codable {
 nonisolated struct GuidedReplySuggestionsWriter: OnDeviceTextWriting {
     func write(instructions: String, prompt: String, timeout: Duration) async -> String? {
         guard case .available = SystemLanguageModel.default.availability else { return nil }
-        return await withTaskGroup(of: String?.self) { group in
-            group.addTask {
-                let session = LanguageModelSession(instructions: instructions)
-                guard let response = try? await session.respond(
-                    to: prompt, generating: ReplySuggestionPlan.self,
-                    options: GenerationOptions(temperature: 0.2)),
-                      !Task.isCancelled,
-                      let data = try? JSONEncoder().encode(response.content) else { return nil }
-                return String(decoding: data, as: UTF8.self)
-            }
-            group.addTask {
-                try? await Task.sleep(for: timeout)
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return Task.isCancelled ? nil : first
+        return await OnDeviceText.race(timeout: timeout) {
+            let session = LanguageModelSession(instructions: instructions)
+            guard let response = try? await session.respond(
+                to: prompt, generating: ReplySuggestionPlan.self,
+                options: GenerationOptions(temperature: 0.2)),
+                  !Task.isCancelled,
+                  let data = try? JSONEncoder().encode(response.content) else { return nil }
+            return String(decoding: data, as: UTF8.self)
         }
     }
 }
