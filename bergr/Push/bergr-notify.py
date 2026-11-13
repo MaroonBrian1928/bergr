@@ -18,6 +18,7 @@ import hmac
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -27,7 +28,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 13
+VERSION = 14
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 
 
@@ -127,6 +128,107 @@ def last_sentences(text, count=2):
     return " ".join(parts[-count:])
 JWT_TTL = 50 * 60
 RETRY_DELAY = 5
+
+
+# Low-disk and low-battery alerts (v14): checked at most once a minute from the events loop (no extra
+# daemon), pushed as an "error" alert once per crossing. The state file sits next to push.json.
+GIB = 1 << 30
+LOW_DISK_BYTES, LOW_DISK_PERCENT = 5 * GIB, 5.0
+DISK_RECOVER_BYTES, DISK_RECOVER_PERCENT = 6 * GIB, 6.0
+LOW_BATTERY, BATTERY_RECOVER = 15, 20
+HEALTH_INTERVAL = 60
+
+
+def disk_reading(path=None):
+    """(free bytes, total bytes) of the home volume (the drive of the profile on Windows), or None."""
+    try:
+        usage = shutil.disk_usage(path or os.path.expanduser("~"))
+    except OSError:
+        return None
+    return (usage.free, usage.total) if usage.total > 0 else None
+
+
+def battery_reading():
+    """(percent, discharging) on macOS and Linux machines with a battery, else None. Windows is
+    skipped: disk alerts only."""
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=5).stdout
+            return parse_pmset(out)
+        if sys.platform.startswith("linux"):
+            import glob
+            for cap in sorted(glob.glob("/sys/class/power_supply/*/capacity")):
+                with open(cap) as f:
+                    percent = int(f.read().strip())
+                try:
+                    with open(os.path.join(os.path.dirname(cap), "status")) as f:
+                        status = f.read().strip().lower()
+                except OSError:
+                    status = ""
+                return min(100, percent), status == "discharging"
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def parse_pmset(out):
+    """"...87%; discharging; 5:00 remaining" -> (87, True); None without a percentage."""
+    m = re.search(r"(\d{1,3})%;?\s*([A-Za-z ]*)", out or "")
+    if not m:
+        return None
+    return min(100, int(m.group(1))), m.group(2).strip().lower().startswith("discharging")
+
+
+def health_alerts(prev, disk=None, battery=None):
+    """(alerts, new flags). prev: {"disk": bool, "battery": bool}, whether each is already alerted.
+    An alert is (key, title, body). A flag clears only past the recovery margin, so a value hovering at
+    the threshold doesn't alert again."""
+    flags = {"disk": bool(prev.get("disk")), "battery": bool(prev.get("battery"))}
+    alerts = []
+    if disk:
+        free, total = disk
+        percent = free / total * 100
+        low = free < LOW_DISK_BYTES or percent < LOW_DISK_PERCENT
+        ok = free >= DISK_RECOVER_BYTES and percent >= DISK_RECOVER_PERCENT
+        if low and not flags["disk"]:
+            flags["disk"] = True
+            alerts.append(("disk", "Disk almost full", f"{free / GIB:.1f} GB free ({percent:.0f}%)"))
+        elif ok:
+            flags["disk"] = False
+    if battery:
+        percent, discharging = battery
+        if percent < LOW_BATTERY and discharging and not flags["battery"]:
+            flags["battery"] = True
+            alerts.append(("battery", "Battery low", f"{percent}% and not charging"))
+        elif percent >= BATTERY_RECOVER or not discharging:
+            flags["battery"] = False
+    return alerts, flags
+
+
+def health_state_path(config_path=None):
+    return os.path.join(os.path.dirname(config_path or default_config_path()), "health-state.json")
+
+
+def check_health(cfg, host, jwt_cache, state_path, disk=None, battery=None, sender=None):
+    """Reads disk and battery, pushes each new crossing, saves the flags. Returns the alerts sent."""
+    try:
+        with open(state_path) as f:
+            prev = json.load(f)
+        if not isinstance(prev, dict):
+            prev = {}
+    except (OSError, ValueError):
+        prev = {}
+    alerts, flags = health_alerts(prev, disk, battery)
+    if flags != {"disk": bool(prev.get("disk")), "battery": bool(prev.get("battery"))}:
+        try:
+            with open(state_path, "w") as f:
+                json.dump(flags, f)
+        except OSError as e:
+            log(f"could not save health state: {e}")
+    for key, title, body in alerts:
+        log(f"health alert: {title}")
+        (sender or send_alert)(cfg, f"{host}: {title}", body, "health", host, jwt_cache, state="error")
+    return alerts
 
 
 def log(msg):
@@ -703,6 +805,8 @@ def run():
     host = socket.gethostname()
     state = initial_state()
     poster = ActivityPoster()
+    health_at = 0.0
+    health_path = health_state_path()
     while True:
         try:
             proc = subprocess.Popen(["hc", "events", "--json"], stdout=subprocess.PIPE,
@@ -723,6 +827,12 @@ def run():
                     cfg = watcher.get()
                     if cfg is None:
                         continue
+                    if time.time() - health_at >= HEALTH_INTERVAL:
+                        health_at = time.time()
+                        try:
+                            check_health(cfg, host, jwt_cache, health_path, disk_reading(), battery_reading())
+                        except Exception as e:
+                            log(f"health check failed: {e}")
                     # Every line (a change, or the 15 s heartbeat): the Live Activity may be due.
                     for device in cfg.get("devices") or []:
                         if isinstance(device, dict) and device.get("relay") and device.get("secret"):

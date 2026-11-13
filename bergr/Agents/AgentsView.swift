@@ -493,7 +493,9 @@ private struct MachineHeader: View {
                 Text("\(count)").font(.footnote).monospacedDigit().foregroundStyle(.secondary)
             }
             if let health = monitor.health[host.id], !health.parts.isEmpty {
-                MachineHealthLine(health: health)
+                MachineHealthLine(health: health, source: session)
+            } else if let message = monitor.failure[host.id] {
+                MachineHealthLine(health: nil, failure: message, source: session)
             }
         }
         .textCase(nil)
@@ -535,10 +537,15 @@ private struct MachineHeader: View {
 }
 
 /// A machine's health under its name: "load 1.2 · mem 63% · 41 GB free", low disk in orange.
+/// Tap for the details; when the last poll failed it reads "Health unavailable" and the tap shows why.
 private struct MachineHealthLine: View {
-    let health: MachineHealth
+    let health: MachineHealth?
+    var failure: String?
+    let source: any MachineHealthSource
+    @State private var showing = false
 
     private var line: Text {
+        guard let health else { return Text("Health unavailable").foregroundStyle(.secondary) }
         var text = Text("")
         for (index, part) in health.parts.enumerated() {
             if index > 0 { text = text + Text(" · ").foregroundStyle(.secondary) }
@@ -548,7 +555,14 @@ private struct MachineHealthLine: View {
     }
 
     var body: some View {
-        line.font(.caption).monospacedDigit().lineLimit(1)
+        Button { showing = true } label: {
+            line.font(.caption).monospacedDigit().lineLimit(1)
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Shows details")
+        .sheet(isPresented: $showing) {
+            MachineHealthSheet(health: health, failure: failure, source: source)
+        }
     }
 }
 

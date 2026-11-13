@@ -85,18 +85,24 @@ final class MachineHealthMonitor {
     static let tickInterval: Duration = .seconds(5)
 
     private(set) var health: [UUID: MachineHealth] = [:]
+    /// Why the last poll of a machine failed; cleared by the next good poll.
+    private(set) var failure: [UUID: String] = [:]
 
     @ObservationIgnored private var machines: [UUID: WeakMachine] = [:]
     @ObservationIgnored private var lastPoll: [UUID: ContinuousClock.Instant] = [:]
     @ObservationIgnored private var offline = OfflineTracker()
+    @ObservationIgnored private var thresholds = HealthAlertTracker()
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private let isActive: @MainActor () -> Bool
     @ObservationIgnored private let notifyOffline: @MainActor (UUID, String) -> Void
+    @ObservationIgnored private let notifyHealth: @MainActor (UUID, String, HealthAlert) -> Void
 
     init(
         isActive: @escaping @MainActor () -> Bool = MachineHealthMonitor.appIsActive,
-        notifyOffline: @escaping @MainActor (UUID, String) -> Void = MachineHealthMonitor.postOffline
+        notifyOffline: @escaping @MainActor (UUID, String) -> Void = MachineHealthMonitor.postOffline,
+        notifyHealth: @escaping @MainActor (UUID, String, HealthAlert) -> Void = MachineHealthMonitor.postHealth
     ) {
+        self.notifyHealth = notifyHealth
         self.isActive = isActive
         self.notifyOffline = notifyOffline
     }
@@ -129,7 +135,7 @@ final class MachineHealthMonitor {
             if offline.observe(machine.healthID, line) {
                 notifyOffline(machine.healthID, machine.healthName)
             }
-            if case .disconnected = line { health[machine.healthID] = nil }
+            if case .disconnected = line { health[machine.healthID] = nil; failure[machine.healthID] = nil }
             guard case .connected = line, machine.canRunHealthCommand, active else { continue }
             if let last = lastPoll[machine.healthID], now - last < Self.pollInterval { continue }
             lastPoll[machine.healthID] = now
@@ -140,10 +146,31 @@ final class MachineHealthMonitor {
     }
 
     private func poll(_ machine: any MachineHealthSource) async {
+        let id = machine.healthID
         let windows = machine.isWindowsMachine
-        guard let output = try? await machine.runHealthCommand(MachineHealthCommand.command(windows: windows)),
-              let parsed = MachineHealthParser.parse(output, windows: windows) else { return }
-        health[machine.healthID] = parsed
+        do {
+            let output = try await machine.runHealthCommand(MachineHealthCommand.command(windows: windows))
+            guard let parsed = MachineHealthParser.parse(output, windows: windows) else {
+                fail(id, "The machine's reply wasn't recognized.")
+                return
+            }
+            health[id] = parsed
+            failure[id] = nil
+            for alert in thresholds.observe(id, parsed) { notifyHealth(id, machine.healthName, alert) }
+        } catch {
+            fail(id, error.localizedDescription)
+        }
+    }
+
+    private func fail(_ id: UUID, _ message: String) {
+        health[id] = nil
+        failure[id] = message
+    }
+
+    /// The top processes by CPU, read when the detail sheet opens. Nil on Windows.
+    func topProcesses(_ machine: any MachineHealthSource) async throws -> [MachineProcess]? {
+        guard !machine.isWindowsMachine else { return nil }
+        return MachineProcessList.parse(try await machine.runHealthCommand(MachineProcessList.command))
     }
 
     // MARK: Platform
@@ -165,6 +192,23 @@ final class MachineHealthMonitor {
         content.interruptionLevel = .active
         content.threadIdentifier = id.uuidString
         let request = UNNotificationRequest(identifier: "offline|\(id.uuidString)|\(UUID().uuidString)", content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+}
+
+extension MachineHealthMonitor {
+    /// The low-disk / low-battery local notification: the "Errors" kind, so its switch and quiet hours apply.
+    static func postHealth(_ id: UUID, name: String, alert: HealthAlert) {
+        guard UserDefaults.standard.bool(forKey: Delivery.notificationsKey) else { return }
+        let minute = NotificationPrefs.minute(of: Date())
+        guard NotificationPrefs.load().allows(kind: .error, host: id, address: "health", minute: minute) else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "\(name): \(alert.title)"
+        content.body = alert.body
+        content.sound = .default
+        content.interruptionLevel = .active
+        content.threadIdentifier = id.uuidString
+        let request = UNNotificationRequest(identifier: "health|\(id.uuidString)|\(UUID().uuidString)", content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
     }
 }

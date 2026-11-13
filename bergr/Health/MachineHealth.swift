@@ -28,6 +28,8 @@ struct MachineHealth: Equatable, Sendable {
     var disk: Disk?
     /// Battery charge, 0...100, on machines that have a battery.
     var batteryPercent: Int?
+    /// True when the battery is running down (not charging or full). Nil when unknown (Windows).
+    var batteryDischarging: Bool?
 
     static let gib: Int64 = 1 << 30
     static let lowDiskBytes: Int64 = 5 * gib
@@ -60,7 +62,7 @@ enum MachineHealthCommand {
     /// macOS and Linux: one POSIX line that branches on `uname -s`, wrapped in `sh -c` so the
     /// remote login shell doesn't matter (the same approach as `NewSession.locateCommand`).
     static let posix = #"""
-    sh -c 'echo @os; uname -s; case $(uname -s) in Darwin) echo @load; sysctl -n vm.loadavg; echo @mem; sysctl -n hw.memsize; vm_stat; echo @disk; df -Pk ~ | tail -n 1; echo @batt; pmset -g batt;; *) echo @load; cat /proc/loadavg; echo @mem; grep -e MemTotal -e MemAvailable /proc/meminfo; echo @disk; df -Pk ~ | tail -n 1; echo @batt; cat /sys/class/power_supply/*/capacity 2>/dev/null;; esac'
+    sh -c 'echo @os; uname -s; case $(uname -s) in Darwin) echo @load; sysctl -n vm.loadavg; echo @mem; sysctl -n hw.memsize; vm_stat; echo @disk; df -Pk ~ | tail -n 1; echo @batt; pmset -g batt;; *) echo @load; cat /proc/loadavg; echo @mem; grep -e MemTotal -e MemAvailable /proc/meminfo; echo @disk; df -Pk ~ | tail -n 1; echo @batt; for c in /sys/class/power_supply/*/capacity; do [ -r $c ] && echo "$(cat $c) $(cat ${c%capacity}status 2>/dev/null)"; done;; esac'
     """#
 
     /// Windows: one PowerShell script, sent with -EncodedCommand so cmd.exe and PowerShell both
@@ -134,7 +136,8 @@ enum MachineHealthParser {
             load1: load(s["load"]),
             memoryUsedPercent: memoryUsed,
             disk: diskFromKilobytes(s["disk"]),
-            batteryPercent: battery(s["batt"]))
+            batteryPercent: battery(s["batt"]),
+            batteryDischarging: discharging(s["batt"]))
     }
 
     /// "Mach Virtual Memory Statistics: (page size of 16384 bytes)"
@@ -166,7 +169,8 @@ enum MachineHealthParser {
             load1: load(s["load"]),
             memoryUsedPercent: memoryUsed,
             disk: diskFromKilobytes(s["disk"]),
-            batteryPercent: battery(s["batt"]))
+            batteryPercent: battery(s["batt"]),
+            batteryDischarging: discharging(s["batt"]))
     }
 
     /// "MemTotal:       16000 kB" → bytes.
@@ -215,7 +219,19 @@ enum MachineHealthParser {
                let value = Int(line[range]) {
                 return min(100, value)
             }
-            if let value = Int(line), (0...100).contains(value) { return value }
+            if let first = fields(line).first, let value = Int(first), (0...100).contains(value) { return value }
+        }
+        return nil
+    }
+
+    /// Whether the battery is running down: "...; discharging; ..." (pmset) or "87 Discharging" (Linux).
+    /// Nil when no line says either way.
+    static func discharging(_ lines: [String]?) -> Bool? {
+        for line in lines ?? [] {
+            let lower = line.lowercased()
+            if lower.contains("discharging") { return true }
+            if lower.contains("charging") || lower.contains("charged") || lower.contains("full")
+                || lower.contains("finishing") { return false }
         }
         return nil
     }

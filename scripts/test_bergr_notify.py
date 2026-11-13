@@ -761,5 +761,64 @@ class PrefsTests(unittest.TestCase):
         self.assertGreaterEqual(notify.VERSION, 13)
 
 
+class HealthAlertTests(unittest.TestCase):
+    G = 1 << 30
+
+    def test_disk_alerts_once_per_crossing_and_rearms(self):
+        flags = {}
+        alerts, flags = notify.health_alerts(flags, disk=(4 * self.G, 100 * self.G))
+        self.assertEqual([a[0] for a in alerts], ["disk"])
+        alerts, flags = notify.health_alerts(flags, disk=(3 * self.G, 100 * self.G))
+        self.assertEqual(alerts, [])
+        alerts, flags = notify.health_alerts(flags, disk=(5.5 * self.G, 100 * self.G))  # inside margin
+        self.assertEqual(alerts, [])
+        self.assertTrue(flags["disk"])
+        alerts, flags = notify.health_alerts(flags, disk=(50 * self.G, 100 * self.G))
+        self.assertFalse(flags["disk"])
+        alerts, flags = notify.health_alerts(flags, disk=(2 * self.G, 100 * self.G))
+        self.assertEqual(len(alerts), 1)
+
+    def test_disk_percent_threshold(self):
+        alerts, _ = notify.health_alerts({}, disk=(10 * self.G, 1000 * self.G))
+        self.assertEqual(len(alerts), 1)
+
+    def test_battery_needs_discharging_and_rearms(self):
+        self.assertEqual(notify.health_alerts({}, battery=(10, False))[0], [])
+        alerts, flags = notify.health_alerts({}, battery=(14, True))
+        self.assertEqual([a[0] for a in alerts], ["battery"])
+        self.assertEqual(notify.health_alerts(flags, battery=(12, True))[0], [])
+        _, flags = notify.health_alerts(flags, battery=(12, False))  # plugged in
+        self.assertFalse(flags["battery"])
+        self.assertEqual(len(notify.health_alerts(flags, battery=(9, True))[0]), 1)
+
+    def test_parse_pmset(self):
+        out = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\t87%; discharging; 5:00 remaining"
+        self.assertEqual(notify.parse_pmset(out), (87, True))
+        self.assertEqual(notify.parse_pmset("\t100%; charged; 0:00"), (100, False))
+        self.assertIsNone(notify.parse_pmset("Now drawing from 'AC Power'"))
+
+    def test_check_health_sends_once_as_error_and_persists(self):
+        sent = []
+        path = os.path.join(tempfile.mkdtemp(), "health-state.json")
+        send = lambda cfg, title, body, addr, host, jwt, **kw: sent.append(kw.get("state"))
+        low = (1 * self.G, 100 * self.G)
+        for _ in range(3):
+            notify.check_health({}, "pop", None, path, disk=low, sender=send)
+        self.assertEqual(sent, ["error"])
+        notify.check_health({}, "pop", None, path, disk=(80 * self.G, 100 * self.G), sender=send)
+        notify.check_health({}, "pop", None, path, disk=low, sender=send)
+        self.assertEqual(len(sent), 2)
+
+    def test_error_alert_honours_prefs(self):
+        dev = {"id": "abcd", "relay": "https://r", "secret": "s", "prefs": {"kinds": {"error": False}}}
+        self.assertFalse(notify.prefs_allow(dev["prefs"], "error", "health"))
+        self.assertTrue(notify.prefs_allow({"kinds": {"error": True}}, "error", "health"))
+        quiet = {"quiet": {"start": 0, "end": 1439}, "tz_offset": 0}
+        self.assertFalse(notify.prefs_allow(quiet, "error", "health", now=3600))
+
+    def test_version_bumped_for_health(self):
+        self.assertGreaterEqual(notify.VERSION, 14)
+
+
 if __name__ == "__main__":
     unittest.main()

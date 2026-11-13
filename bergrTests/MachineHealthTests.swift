@@ -222,10 +222,12 @@ final class FakeMachine: MachineHealthSource {
     var canRunHealthCommand = true
     var isWindowsMachine = false
     var output = linuxOutput
+    var error: Error?
     private(set) var calls = 0
 
     func runHealthCommand(_ command: String) async throws -> String {
         calls += 1
+        if let error { throw error }
         return output
     }
 }
