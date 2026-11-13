@@ -103,15 +103,30 @@ struct ReplySuggestionTests {
         #expect(ReplySuggestions.parse("  \n \n").isEmpty)
     }
 
-    @Test func completeWorkNeverProducesBusywork() {
-        let p = plan(.complete, evidence: "All tests pass.", reply: "Run the tests again")
-        #expect(ReplySuggestions.validated(p, text: "All tests pass.", userRequest: "Fix the export").isEmpty)
+    @Test func completeWorkGetsOneNextStep() {
+        let p = plan(.complete, evidence: "", reply: "Show me the export diff")
+        #expect(ReplySuggestions.validated(p, text: "Fixed the export. All tests pass.", userRequest: "Fix the export")
+            == ["Show me the export diff"])
     }
 
-    @Test func rejectsInventedEvidenceAndCompletedEvidence() {
+    @Test func completeWorkNeverSuggestsUnrequestedPublishing() {
+        let p = plan(.complete, evidence: "", reply: "Commit and push the fix")
+        #expect(ReplySuggestions.validated(p, text: "Fixed the export.", userRequest: "Fix the export").isEmpty)
+        let deploy = plan(.complete, evidence: "", reply: "Deploy the dashboard")
+        #expect(ReplySuggestions.validated(deploy, text: "The dashboard runs locally.", userRequest: "Build locally; do not deploy.").isEmpty)
+    }
+
+    @Test func rejectsInventedEvidence() {
         #expect(ReplySuggestions.validated(plan(), text: "Everything is done.", userRequest: "Fix the export").isEmpty)
-        let p = plan(evidence: "The dashboard is complete and running locally.", reply: "Check the local build status")
-        #expect(ReplySuggestions.validated(p, text: p.evidence, userRequest: "Build locally; do not deploy.").isEmpty)
+    }
+
+    @Test func acceptsSlightlyRewordedEvidenceAndChoices() {
+        let p = plan(evidence: "The export test still fails for UTC dates", reply: "Fix UTC date handling")
+        #expect(ReplySuggestions.validated(p, text: "Most pass, but the export test still fails on UTC dates.",
+                                           userRequest: "Fix the export") == ["Fix UTC date handling"])
+        let q = plan(.question, evidence: "Which database?", choices: ["Use SQLite", "Use Postgres"])
+        #expect(ReplySuggestions.validated(q, text: "Should I use SQLite or Postgres?", userRequest: "Add storage")
+            == ["Use SQLite", "Use Postgres"])
     }
 
     @Test func unfinishedWorkProducesOneActionNotTwoParaphrases() {
@@ -184,5 +199,14 @@ struct ReplySuggestionTests {
         let suggestions = ReplySuggestions(writer: FakeWriter(reply: nil))
         await suggestions.request(messageID: "m1", text: "All done.", working: false)
         #expect(suggestions.chips["m1"] == nil)
+    }
+
+    @Test func noAnswerFromTheModelIsAskedOnceMore() async {
+        let writer = FakeWriter(reply: nil)
+        let suggestions = ReplySuggestions(writer: writer)
+        for _ in 0..<4 {
+            await suggestions.request(messageID: "m1", text: "All done.", working: false)
+        }
+        #expect(await writer.calls == ReplySuggestions.maxAttempts)
     }
 }

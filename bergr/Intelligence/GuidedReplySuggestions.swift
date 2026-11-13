@@ -15,11 +15,11 @@ nonisolated struct ReplySuggestionPlan: Codable {
     var requestedWork: String
     @Guide(description: "Classify the user's REQUEST, not optional extra work. COMPLETE if the agent fulfilled the request, including when it offers optional deployment the user did not ask for. QUESTION if it asks a required choice. UNFINISHED if requested work failed, is blocked, or is still pending. A build awaiting store processing is unfinished.")
     var status: ReplySuggestionStatus
-    @Guide(description: "An exact quote from the latest agent reply proving there is a required question or unfinished requested work. Empty for COMPLETE. Do not quote offers for work the user did not request.")
+    @Guide(description: "A quote from the latest agent reply showing the required question or unfinished requested work, copied as closely as possible. Empty for COMPLETE. Do not quote offers for work the user did not request.")
     var evidence: String
     @Guide(description: "For QUESTION only: copy the actual offered alternatives verbatim from the agent reply, such as SQLite and Postgres. No advice or new options. Empty otherwise.", .maximumCount(2))
     var choices: [String]
-    @Guide(description: "For UNFINISHED only: directly request completion of the unfinished USER-REQUESTED work, using the relevant action verb. Ask to fix a failure, finish an implementation, or perform the pending action, not merely check or review it. Only for an external job already running, ask to check its status. Ignore unrequested actions mentioned by the agent. No waiting, cancelling, extra testing or new features. At most ten words. Empty for COMPLETE and QUESTION.")
+    @Guide(description: "For COMPLETE: one short, natural next step the user would likely send, such as checking or running the result or asking what changed. For UNFINISHED: directly request completion of the unfinished USER-REQUESTED work (fix the failure, finish it, or perform the pending action); for an external job already running, ask to check its status. Never commit, push, deploy, install, cancel or delete unless the user asked. At most ten words. Empty for QUESTION.")
     var nextReply: String
 }
 
