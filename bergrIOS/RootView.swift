@@ -262,7 +262,8 @@ extension RootView {
     }
 
     /// Routes what App Intents queued (see `IntentQueue`): opens the agent's chat, with the text in
-    /// its reply draft for the existing reply path to send; or opens New Session prefilled.
+    /// its reply draft for the existing reply path to send (an already open chat picks the draft
+    /// change up, see `ReplyDrafts.changed`); or opens New Session prefilled.
     private func handleIntents() {
         for item in IntentQueue.take() {
             switch item {

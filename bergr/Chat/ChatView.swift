@@ -144,6 +144,12 @@ struct ChatView: View {
         // A reply being written stays with its agent: switching away and back finds it again.
         .onChange(of: draftKey, initial: true) { _, key in draft = ReplyDrafts.text(for: key) }
         .onChange(of: draft) { _, text in ReplyDrafts.set(text, for: draftKey) }
+        // A draft changed from elsewhere (a Shortcut, a notification reply that couldn't be typed).
+        .onReceive(NotificationCenter.default.publisher(for: ReplyDrafts.changed)) { note in
+            guard let key = draftKey, note.userInfo?["agent"] as? String == key else { return }
+            let text = ReplyDrafts.text(for: key)
+            if text != draft { draft = text }
+        }
         // Where the conversation meets the floating bars, it softens under them instead of a hard cut.
         #if os(iOS)
         .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])

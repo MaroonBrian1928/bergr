@@ -57,6 +57,18 @@ nonisolated enum AnswerCategory {
     /// The category for an alert without answer buttons: Reply, when the app can send it.
     static var replyIdentifier: String? { replyEnabled ? replyCategory : nil }
 
+    /// Machine health alerts (disk, battery) use this address; they have no agent to reply to.
+    static let healthAddress = "health"
+    /// Their category: no actions, so no Reply field that goes nowhere.
+    static let healthCategory = "bergr.health"
+
+    /// The category a pushed alert gets once decrypted: answer buttons for a 2 to 4 option
+    /// question, none for a health alert, otherwise Reply.
+    static func pushCategory(question: AnswerQuestion?, address: String?) -> String {
+        if address == healthAddress { return healthCategory }
+        return identifier(for: question) ?? replyCategory
+    }
+
     private static func replyButton() -> UNTextInputNotificationAction {
         UNTextInputNotificationAction(
             identifier: replyAction, title: "Reply", options: [.foreground, .authenticationRequired],
@@ -81,6 +93,9 @@ nonisolated enum AnswerCategory {
                 identifier: "\(prefix)\(count)", actions: actions, intentIdentifiers: [],
                 hiddenPreviewsBodyPlaceholder: nil, categorySummaryFormat: PushGrouping.summaryFormat, options: [])
         })
+        set.insert(UNNotificationCategory(
+            identifier: healthCategory, actions: [], intentIdentifiers: [],
+            hiddenPreviewsBodyPlaceholder: nil, categorySummaryFormat: PushGrouping.summaryFormat, options: []))
         if replyEnabled {
             set.insert(UNNotificationCategory(
                 identifier: replyCategory, actions: [replyButton()], intentIdentifiers: [],

@@ -34,8 +34,11 @@ import UIKit
         }
     }
 
+    /// When the shown state counts as out of date if nothing updates it: an hour, as the relay's pushes use.
+    nonisolated static func staleDate(from now: Date = .now) -> Date { now.addingTimeInterval(3600) }
+
     func update(_ state: BergrActivityAttributes.ContentState) async {
-        await activity.update(ActivityContent(state: state, staleDate: nil))
+        await activity.update(ActivityContent(state: state, staleDate: LiveActivityHandle.staleDate()))
     }
 
     func end() async {
@@ -58,7 +61,7 @@ struct LiveActivityEnvironment {
             request: { state, pushed in
                 let activity = try Activity.request(
                     attributes: BergrActivityAttributes(),
-                    content: ActivityContent(state: state, staleDate: nil), pushType: pushed ? .token : nil)
+                    content: ActivityContent(state: state, staleDate: LiveActivityHandle.staleDate()), pushType: pushed ? .token : nil)
                 return LiveActivityHandle(activity, note: LiveActivityController.note)
             },
             relay: { method, body in

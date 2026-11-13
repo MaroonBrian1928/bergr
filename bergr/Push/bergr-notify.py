@@ -28,7 +28,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 15
+VERSION = 16
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 
 
@@ -587,6 +587,10 @@ def apply_event(terms, line):
     return terms
 
 
+# Terminals already logged for a non-integer turn (logged once each).
+_BAD_TURN_LOGGED = set()
+
+
 def alerts_for(prev_state, line, machine=""):
     """Processes one `hc events` line. Returns (new_state, alerts); alerts are dicts with
     address, turn, state, title, body. A malformed line leaves the state unchanged."""
@@ -625,6 +629,9 @@ def alerts_for(prev_state, line, machine=""):
             continue
         turn = term.get("turn")
         if not isinstance(turn, int) or isinstance(turn, bool):
+            if address not in _BAD_TURN_LOGGED:
+                _BAD_TURN_LOGGED.add(address)
+                log(f"skipping {address}: turn is not an integer ({turn!r})")
             continue
         labels = term.get("labels") if isinstance(term.get("labels"), dict) else {}
         try:

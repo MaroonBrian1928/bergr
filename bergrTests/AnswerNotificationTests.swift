@@ -44,7 +44,13 @@ struct AnswerNotificationTests {
         #expect(AnswerCategory.identifier(optionCount: 3) == "bergr.answer.3")
         #expect(AnswerCategory.identifier(optionCount: 4) == "bergr.answer.4")
         #expect(AnswerCategory.identifier(optionCount: 5) == nil)
-        #expect(AnswerCategory.categories().map(\.identifier).sorted() == ["bergr.answer.2", "bergr.answer.3", "bergr.answer.4", "bergr.reply"])
+        #expect(AnswerCategory.categories().map(\.identifier).sorted() == ["bergr.answer.2", "bergr.answer.3", "bergr.answer.4", "bergr.health", "bergr.reply"])
+        #expect(AnswerCategory.categories().first { $0.identifier == "bergr.health" }?.actions.isEmpty == true)
+        let q = AnswerQuestion(title: "Run it?", options: ["Yes", "No"], keys: true)
+        #expect(AnswerCategory.pushCategory(question: nil, address: "health") == "bergr.health")
+        #expect(AnswerCategory.pushCategory(question: q, address: "health") == "bergr.health")
+        #expect(AnswerCategory.pushCategory(question: nil, address: "t1") == "bergr.reply")
+        #expect(AnswerCategory.pushCategory(question: q, address: "t1") == "bergr.answer.2")
         let four = AnswerCategory.categories().first { $0.identifier == "bergr.answer.4" }
         #expect(four?.actions.count == 5)  // four answers and Reply
         #expect(four?.actions.allSatisfy { $0.options.contains(.foreground) && $0.options.contains(.authenticationRequired) } == true)

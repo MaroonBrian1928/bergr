@@ -239,8 +239,26 @@ struct AnswerFlow {
             openChat(request.host, request.address)
             return
         }
+        // Typing into a permission or choice prompt would answer it (Enter picks the highlighted
+        // option, a digit picks one): then the text waits in the chat's draft instead.
+        guard Self.acceptsFreeText(status: screen.status, lines: screen.lines) else {
+            await screen.close()
+            let key = "\(request.host.uuidString)|\(request.address)"
+            ReplyDrafts.restore([text], for: key, in: draftDefaults)
+            openChat(request.host, request.address)
+            return
+        }
         await screen.send([.text(text), .enter])
         await screen.close()
+    }
+
+    /// Where a reply that couldn't be typed is kept (tests use their own).
+    var draftDefaults: UserDefaults = .standard
+
+    /// Whether the agent is waiting for free text: not blocked on a prompt, and no menu on screen.
+    static func acceptsFreeText(status: TerminalStatus?, lines: [String]?) -> Bool {
+        guard status?.state != "blocked", let lines else { return false }
+        return AnswerParser.choices(in: lines).isEmpty
     }
 
     func run(_ request: AnswerNotificationRequest) async {

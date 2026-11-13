@@ -73,6 +73,21 @@ class Alerts(Base):
         self.assertEqual(alerts, [])
         self.assertEqual(state["last"], {"t1": ("blocked", 5)})
 
+    def test_non_integer_turn_is_logged_once(self):
+        notify._BAD_TURN_LOGGED.clear()
+        logged = []
+        real = notify.log
+        notify.log = logged.append
+        try:
+            state, _ = notify.alerts_for(None, line(term(state="working", turn="x")))
+            state, alerts = notify.alerts_for(state, line(term(state="blocked", turn="x")))
+            state, _ = notify.alerts_for(state, line(term(state="working", turn="y")))
+            state, _ = notify.alerts_for(state, line(term(state="blocked", turn="y")))
+        finally:
+            notify.log = real
+        self.assertEqual(alerts, [])
+        self.assertEqual(len([m for m in logged if "turn is not an integer" in m]), 1)
+
     def test_working_to_blocked_alerts(self):
         state, _ = notify.alerts_for(None, line(term(state="working", turn=5)))
         state, alerts = notify.alerts_for(state, line(term(state="blocked", turn=5)))

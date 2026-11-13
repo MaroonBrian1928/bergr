@@ -27,13 +27,13 @@ final class NotificationService: UNNotificationServiceExtension {
             content.body = alert.body
             // A question with 2 to 4 options gets answer buttons (the app registers the category);
             // the body says what each number answers.
-            if let q = alert.q, let category = AnswerCategory.identifier(for: q) {
-                content.categoryIdentifier = category
+            // No buttons (done, a dangerous command, a question): a text Reply; health alerts: neither.
+            let category = AnswerCategory.pushCategory(
+                question: alert.q, address: request.content.userInfo["address"] as? String)
+            content.categoryIdentifier = category
+            if let q = alert.q, category == AnswerCategory.identifier(for: q) {
                 content.body = [alert.body, AnswerCategory.summary(q)].filter { !$0.isEmpty }.joined(separator: "\n")
                 content.userInfo.merge(AnswerCategory.userInfo(q)) { _, new in new }
-            } else {
-                // No buttons (done, a dangerous command, a question): a text Reply.
-                content.categoryIdentifier = AnswerCategory.replyCategory
             }
         }
         handler = nil  // delivered: iOS running out of time afterwards mustn't deliver it again

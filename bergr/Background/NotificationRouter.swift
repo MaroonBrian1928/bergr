@@ -27,6 +27,8 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         await MainActor.run {
             // Local alerts carry Bergr's host id; pushes name the machine by hostname.
             guard let target = Self.target(info) ?? PushRegistration.shared.target(info) else { return }
+            // A machine health alert has no terminal or chat: it just opens the app.
+            if target.address == AnswerCategory.healthAddress { return }
             // An answer button: the app answers (iOS), or opens the chat when it can't or the
             // question isn't the same any more.
             if let request = AnswerCategory.replyRequest(

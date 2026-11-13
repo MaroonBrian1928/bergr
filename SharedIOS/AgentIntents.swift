@@ -141,7 +141,7 @@ nonisolated enum AgentChoice: String, AppEnum, Sendable {
 /// draft (the existing reply path sends it).
 nonisolated struct SendToAgentIntent: AppIntent {
     static let title: LocalizedStringResource = "Send to agent"
-    static let description = IntentDescription("Sends a message to an agent in Bergr. Opens Bergr to deliver it.")
+    static let description = IntentDescription("Opens an agent's chat in Bergr with the message ready to send.")
     static let openAppWhenRun = true
 
     @Parameter(title: "Agent", requestValueDialog: "Which agent?")
@@ -212,16 +212,40 @@ nonisolated enum IntentQueue {
     }
 
     static func enqueue(_ item: PendingIntent, in store: UserDefaults = IntentQueue.store) {
-        var items = read(store)
-        items.append(item)
-        if let data = try? JSONEncoder().encode(items) { store.set(data, forKey: key) }
+        withLock {
+            var items = read(store)
+            items.append(item)
+            if let data = try? JSONEncoder().encode(items) { store.set(data, forKey: key) }
+        }
     }
 
-    /// Returns what is queued, in order, and empties the queue.
+    /// Returns what is queued, in order, and empties the queue. Read and removal happen under the
+    /// same lock as `enqueue`, so an intent queued meanwhile (app or extension) isn't lost.
     static func take(from store: UserDefaults = IntentQueue.store) -> [PendingIntent] {
-        let items = read(store)
-        store.removeObject(forKey: key)
-        return items
+        withLock {
+            let items = read(store)
+            store.removeObject(forKey: key)
+            return items
+        }
+    }
+
+    /// A lock file shared by the app and its extensions (in the App Group container when there is one).
+    private static var lockURL: URL {
+        let dir = BergrAppGroup.id.flatMap {
+            FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0)
+        } ?? FileManager.default.temporaryDirectory
+        return dir.appendingPathComponent("pending-intents.lock")
+    }
+
+    private static let threadLock = NSLock()
+
+    private static func withLock<T>(_ body: () -> T) -> T {
+        threadLock.lock()
+        defer { threadLock.unlock() }
+        let fd = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
+        if fd >= 0 { flock(fd, LOCK_EX) }
+        defer { if fd >= 0 { flock(fd, LOCK_UN); close(fd) } }
+        return body()
     }
 
     private static func read(_ store: UserDefaults) -> [PendingIntent] {

@@ -55,5 +55,9 @@ enum ReplyDrafts {
         guard all[agent, default: ""] != text else { return }
         all[agent] = text.isEmpty ? nil : text
         defaults.set(all, forKey: key)
+        NotificationCenter.default.post(name: changed, object: nil, userInfo: ["agent": agent])
     }
+
+    /// Posted when a draft changes; userInfo "agent" is its key. An open chat picks the text up.
+    static let changed = Notification.Name("bergr.replyDraftsChanged")
 }

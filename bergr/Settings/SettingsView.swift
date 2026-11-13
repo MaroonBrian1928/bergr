@@ -237,6 +237,7 @@ struct SettingsView: View {
                 } footer: {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Only this phone can read what the helpers send.")
+                        Text("A helper set to direct mode in push.json sends straight to Apple: its alerts have no answer buttons and their text isn't encrypted.")
                         if let error = push.lastError { Text(error).foregroundStyle(.red) }
                     }
                 }

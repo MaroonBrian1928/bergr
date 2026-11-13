@@ -104,6 +104,27 @@ struct AgentIntentsTests {
         #expect(IntentQueue.take(from: store).isEmpty)
     }
 
+    @Test func takeNeverLosesAnIntentQueuedMeanwhile() async throws {
+        let name = "bergr.tests.intents.\(UUID().uuidString)"
+        let total = 400
+        let taken = await withTaskGroup(of: [PendingIntent].self) { group in
+            for index in 0..<total {
+                group.addTask { @Sendable in
+                    IntentQueue.enqueue(.message(host: "h", address: "t\(index)", text: "x"), in: UserDefaults(suiteName: name)!)
+                    return []
+                }
+                if index % 3 == 0 {
+                    group.addTask { @Sendable in IntentQueue.take(from: UserDefaults(suiteName: name)!) }
+                }
+            }
+            var all: [PendingIntent] = []
+            for await items in group { all += items }
+            return all
+        }
+        let rest = IntentQueue.take(from: try #require(UserDefaults(suiteName: name)))
+        #expect(taken.count + rest.count == total)
+    }
+
     @Test func startSessionBecomesAPrefillForAKnownAgentOnly() {
         let known = NewSessionPrefill(.newSession(machine: "lab-box", agent: "codex", folder: "~/src/app", message: "hi"))
         #expect(known == NewSessionPrefill(machine: "lab-box", agent: .codex, folder: "~/src/app", message: "hi"))

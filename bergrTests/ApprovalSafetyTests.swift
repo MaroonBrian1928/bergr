@@ -37,7 +37,7 @@ struct ApprovalSafetyTests {
         let flow = AnswerFlow(
             screen: { _ in nil }, openChat: { _, _ in log.opened += 1 },
             replyScreen: { _ in
-                AnswerFlow.Screen(status: nil, lines: nil, send: { log.sent.append($0) },
+                AnswerFlow.Screen(status: nil, lines: ["> "], send: { log.sent.append($0) },
                                   record: { _, _ in }, close: { log.closed += 1 })
             })
         let request = AnswerCategory.replyRequest(
@@ -48,6 +48,31 @@ struct ApprovalSafetyTests {
         #expect(log.opened == 0 && log.closed == 1)
         #expect(AnswerCategory.replyRequest(actionIdentifier: AnswerCategory.replyAction, text: "  ", target: (host, "t1")) == nil)
         #expect(AnswerCategory.replyRequest(actionIdentifier: "other", text: "hi", target: (host, "t1")) == nil)
+    }
+
+    @Test func replyIsNeverTypedIntoAPermissionPrompt() async throws {
+        final class Log { var sent: [[PromptStep]] = []; var opened: [String] = []; var closed = 0 }
+        let defaults = try #require(UserDefaults(suiteName: "bergr.tests.reply.\(UUID().uuidString)"))
+        let json = "{\"state\":\"blocked\",\"msg\":\"Bash: rm -rf build\",\"kind\":\"permission\"}"
+        let blocked = try JSONDecoder().decode(TerminalStatus.self, from: Data(json.utf8))
+        let menu = ["Do you want to proceed?", "❯ 1. Yes", "  2. No, and tell Claude what to do differently", ""]
+        let host = UUID()
+        // Blocked by status, or a menu on screen while the status says otherwise: nothing is typed.
+        for (status, lines) in [(Optional(blocked), menu), (nil, menu), (Optional(blocked), ["> "])] {
+            let log = Log()
+            var flow = AnswerFlow(
+                screen: { _ in nil }, openChat: { log.opened.append($1) },
+                replyScreen: { _ in
+                    AnswerFlow.Screen(status: status, lines: lines, send: { log.sent.append($0) },
+                                      record: { _, _ in }, close: { log.closed += 1 })
+                })
+            flow.draftDefaults = defaults
+            ReplyDrafts.set("", for: "\(host.uuidString)|t1", in: defaults)
+            await flow.reply(ReplyNotificationRequest(host: host, address: "t1", text: "no, don't"))
+            #expect(log.sent.isEmpty)
+            #expect(log.opened == ["t1"] && log.closed == 1)
+            #expect(ReplyDrafts.text(for: "\(host.uuidString)|t1", in: defaults) == "no, don't")
+        }
     }
 
     @Test func dangerousScreenIsNeverAnsweredFromAButton() async throws {
