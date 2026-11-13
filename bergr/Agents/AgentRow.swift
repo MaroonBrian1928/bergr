@@ -8,6 +8,8 @@ struct AgentRow: View {
     var subagents = 0
     /// The machine it runs on, shown when the list isn't grouped by machine.
     var machine: String?
+    /// A reply that wasn't delivered is waiting in its draft.
+    var unsent = false
     @Environment(\.dynamicTypeSize) private var typeSize
     /// At the largest text sizes a title wraps instead of being cut to a few letters.
     private var lines: Int { typeSize.isAccessibilitySize ? 3 : 1 }
@@ -42,6 +44,11 @@ struct AgentRow: View {
                             Text(info).font(.footnote).foregroundStyle(.secondary).lineLimit(lines)
                         }
                     }
+                }
+                if unsent {
+                    Label("Unsent reply", systemImage: "exclamationmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 if subagents > 0 {
                     Label("\(subagents) sub-agent\(subagents == 1 ? "" : "s") running", systemImage: "person.2.badge.gearshape")
@@ -82,7 +89,8 @@ struct AgentRow: View {
                     .font(.body.weight(state == .needsYou ? .semibold : .regular))
                     .lineLimit(1)
                 Text([machine, AgentsOrdering.info(terminal),
-                      subagents > 0 ? "\(subagents) sub-agents running" : nil]
+                      subagents > 0 ? "\(subagents) sub-agents running" : nil,
+                      unsent ? "Unsent reply" : nil]
                     .compactMap { $0 }.joined(separator: " · "))
                     .font(.caption)
                     .foregroundStyle(.secondary)

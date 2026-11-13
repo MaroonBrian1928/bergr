@@ -7,6 +7,8 @@ import TerminalCore
 struct ReplyPayload: Equatable {
     let text: String
     let hasImages: Bool
+    /// What was typed (empty for images alone: `text` is then a placeholder, not something to restore).
+    var typed = ""
     /// The user messages the conversation already had when this was sent: an earlier "yes"
     /// mustn't confirm a new one.
     var known: Set<String> = []
@@ -113,6 +115,9 @@ struct ReplyEnvironment {
     @ObservationIgnored var environment: ReplyEnvironment?
     /// For the bubble turning to "Not delivered" by itself.
     @ObservationIgnored var motion: Animation?
+    /// Whose draft (`ReplyDrafts`) the replies go back to when the chat goes away undelivered.
+    @ObservationIgnored var draftKey: String?
+    @ObservationIgnored var defaults: UserDefaults = .standard
     @ObservationIgnored private var pushTask: Task<Void, Never>?
 
     /// Replies to draw: the ones the conversation doesn't have yet. A reply it has is drawn as the
@@ -128,7 +133,7 @@ struct ReplyEnvironment {
               onUploadFailure: @escaping @MainActor (Error) -> Void) -> ReplyDelivery? {
         guard let env = environment else { return nil }
         var payload = ReplyPayload(text: text.isEmpty ? "\(images.count) image\(images.count == 1 ? "" : "s")" : text,
-                                   hasImages: !images.isEmpty)
+                                   hasImages: !images.isEmpty, typed: text)
         payload.known = Set(env.feedItems().compactMap { if case .user = $0.kind { $0.id } else { nil } })
         let working = env.agentState() == "working"
         let reply = ReplyDelivery(payload: payload, phase: working ? (interrupting ? .pushed : .queued) : .sending)
@@ -219,8 +224,14 @@ struct ReplyEnvironment {
         }
     }
 
-    /// The chat went away: nothing may type for it any more.
+    /// The chat went away: nothing may type for it any more. Replies the conversation doesn't have
+    /// (queued, sending, pushed, failed) go back into the agent's draft rather than vanish. One the
+    /// conversation shows is delivered and stays out; one that can't be told apart is restored
+    /// (a duplicate is better than a lost instruction). Images aren't kept, only the words.
     func cancelAll() {
+        let items = environment?.feedItems() ?? []
+        let lost = replies.filter { !$0.payload.arrived(in: items) }.map(\.payload.typed)
+        ReplyDrafts.restore(lost, for: draftKey, in: defaults)
         for reply in replies { _ = restart(reply) }
         replies = []
         pushTask?.cancel()

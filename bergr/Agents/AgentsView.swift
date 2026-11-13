@@ -454,7 +454,8 @@ private struct SubagentRow: View {
     @State private var lifecycle = AgentLifecycle()
 
     var body: some View {
-        AgentRow(terminal: terminal, subagents: session.runningSubagents(address: terminal.address), machine: machine)
+        AgentRow(terminal: terminal, subagents: session.runningSubagents(address: terminal.address), machine: machine,
+                 unsent: ReplyDrafts.hasUnsent(for: "\(session.host.id.uuidString)|\(terminal.address)"))
             .contextMenu {
                 if terminal.isLive, terminal.isAgent, !terminal.address.contains("/") {
                     if let agent = ChatAgent.detect(terminal), agent != .antigravity {

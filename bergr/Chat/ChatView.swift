@@ -181,7 +181,12 @@ struct ChatView: View {
                 .macBarHeight { macBars.bottom = $0 }
         }
         .background(palette.background)
-        .onDisappear { outbox.cancelAll() }
+        .onDisappear {
+            outbox.draftKey = draftKey
+            outbox.cancelAll()
+            // Undelivered replies went back into the draft: take it, so a later edit here keeps them.
+            draft = ReplyDrafts.text(for: draftKey)
+        }
         // The store keeps this view for building rows: let go of it with the chat (and take it
         // back when the chat shows again without having been rebuilt).
         .onAppear { rowStore.chat = self }
@@ -702,6 +707,13 @@ struct ChatView: View {
             }
             if let sendError {
                 Label(sendError, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+                    .padding(.horizontal, 20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if ReplyDrafts.hasUnsent(for: draftKey), ReplyDrafts.text(for: draftKey) == draft {
+                Label("Not sent — tap Send to try again", systemImage: "exclamationmark.circle")
                     .font(.footnote)
                     .foregroundStyle(palette.secondary)
                     .padding(.horizontal, 20)
