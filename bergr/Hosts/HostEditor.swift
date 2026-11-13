@@ -129,7 +129,9 @@ struct HostEditor: View {
             #if os(macOS)
             .formStyle(.grouped)
             #endif
-            .task(id: setupSession?.state == .connected) {
+            // Keyed on the checklist too: load() makes it on appear, after a task keyed only on the
+            // connection has already run (against nil) — the rows then stayed on "Checking…".
+            .task(id: SetupCheckKey(connected: setupSession?.state == .connected, ready: setup != nil)) {
                 if setupSession?.state == .connected { await setup?.check() }
             }
             .tint(palette.accent)
@@ -493,4 +495,11 @@ struct HostEditor: View {
 
 private extension String {
     var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
+}
+
+
+/// When the editor's checklist should run its checks: connected, and the checklist made.
+private struct SetupCheckKey: Hashable {
+    let connected: Bool
+    let ready: Bool
 }
