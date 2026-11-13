@@ -162,6 +162,16 @@ struct ChatFeedProtocolTests {
         #expect(feed.items.map(\.id) == ["b"])
     }
 
+    @Test func usageWaitsForCaughtUpAndRetainsSourceTime() async throws {
+        let feed = ChatFeed()
+        _ = try await run(feed, lines: [reset,
+            #"{"t":"usage","used":1000,"observed_at":1799999000,"weekly":{"percent":95,"resets_at":1800000000}}"#])
+        #expect(feed.usage?.observedAt == Date(timeIntervalSince1970: 1_799_999_000))
+        #expect(UsageReadings.currentUsage(feed) == nil)
+        _ = try await run(feed, lines: [#"{"t":"ping"}"#])
+        #expect(UsageReadings.currentUsage(feed)?.weekly?.percent == 95)
+    }
+
     @Test func noneShowsNoConversationWithoutPings() async throws {
         let feed = ChatFeed()
         _ = try await run(feed, lines: [#"{"t":"none"}"#])

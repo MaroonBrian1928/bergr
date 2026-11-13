@@ -9,32 +9,85 @@ struct UsageAlert: Equatable {
     let body: String
 }
 
-/// Decides which plan windows just crossed the threshold. A window is armed again when its percent
-/// falls back under the threshold or it gets a new reset time.
+/// Alerts once per unexpired plan window, using the newest trustworthy snapshot. Replayed
+/// transcripts, conflicting sessions, percentage corrections and relaunches must not re-arm it.
 @MainActor
 final class UsageAlertTracker {
     static let threshold = 80.0
+    static let maximumCodexAge: TimeInterval = 15 * 60
+    static let storageKey = "usageAlerts.windows.v2"
 
-    private var fired: Set<String> = []
+    private let defaults: UserDefaults?
+    private var fired: [String: Double]
+    private var latest: [String: Double]
 
-    func alerts(for readings: [UsageReading]) -> [UsageAlert] {
-        var alerts: [UsageAlert] = []
+    init(defaults: UserDefaults? = .standard) {
+        self.defaults = defaults
+        fired = defaults?.dictionary(forKey: Self.storageKey) as? [String: Double] ?? [:]
+        latest = defaults?.dictionary(forKey: Self.storageKey + ".latest") as? [String: Double] ?? [:]
+    }
+
+    func alerts(for readings: [UsageReading], now: Date = .now) -> [UsageAlert] {
+        // Multiple Mac windows can own trackers initialized before either one alerts.
+        // Merge the shared ledger on every pass, not just at initialization.
+        if let saved = defaults?.dictionary(forKey: Self.storageKey) as? [String: Double] {
+            fired.merge(saved) { max($0, $1) }
+        }
+        if let saved = defaults?.dictionary(forKey: Self.storageKey + ".latest") as? [String: Double] {
+            latest.merge(saved) { max($0, $1) }
+        }
+        let oldFired = fired, oldLatest = latest
+        let instant = now.timeIntervalSince1970
+        fired = fired.filter { $0.value.isFinite && $0.value > instant }
+        latest = latest.filter { entry in
+            guard let suffix = entry.key.split(separator: "|").last,
+                  let reset = Double(suffix) else { return false }
+            return reset > instant && entry.value.isFinite
+        }
+        struct Candidate {
+            let reading: UsageReading
+            let kind: String
+            let window: ChatFeed.Usage.Window
+            let observed: Double?
+        }
+        var order: [String] = []
+        var candidates: [String: Candidate] = [:]
         for reading in readings {
-            guard let usage = reading.usage else { continue }
-            let windows: [(kind: String, window: ChatFeed.Usage.Window?)] = [("session", usage.session), ("weekly", usage.weekly)]
-            for (kind, window) in windows {
-                guard let window else { continue }
-                // The window's identity is its reset time: the percent climbs within one window.
-                let resets = window.resetsAt.map { Int($0.timeIntervalSince1970) } ?? 0
-                let key = "\(reading.agent.rawValue)|\(kind)|\(resets)"
-                guard window.percent >= Self.threshold else {
-                    fired.remove(key)
-                    continue
+            guard reading.running, let usage = reading.usage else { continue }
+            let observed = usage.observedAt?.timeIntervalSince1970
+            if reading.agent == .codex {
+                // Old helpers have no timestamp: they cannot prove that a rate-limit warning
+                // is current. Allow a minute of clock skew, never stale transcript history.
+                guard let observed, observed.isFinite, instant - observed <= Self.maximumCodexAge,
+                      observed - instant <= 60 else { continue }
+            }
+            let windows = [("session", usage.session), ("weekly", usage.weekly)]
+            for (kind, value) in windows {
+                guard let window = value, window.percent.isFinite, (0...100).contains(window.percent),
+                      let reset = window.resetsAt?.timeIntervalSince1970,
+                      reset.isFinite, reset > instant, reset < Double(Int.max) else { continue }
+                let key = "\(reading.agent.rawValue)|\(kind)|\(Int(reset))"
+                if let observed, let previous = latest[key], observed < previous { continue }
+                let candidate = Candidate(reading: reading, kind: kind, window: window, observed: observed)
+                if let previous = candidates[key] {
+                    let before = previous.observed ?? -.infinity, after = observed ?? -.infinity
+                    if after < before || (after == before && window.percent <= previous.window.percent) { continue }
+                } else {
+                    order.append(key)
                 }
-                guard fired.insert(key).inserted else { continue }
-                alerts.append(UsageAlert(key: key, body: Self.body(reading: reading, kind: kind, window: window)))
+                candidates[key] = candidate
             }
         }
+        var alerts: [UsageAlert] = []
+        for key in order {
+            guard let candidate = candidates[key] else { continue }
+            if let observed = candidate.observed { latest[key] = observed }
+            guard candidate.window.percent >= Self.threshold, fired[key] == nil else { continue }
+            fired[key] = candidate.window.resetsAt!.timeIntervalSince1970
+            alerts.append(UsageAlert(key: key, body: Self.body(reading: candidate.reading, kind: candidate.kind, window: candidate.window)))
+        }
+        if oldFired != fired { defaults?.set(fired, forKey: Self.storageKey) }
+        if oldLatest != latest { defaults?.set(latest, forKey: Self.storageKey + ".latest") }
         return alerts
     }
 

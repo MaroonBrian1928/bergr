@@ -26,13 +26,14 @@
 #   {"t":"resume"}                                            instead of reset: the same file is at least
 #                                                             that long; only what follows the offset is sent
 #   {"t":"usage","model":..,"effort":..,"used":<tokens>,"limit":<tokens>|null,
-#    "session":{"percent":..,"resets_at":<epoch s>}|null,"weekly":{..}|null}   context and plan usage
+#    "session":{"percent":..,"resets_at":<epoch s>}|null,"weekly":{..}|null,
+#    "observed_at":<original snapshot epoch s>|null}             context and plan usage
 # Usage: agent-feed.py <claude|codex|antigravity> <pid> <cwd> [session-id|-] [expensive 0|1] [cursor-session|-] [cursor-offset]
 # Bergr starts it through agent-stage2.py (cached by hash on the machine), including on Windows.
 # The session id comes from the agent's launch command (claude --resume <id>, codex resume <id>).
 # Read-only: it never writes to the agents' files.
 import html
-import base64, glob, json, os, re, sqlite3, subprocess, sys, threading, time
+import base64, datetime, glob, json, math, os, re, sqlite3, subprocess, sys, threading, time
 
 AGENT, PID, CWD = sys.argv[1], int(sys.argv[2] or 0), sys.argv[3]
 HINT = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] not in ("", "-") else None
@@ -993,16 +994,54 @@ class Codex:
         if d.get("type") == "event_msg" and p.get("type") == "token_count":
             info = p.get("info") or {}
             last = info.get("last_token_usage") or {}
-            limits = p.get("rate_limits") or {}
+            limits = p.get("rate_limits")
+            if not isinstance(limits, dict):
+                limits = {}
 
-            def window(w):
-                if not isinstance(w, dict) or w.get("used_percent") is None:
-                    return None
-                return {"percent": w.get("used_percent"), "resets_at": w.get("resets_at")}
+            def observed_at():
+                stamp = d.get("timestamp")
+                if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
+                    return stamp if math.isfinite(stamp) else None
+                if isinstance(stamp, str):
+                    try:
+                        parsed = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                        return parsed.timestamp() if parsed.tzinfo is not None else None
+                    except (ValueError, OverflowError, OSError):
+                        pass
+                return None
+
+            windows = {"session": None, "weekly": None}
+            # Only the standard Codex account quota belongs in these plan meters. Other
+            # metered buckets are not the user's session/weekly allowance.
+            if limits.get("limit_id") in (None, "", "codex"):
+                for slot, fallback in (("primary", "session"), ("secondary", "weekly")):
+                    w = limits.get(slot)
+                    if not isinstance(w, dict):
+                        continue
+                    percent = w.get("used_percent")
+                    if isinstance(percent, bool) or not isinstance(percent, (int, float)) \
+                            or not math.isfinite(percent) or not 0 <= percent <= 100:
+                        continue
+                    minutes = w.get("window_minutes")
+                    if minutes is None:
+                        kind = fallback  # older Codex rollouts omit the duration
+                    elif isinstance(minutes, bool) or not isinstance(minutes, (int, float)):
+                        continue
+                    elif minutes == 10080:
+                        kind = "weekly"
+                    elif 0 < minutes <= 1440:
+                        kind = "session"
+                    else:
+                        continue  # do not label an unknown/monthly quota as weekly
+                    reset = w.get("resets_at")
+                    if isinstance(reset, bool) or not isinstance(reset, (int, float)) or not math.isfinite(reset):
+                        reset = None
+                    if windows[kind] is None:
+                        windows[kind] = {"percent": percent, "resets_at": reset}
             yield {"t": "usage", "model": self.model, "effort": self.effort,
                    "used": int(last.get("total_tokens") or last.get("input_tokens") or 0),
-                   "limit": info.get("model_context_window"),
-                   "session": window(limits.get("primary")), "weekly": window(limits.get("secondary"))}
+                   "limit": info.get("model_context_window"), "observed_at": observed_at(),
+                   **windows}
             return
         if d.get("type") != "response_item":
             return

@@ -59,6 +59,13 @@ enum UsageReadings {
         sessions?.existing(machine)?.runningFeed(address: address)
     }
 
+    /// Backlog snapshots are not live account readings. Publish only after the helper caught up.
+    @MainActor
+    static func currentUsage(_ feed: ChatFeed?) -> ChatFeed.Usage? {
+        guard let feed, feed.caughtUp, feed.phase == .live else { return nil }
+        return feed.usage
+    }
+
     @MainActor
     static func readings(hosts: [Host], sessions: SessionStore?) -> [UsageReading] {
         hosts.flatMap { host in
@@ -66,7 +73,7 @@ enum UsageReadings {
                 guard let agent = ChatAgent.detect(terminal) else { return nil }
                 let feed = feed(sessions, machine: host.id, address: terminal.address)
                 return UsageReading(id: "\(host.id)/\(terminal.address)", machine: host.name, agent: agent,
-                                    running: feed != nil, usage: feed?.usage)
+                                    running: feed != nil, usage: currentUsage(feed))
             }
         }
     }

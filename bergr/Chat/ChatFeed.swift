@@ -129,6 +129,8 @@ final class ChatFeed {
         var limit: Int?
         var session: Window?
         var weekly: Window?
+        /// When the agent recorded this snapshot, rather than when a transcript was replayed.
+        var observedAt: Date? = nil
 
         var fraction: Double? { limit.flatMap { $0 > 0 ? min(1, Double(used) / Double($0)) : nil } }
     }
@@ -566,7 +568,8 @@ final class ChatFeed {
         let next = Usage(
             model: event["model"] as? String, effort: event["effort"] as? String, mode: event["mode"] as? String,
             used: (event["used"] as? NSNumber)?.intValue ?? 0, limit: (event["limit"] as? NSNumber)?.intValue,
-            session: window(event["session"]), weekly: window(event["weekly"]))
+            session: window(event["session"]), weekly: window(event["weekly"]),
+            observedAt: (event["observed_at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) })
         if next != usage { usage = next }
     }
 

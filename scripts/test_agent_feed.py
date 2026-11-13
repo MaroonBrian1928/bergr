@@ -942,6 +942,49 @@ class PluginCommandsTests(unittest.TestCase):
             names = [n for n, _ in ns["plugin_commands"]()]
             self.assertEqual(sorted(names), ["/flat:delegating", "/nested:wait-what"])
 
+class CodexRateLimits(Base):
+    def parse_usage(self, limits, timestamp="2026-01-01T00:00:00.125Z"):
+        ns = load("codex", self.home)
+        events = list(ns["Codex"]().parse({"type": "event_msg", "timestamp": timestamp,
+            "payload": {"type": "token_count", "info": {"last_token_usage": {"total_tokens": 1234}},
+                        "rate_limits": limits}}))
+        return next(e for e in events if e["t"] == "usage")
+
+    def window(self, minutes=300, percent=85, reset=1800000000):
+        return {"used_percent": percent, "window_minutes": minutes, "resets_at": reset}
+
+    def test_source_time_is_not_replay_time(self):
+        event = self.parse_usage({"primary": self.window()})
+        self.assertEqual(event["observed_at"], 1767225600.125)
+        for timestamp in (None, "bad", "2026-01-01T00:00:00", True, float("nan")):
+            self.assertIsNone(self.parse_usage({}, timestamp)["observed_at"])
+
+    def test_duration_identifies_weekly_even_in_primary_slot(self):
+        event = self.parse_usage({"limit_id": "codex", "primary": self.window(10080, 91), "secondary": self.window(300, 20)})
+        self.assertEqual(event["weekly"]["percent"], 91)
+        self.assertEqual(event["session"]["percent"], 20)
+
+    def test_other_buckets_do_not_masquerade_as_account_limits(self):
+        event = self.parse_usage({"limit_id": "codex_other", "primary": self.window()})
+        self.assertIsNone(event["session"])
+        self.assertIsNone(event["weekly"])
+        self.assertEqual(event["used"], 1234)
+
+    def test_legacy_missing_duration_is_supported(self):
+        event = self.parse_usage({"primary": {"used_percent": 85, "resets_at": 1800000000}})
+        self.assertEqual(event["session"]["percent"], 85)
+
+    def test_invalid_or_unknown_windows_are_not_guessed(self):
+        for minutes in (0, -1, 43200, "300", True):
+            event = self.parse_usage({"primary": self.window(minutes)})
+            self.assertIsNone(event["session"])
+            self.assertIsNone(event["weekly"])
+        for percent in (-1, 101, True, "95", float("nan"), float("inf")):
+            self.assertIsNone(self.parse_usage({"primary": self.window(percent=percent)})["session"])
+        self.assertIsNone(self.parse_usage({"primary": self.window(reset=float("nan"))})["session"]["resets_at"])
+        self.assertIsNone(self.parse_usage("invalid")["session"])
+
+
 class LocalFeedStartup(Base):
     def test_models_and_usage_arrive_through_local_process(self):
         # The native Mac launches exactly this -I/-c bridge, without an SSH shell.
