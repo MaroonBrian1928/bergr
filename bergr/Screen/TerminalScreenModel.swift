@@ -371,6 +371,85 @@ final class TerminalScreenModel {
         renderNow()
     }
 
+    // MARK: Find
+
+    /// The matches of the current search, oldest first, and the one shown (highlighted).
+    private(set) var findMatches: [TerminalSearch.Match] = []
+    private(set) var findIndex: Int?
+    /// The search text; set it with `find(_:)`.
+    private(set) var findQuery = ""
+
+    /// "3 of 12", "No matches", or nothing for a blank query.
+    var findSummary: String {
+        guard !findQuery.isEmpty else { return "" }
+        guard let findIndex else { return "No matches" }
+        return "\(findIndex + 1) of \(findMatches.count)"
+    }
+
+    /// Searches the scrollback and screen for `query` (ignoring case) and shows the first match
+    /// at or after the top of what is on screen.
+    func find(_ query: String) {
+        findQuery = query
+        findMatches = []
+        findIndex = nil
+        guard let vt, !query.isEmpty else { return clearFindHighlight() }
+        let snapshot = vt.textSnapshot()
+        findMatches = TerminalSearch.matches(for: query, in: snapshot.lines)
+        findIndex = TerminalSearch.firstMatch(atOrAfter: vt.viewportTopRow, in: findMatches)
+        showCurrentMatch(in: snapshot.lines)
+    }
+
+    /// Moves to the next or previous match, wrapping around. Looks again first, so output that
+    /// arrived since is found too.
+    func findStep(forward: Bool) {
+        guard let vt, !findQuery.isEmpty else { return }
+        let snapshot = vt.textSnapshot()
+        let previous = findIndex.flatMap { findMatches.indices.contains($0) ? findMatches[$0] : nil }
+        findMatches = TerminalSearch.matches(for: findQuery, in: snapshot.lines)
+        let current = previous.flatMap { findMatches.firstIndex(of: $0) }
+        findIndex = TerminalSearch.step(from: current, count: findMatches.count, forward: forward)
+        showCurrentMatch(in: snapshot.lines)
+    }
+
+    /// Ends the search and drops the highlight.
+    func endFind() {
+        findQuery = ""
+        findMatches = []
+        findIndex = nil
+        clearFindHighlight()
+    }
+
+    private func clearFindHighlight() {
+        vt?.clearSelection()
+        renderNow()
+    }
+
+    private func showCurrentMatch(in lines: [String]) {
+        guard let vt, let findIndex, findMatches.indices.contains(findIndex) else { return clearFindHighlight() }
+        let match = findMatches[findIndex]
+        let line = lines[match.row]
+        let first = TerminalSearch.column(ofCharacter: match.start, in: line)
+        let end = TerminalSearch.column(ofCharacter: match.start + match.length, in: line)
+        vt.scroll(toRow: match.row - vt.rows / 2)
+        vt.select(row: match.row, columns: first...max(first, end - 1))
+        renderNow()
+        scrolledBack = !(frame.scrollbar?.atBottom ?? true)
+    }
+
+    /// Scrolls to the previous or next shell prompt (the shell's own OSC 133 marks when it sends
+    /// them, else lines that look like one). Returns false when there is none that way.
+    @discardableResult
+    func jumpToPrompt(forward: Bool) -> Bool {
+        guard let vt else { return false }
+        let snapshot = vt.textSnapshot()
+        let rows = PromptDetector.promptRows(lines: snapshot.lines, marked: snapshot.markedPromptRows)
+        guard let row = PromptDetector.jump(from: vt.viewportTopRow, rows: rows, forward: forward) else { return false }
+        vt.scroll(toRow: row)
+        renderNow()
+        scrolledBack = !(frame.scrollbar?.atBottom ?? true)
+        return true
+    }
+
     // MARK: Taps
 
     enum TapResult {

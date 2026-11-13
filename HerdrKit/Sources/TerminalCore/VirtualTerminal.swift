@@ -480,6 +480,92 @@ public final class VirtualTerminal {
         return Scrollbar(total: Int(bar.total), offset: Int(bar.offset), visible: Int(bar.len))
     }
 
+    // MARK: Search
+
+    /// All the text of the screen and its scrollback, one string per row (soft wraps are not
+    /// joined, so row `n` is row `n` of the scrollback, the same space `viewportTopRow` and
+    /// `scroll(toRow:)` use), plus the rows where the shell marked a prompt (OSC 133).
+    public struct TextSnapshot: Sendable {
+        public var lines: [String]
+        public var markedPromptRows: [Int]
+    }
+
+    public func textSnapshot() -> TextSnapshot {
+        var total = 0
+        guard ghostty_terminal_get(terminal, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total) == GHOSTTY_SUCCESS, total > 0,
+              let first = screenRef(x: 0, y: 0), let last = screenRef(x: cols - 1, y: total - 1)
+        else { return TextSnapshot(lines: [], markedPromptRows: []) }
+        var range = GhosttySelection()
+        range.size = MemoryLayout<GhosttySelection>.size
+        range.start = first
+        range.end = last
+        var text = ""
+        withUnsafePointer(to: &range) { pointer in
+            var options = GhosttyTerminalSelectionFormatOptions()
+            options.size = MemoryLayout<GhosttyTerminalSelectionFormatOptions>.size
+            options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
+            options.unwrap = false
+            options.trim = true
+            options.selection = pointer
+            var output: UnsafeMutablePointer<UInt8>?
+            var length = 0
+            guard ghostty_terminal_selection_format_alloc(terminal, nil, options, &output, &length) == GHOSTTY_SUCCESS,
+                  let output
+            else { return }
+            defer { ghostty_free(nil, output, length) }
+            text = String(decoding: UnsafeBufferPointer(start: output, count: length), as: UTF8.self)
+        }
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if lines.count > total { lines.removeLast(lines.count - total) }
+        var marked: [Int] = []
+        for y in 0..<total {
+            guard var ref = screenRef(x: 0, y: y) else { continue }
+            var row = GhosttyRow()
+            guard ghostty_grid_ref_row(&ref, &row) == GHOSTTY_SUCCESS else { continue }
+            var semantic = GHOSTTY_ROW_SEMANTIC_NONE
+            if ghostty_row_get(row, GHOSTTY_ROW_DATA_SEMANTIC_PROMPT, &semantic) == GHOSTTY_SUCCESS,
+               semantic == GHOSTTY_ROW_SEMANTIC_PROMPT
+            {
+                marked.append(y)
+            }
+        }
+        return TextSnapshot(lines: lines, markedPromptRows: marked)
+    }
+
+    /// The scrollback row at the top of the viewport.
+    public var viewportTopRow: Int { scrollbar()?.offset ?? 0 }
+
+    /// Scrolls so `row` is the first visible row (clamped by the terminal).
+    public func scroll(toRow row: Int) {
+        var behavior = GhosttyTerminalScrollViewport()
+        behavior.tag = GHOSTTY_SCROLL_VIEWPORT_ROW
+        behavior.value.row = max(row, 0)
+        ghostty_terminal_scroll_viewport(terminal, behavior)
+    }
+
+    /// Selects columns of a scrollback row: the highlight of a search match.
+    public func select(row: Int, columns: ClosedRange<Int>) {
+        guard let from = screenRef(x: columns.lowerBound, y: row), let to = screenRef(x: columns.upperBound, y: row)
+        else { return }
+        var selection = GhosttySelection()
+        selection.size = MemoryLayout<GhosttySelection>.size
+        selection.start = from
+        selection.end = to
+        selection.rectangle = false
+        _ = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SELECTION, &selection)
+    }
+
+    private func screenRef(x: Int, y: Int) -> GhosttyGridRef? {
+        var position = GhosttyPoint()
+        position.tag = GHOSTTY_POINT_TAG_SCREEN
+        position.value.coordinate = GhosttyPointCoordinate(
+            x: UInt16(clamping: min(max(x, 0), cols - 1)), y: UInt32(clamping: max(y, 0)))
+        var ref = GhosttyGridRef()
+        ref.size = MemoryLayout<GhosttyGridRef>.size
+        guard ghostty_terminal_grid_ref(terminal, position, &ref) == GHOSTTY_SUCCESS else { return nil }
+        return ref
+    }
+
     // MARK: Links
 
     /// The link at a viewport cell: an OSC 8 hyperlink, or a URL written in the text.

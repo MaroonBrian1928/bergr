@@ -11,6 +11,7 @@ struct TerminalScreenView: View {
     var pane: PaneChrome?
     @State private var model: TerminalScreenModel
     @State private var showingInfo = false
+    @State private var finding = false
     @AppStorage(TerminalFont.sizeKey) private var fontSize = TerminalFont.defaultSize
     @AppStorage(TerminalFont.storageKey) private var fontFamily = TerminalFont.jetBrainsMono
     /// Open terminals watching (observe) instead of taking them over; remembered.
@@ -147,6 +148,13 @@ struct TerminalScreenView: View {
                 if !chat, let chrome = paneChrome(terminal, extra: AnyView(EmptyView())) {
                     PaneHeader(chrome: chrome, backdrop: Color(uiColor: UIColor(theme.backgroundRGB))) { terminalButtons(agent: agent, chat: chat) }
                 }
+                if !chat, finding, model.phase == .live {
+                    FindBar(model: model) {
+                        finding = false
+                        model.endFind()
+                    }
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
                 // A dead line says so here too: the terminal would otherwise look live and take keys.
                 if !chat, session.state != .connected, !session.host.isDemo {
                     ConnectionBar(session: session, text: theme.color(theme.foreground),
@@ -274,6 +282,12 @@ struct TerminalScreenView: View {
                 watchByDefault = !model.watching
                 model.setWatching(!model.watching)
             }
+            Button("Find", systemImage: "magnifyingglass") {
+                withAnimation {
+                    finding.toggle()
+                    if finding { model.wantsKeyboard = false } else { model.endFind() }
+                }
+            }
             Button(model.wantsKeyboard ? "Hide Keyboard" : "Show Keyboard",
                    systemImage: model.wantsKeyboard ? "keyboard.chevron.compact.down" : "keyboard")
             {
@@ -318,6 +332,47 @@ struct TerminalScreenView: View {
         case .failed(let message):
             Banner(text: message, systemImage: "exclamationmark.triangle")
         }
+    }
+}
+
+/// Find in the scrollback: a field with "3 of 12", previous/next match, and previous/next shell prompt.
+private struct FindBar: View {
+    let model: TerminalScreenModel
+    let done: () -> Void
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Find in terminal", text: $text)
+                    .focused($focused)
+                    .submitLabel(.search)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .onSubmit {
+                        model.findStep(forward: true)
+                        focused = true
+                    }
+                    .onChange(of: text) { _, text in model.find(text) }
+                Text(model.findSummary)
+                    .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                    .fixedSize()
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .background(.thinMaterial, in: Capsule())
+            Button("Previous match", systemImage: "chevron.up") { model.findStep(forward: false) }
+            Button("Next match", systemImage: "chevron.down") { model.findStep(forward: true) }
+            Divider().frame(height: 18)
+            Button("Previous prompt", systemImage: "arrow.up.to.line") { model.jumpToPrompt(forward: false) }
+            Button("Next prompt", systemImage: "arrow.down.to.line") { model.jumpToPrompt(forward: true) }
+            Button("Done", action: done)
+        }
+        .labelStyle(.iconOnly)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(.bar)
+        .onAppear { focused = true }
     }
 }
 
