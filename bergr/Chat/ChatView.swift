@@ -28,6 +28,7 @@ struct ChatView: View {
     @State private var pushes = 0
     @State private var showingUsage = false
     @State private var showingChanges = false
+    @State private var openedFile: FileRef?
     @State private var lifecycle = AgentLifecycle()
     @State private var choosingMode = false
     @State private var selecting: SelectableMessage?
@@ -209,6 +210,17 @@ struct ChatView: View {
         #if os(iOS)
         .sheet(item: $selecting) { SelectTextSheet(text: $0.text) }
         #endif
+        // File paths in messages and tool rows open the file viewer.
+        .environment(\.openURL, OpenURLAction { url in
+            guard let ref = FileRef(url: url) else { return .systemAction }
+            openedFile = ref
+            return .handled
+        })
+        .sheet(item: $openedFile) { ref in
+            FileViewerSheet(ref: ref, cwd: terminal?.cwd ?? "", session: session) { path in
+                draft += (draft.isEmpty || draft.hasSuffix(" ") ? "" : " ") + path + " "
+            }
+        }
         // Images open from here, not from their rows (see `showImage`).
         .environment(\.showImage, imageOpener.action($viewing))
         .platformCover(item: $viewing) { ImageViewer(image: $0.image) }
@@ -1916,7 +1928,7 @@ private struct ToolRun: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(step.name).font(.footnote.weight(.semibold))
                             if !step.summary.isEmpty {
-                                Text(step.summary)
+                                Text(FilePathDetector.linkified(step.summary))
                                     .font(.footnote.monospaced())
                                     .lineLimit(8)
                                     .textSelection(.enabled)

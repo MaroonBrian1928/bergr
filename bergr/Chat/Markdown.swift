@@ -42,9 +42,14 @@ struct MarkdownInline: Hashable, ExpressibleByStringLiteral {
         var result = AttributedString()
         for run in parsed.runs {
             var piece = AttributedString(parsed[run.range])
+            if run.link == nil, run.inlinePresentationIntent?.contains(.code) != true {
+                // File paths in plain text open the file viewer (see FilePathDetector).
+                FilePathDetector.link(&piece)
+            }
             if run.inlinePresentationIntent?.contains(.code) == true {
                 // A short code span stays on one line: its spaces don't break.
                 let chars = String(piece.characters)
+                let fileLink = run.link == nil ? FilePathDetector.ref(chars)?.url : nil
                 if chars.count <= 40, chars.contains(" ") || chars.contains("-") {
                     // No-break space and no-break hyphen.
                     var unbroken = AttributedString(chars.replacingOccurrences(of: " ", with: "\u{00A0}")
@@ -55,6 +60,7 @@ struct MarkdownInline: Hashable, ExpressibleByStringLiteral {
                 piece.font = .system(.callout, design: .monospaced)
                 piece.foregroundColor = palette.codeText
                 piece.backgroundColor = palette.codeBackground
+                if let fileLink { piece.link = fileLink }
             }
             result.append(piece)
         }
