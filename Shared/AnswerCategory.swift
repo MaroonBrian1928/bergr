@@ -35,7 +35,7 @@ nonisolated enum AnswerCategory {
     /// The category with just a Reply text field (done alerts, blocked ones without buttons).
     static let replyCategory = "bergr.reply"
     static let replyAction = "bergr.reply.action"
-    /// Whether the app can send a typed reply (iOS); the Mac turns it off and alerts only open the chat.
+    /// Whether the app can send a typed reply (iOS and Mac); when off, alerts only open the chat.
     nonisolated(unsafe) static var replyEnabled = true
 
     /// The category for a question with this many options; nil when it can't have buttons.

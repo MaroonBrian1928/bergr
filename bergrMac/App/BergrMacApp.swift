@@ -7,7 +7,7 @@ import SwiftUI
 struct BergrMacApp: App {
     @NSApplicationDelegateAdaptor private var delegate: MacAppDelegate
     @State private var hosts: HostStore
-    @State private var keys = KeyLibrary()
+    @State private var keys: KeyLibrary
     @State private var sessions: SessionStore
     @State private var shell = MacShell()
 
@@ -33,7 +33,9 @@ struct BergrMacApp: App {
         let sessions = SessionStore()
         _sessions = State(initialValue: sessions)
         // Started at launch, so a notification clicked to open the app is delivered.
-        MacNotifications.shared.start(sessions: sessions)
+        let keys = KeyLibrary()
+        _keys = State(initialValue: keys)
+        MacNotifications.shared.start(sessions: sessions, hosts: hosts, keys: keys)
     }
 
     var body: some Scene {

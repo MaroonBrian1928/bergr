@@ -2,86 +2,6 @@ import Foundation
 import HerdrKit
 import TerminalCore
 
-/// The question on a terminal's screen and the answers to offer for it. Pure: the Live Activity
-/// content and the tap's re-check both come from here, so they agree on what "the same prompt" is.
-struct PromptReading: Equatable {
-    typealias Option = BergrActivityAttributes.Option
-
-    let question: String
-    let options: [Option]
-    /// Numbered choices from the screen; false for the Yes / No / Esc fallback.
-    let numbered: Bool
-
-    static let maxOptions = 4
-
-    static func read(lines: [String], statusTitle: String?) -> PromptReading {
-        let choices = AnswerParser.choices(in: lines)
-        if !choices.isEmpty {
-            return PromptReading(
-                question: AnswerParser.question(in: lines) ?? statusTitle ?? "Waiting for you",
-                options: choices.prefix(maxOptions).map { Option(number: $0.number, label: $0.label, key: "") },
-                numbered: true)
-        }
-        let asked = lines.last(where: { $0.contains("?") }).map(AnswerParser.clean)
-        // Nothing asked (e.g. Claude signed out): no buttons, since Yes/No would type into its input.
-        if asked == nil || AnswerParser.needsLogin(in: lines) {
-            return PromptReading(question: statusTitle ?? "Waiting for you", options: [], numbered: false)
-        }
-        return PromptReading(
-            question: asked ?? statusTitle ?? "Waiting for you",
-            options: [
-                Option(number: 0, label: "Yes", key: "y"),
-                Option(number: 0, label: "No", key: "n"),
-                Option(number: 0, label: "Esc", key: "esc"),
-            ],
-            numbered: false)
-    }
-}
-
-enum PromptStep: Equatable {
-    case up, down, enter, escape
-    case text(String)
-}
-
-enum AnswerDecision: Equatable {
-    /// Still the same prompt: press these keys, then record `answer` for `question` in the chat.
-    case send(steps: [PromptStep], question: String, answer: String)
-    /// The prompt is gone or different: press nothing.
-    case changed
-}
-
-enum AnswerPolicy {
-    /// Whether the question the button was made for is still the one on screen, and what to press.
-    static func decide(
-        question: String, number: Int, label: String, key: String, lines: [String], statusTitle: String?
-    ) -> AnswerDecision {
-        let now = PromptReading.read(lines: lines, statusTitle: statusTitle)
-        guard now.question == question, !now.options.isEmpty else { return .changed }
-        // A dangerous command is never answered from a button: the chat asks for a confirmation.
-        guard DangerousCommand.check(([now.question] + AnswerParser.context(in: lines)).joined(separator: "\n")) == nil
-        else { return .changed }
-        if key.isEmpty {
-            guard now.numbered else { return .changed }
-            let choice = AnswerChoice(number: number, label: label, selected: false)
-            guard AnswerParser.isStillShown(choice, in: lines) else { return .changed }
-            let steps = AnswerParser.steps(to: choice, in: AnswerParser.choices(in: lines))
-            let context = AnswerParser.context(in: lines)
-            let asked = ([question] + context.suffix(1)).joined(separator: " — ")
-            return .send(
-                steps: Array(repeating: steps > 0 ? PromptStep.down : .up, count: abs(steps)) + [.enter],
-                question: asked, answer: label)
-        }
-        // Yes / No / Esc only answer a prompt without numbered choices.
-        guard !now.numbered else { return .changed }
-        switch key {
-        case "y": return .send(steps: [.text("y")], question: question, answer: "Yes")
-        case "n": return .send(steps: [.text("n")], question: question, answer: "No")
-        case "esc": return .send(steps: [.escape], question: question, answer: "Canceled (esc)")
-        default: return .changed
-        }
-    }
-}
-
 /// The most urgent blocked agent, with its question and answers.
 enum PromptBuilder {
     typealias Prompt = BergrActivityAttributes.Prompt
@@ -103,77 +23,6 @@ enum PromptBuilder {
             }
         }
         return best?.prompt
-    }
-}
-
-// MARK: Screen access
-
-/// A terminal's screen, read through a channel of our own: feeds the output into an emulator.
-@MainActor
-final class ScreenCapture {
-    let attached: AttachedTerminal
-    private let vt: VirtualTerminal
-    private var pump: Task<Void, Never>?
-    private var lastChunk: ContinuousClock.Instant?
-
-    /// Attaches headless; `observe` watches without taking the size (reading), a viewer can type.
-    static func open(session: HostSession, terminal: Terminal, observe: Bool) async throws -> ScreenCapture {
-        let attached = try await session.attach(
-            address: terminal.address, cols: max(terminal.cols, 1), rows: max(terminal.rows, 1),
-            history: 0, observe: observe, display: nil)
-        do { return try ScreenCapture(attached) } catch {
-            await attached.detach()
-            throw error
-        }
-    }
-
-    private init(_ attached: AttachedTerminal) throws {
-        self.attached = attached
-        vt = try VirtualTerminal(cols: max(attached.terminal.cols, 1), rows: max(attached.terminal.rows, 1))
-        pump = Task { [weak self] in
-            do {
-                for try await chunk in attached.output {
-                    guard let self else { return }
-                    self.vt.write(chunk)
-                    self.lastChunk = .now
-                    await attached.consumed(bytes: chunk.count)
-                    let replies = self.vt.takeReplies()
-                    if !replies.isEmpty { try? await attached.sendAutomatic(replies) }
-                }
-            } catch {}
-        }
-    }
-
-    /// The screen once output has been quiet for a moment (at most `limit`); nil if nothing came.
-    func settledLines(limit: Duration = .seconds(3)) async -> [String]? {
-        let start = ContinuousClock.now
-        while ContinuousClock.now - start < limit {
-            try? await Task.sleep(for: .milliseconds(120))
-            if let last = lastChunk, ContinuousClock.now - last > .milliseconds(300) { break }
-        }
-        guard lastChunk != nil else { return nil }
-        return vt.frame().textLines
-    }
-
-    func send(_ steps: [PromptStep]) async {
-        try? await attached.focus(true)
-        for step in steps {
-            let data: Data
-            switch step {
-            case .up: data = vt.encode(.up)
-            case .down: data = vt.encode(.down)
-            case .enter: data = vt.encode(.enter)
-            case .escape: data = vt.encode(.escape)
-            case .text(let text): data = Data(text.utf8)
-            }
-            try? await attached.send(data)
-        }
-    }
-
-    func close() async {
-        pump?.cancel()
-        pump = nil
-        await attached.detach()
     }
 }
 
@@ -219,17 +68,6 @@ extension LiveActivityController {
         question: String, answer: String, session: HostSession, terminal: Terminal,
         source: ApprovalEntry.Source = .intent
     ) {
-        let host = session.host
-        ApprovalLog.record(
-            machine: host.name.isEmpty ? host.target.host : host.name,
-            agent: terminal.status?.app ?? terminal.displayName, question: question, answer: answer, source: source)
-        guard let agent = ChatAgent.detect(terminal) else { return }
-        let front = terminal.foreground.flatMap { fg in
-            ChatAgent.detect(name: fg.name, argv: fg.argv) == agent ? fg : nil
-        }
-        session.chatFeed(
-            address: terminal.address, agent: agent, pid: front?.pid ?? 0, cwd: front?.cwd ?? terminal.cwd,
-            sessionHint: ChatAgent.sessionHint(argv: front?.argv ?? terminal.foreground?.argv ?? []))
-            .recordDecision(question: question, answer: answer)
+        AnswerRecorder.record(question: question, answer: answer, session: session, terminal: terminal, source: source)
     }
 }

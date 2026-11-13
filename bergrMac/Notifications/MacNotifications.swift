@@ -24,11 +24,13 @@ final class MacNotifications {
     private init() {}
 
     /// Installs the click delegate and starts alerts from `sessions`. Safe to call more than once.
-    func start(sessions: SessionStore) {
+    func start(sessions: SessionStore, hosts: HostStore, keys: KeyLibrary) {
         guard notifier == nil else { return }
         UNUserNotificationCenter.current().delegate = delegate
-        // No typed replies from an alert on the Mac yet: a click opens the chat.
-        AnswerCategory.replyEnabled = false
+        // Answer buttons and typed replies answer in place over the live connections, like iOS;
+        // when that can't be done, the chat opens instead.
+        AnswerNotifications.install()
+        AnswerNotifications.shared.configure(Self.answerFlow(sessions: sessions, hosts: hosts, keys: keys))
         AnswerCategory.register()
         if Delivery.notifications { authorize() }
         let notifier = AgentNotifier(sessions: sessions)
@@ -40,6 +42,15 @@ final class MacNotifications {
                 self?.focus(nil)
             }
         }
+    }
+
+    /// The flow behind the buttons: the shared one, with a click-through to the agent's window on failure.
+    static func answerFlow(sessions: SessionStore, hosts: HostStore, keys: KeyLibrary) -> AnswerFlow {
+        let connect = AnswerFlow.live(sessions: sessions, hosts: hosts, keys: keys)
+        return AnswerFlow(
+            screen: { await connect($0.host, $0.address) },
+            openChat: { NotificationRouter.shared.pending = ($0, $1) },
+            replyScreen: { await connect($0.host, $0.address) })
     }
 
     /// Asks the system for permission to alert. The system asks only once; later calls are no-ops.

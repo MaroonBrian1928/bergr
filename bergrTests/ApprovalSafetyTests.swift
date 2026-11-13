@@ -50,6 +50,37 @@ struct ApprovalSafetyTests {
         #expect(AnswerCategory.replyRequest(actionIdentifier: "other", text: "hi", target: (host, "t1")) == nil)
     }
 
+    @Test func dangerousScreenIsNeverAnsweredFromAButton() async throws {
+        final class Log { var sent: [[PromptStep]] = []; var recorded = 0; var opened = 0 }
+        let log = Log()
+        let title = "Run rm -rf build?"
+        let json = "{\"state\":\"blocked\",\"msg\":\"\(title)\",\"kind\":\"permission\"}"
+        let status = try JSONDecoder().decode(TerminalStatus.self, from: Data(json.utf8))
+        let flow = AnswerFlow(
+            screen: { _ in
+                AnswerFlow.Screen(status: status, lines: ["\(title) (y/n)", ""], send: { log.sent.append($0) },
+                                  record: { _, _ in log.recorded += 1 }, close: {})
+            },
+            openChat: { _, _ in log.opened += 1 })
+        let question = AnswerQuestion(title: title, options: ["Yes", "No"], keys: true)
+        await flow.run(AnswerNotificationRequest(host: UUID(), address: "t1", question: question, index: 0))
+        #expect(log.sent.isEmpty && log.recorded == 0 && log.opened == 1)
+    }
+
+    @Test func replyOpensTheChatWhenTheConnectionFails() async {
+        final class Log { var opened: [String] = [] }
+        let log = Log()
+        let flow = AnswerFlow(
+            screen: { _ in nil }, openChat: { log.opened.append($1) }, replyScreen: { _ in nil })
+        await flow.reply(ReplyNotificationRequest(host: UUID(), address: "t1", text: "hi"))
+        #expect(log.opened == ["t1"])
+    }
+
+    @Test func replyIsOfferedOnEveryPlatform() {
+        #expect(AnswerCategory.replyEnabled)
+        #expect(AnswerCategory.replyIdentifier == "bergr.reply")
+    }
+
     @Test func approvalLogAppendsAndCapsAtFiveHundred() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("approvals-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
