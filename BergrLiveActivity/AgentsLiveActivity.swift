@@ -16,7 +16,7 @@ typealias AgentRow = BergrActivityAttributes.Row
 struct AgentsLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: BergrActivityAttributes.self) { context in
-            LockScreenView(state: context.state)
+            FamilyView(state: context.state)
                 .activityBackgroundTint(Color.black.opacity(0.55))
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
@@ -40,6 +40,64 @@ struct AgentsLiveActivity: Widget {
             }
             .widgetURL(context.state.rows.first?.url)
         }
+        // Opt in to the Apple Watch Smart Stack (`.small`); the default family is the Lock Screen
+        // layout, which StandBy also uses.
+        .supplementalActivityFamilies([.small])
+    }
+}
+
+/// Picks the layout for where the activity is shown.
+private struct FamilyView: View {
+    @Environment(\.activityFamily) private var family
+    let state: AgentState
+    var body: some View {
+        switch family {
+        case .small: SmallView(layout: SmallActivityLayout.make(state))
+        default: LockScreenView(state: state)
+        }
+    }
+}
+
+/// Apple Watch Smart Stack: tiny and legible. Buttons run the same intent as the Lock Screen.
+private struct SmallView: View {
+    let layout: SmallActivityLayout
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            switch layout {
+            case .status(let name, let line):
+                Text(name).font(.headline).lineLimit(1)
+                Text(line).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            case .answer(let prompt, let yes, let no):
+                Text(prompt.title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Text(prompt.question).font(.caption.weight(.semibold)).lineLimit(2)
+                HStack(spacing: 6) {
+                    if let yes { button(yes, prompt: prompt, primary: true) }
+                    if let no { button(no, prompt: prompt, primary: false) }
+                }
+            case .openOnPhone(let name, let question):
+                Text(name).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Text(question).font(.caption.weight(.semibold)).lineLimit(2)
+                Label("Answer on iPhone", systemImage: "iphone").font(.caption2).foregroundStyle(Color.needsYou)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .foregroundStyle(.white)
+    }
+
+    private func button(
+        _ option: BergrActivityAttributes.Option, prompt: BergrActivityAttributes.Prompt, primary: Bool
+    ) -> some View {
+        Button(intent: AnswerPromptIntent(
+            host: prompt.host, address: prompt.address, question: prompt.question, option: option)
+        ) {
+            Text(option.key == "y" ? "Yes" : option.key == "n" ? "No" : option.label)
+                .font(.caption.weight(.bold)).lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: 28)
+                .foregroundStyle(primary ? Color(red: 0x30 / 255, green: 0x34 / 255, blue: 0x38 / 255) : .white)
+                .background(primary ? Color.needsYou : Color.white.opacity(0.18), in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
