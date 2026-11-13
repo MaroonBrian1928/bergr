@@ -1,5 +1,7 @@
 # Reply suggestion experiment
 
+Historical initial spot checks; superseded by the [grounded evaluation](reply-suggestions-grounding.md).
+
 2026-11-12, local Apple Foundation Models on this Mac. Three synthetic coding
 conversations; these are prompt spot checks, not a quality benchmark.
 
@@ -26,10 +28,11 @@ The app requests two useful alternatives and keeps its existing behavior of
 showing no suggestions when the model is unavailable. It does not pad the list
 with generic fallback replies.
 
-Reproduce from the repository root with Apple Intelligence enabled:
+Run the current broader comparison from the repository root with Apple Intelligence enabled:
 
 ```sh
 swiftc -parse-as-library Shared/OnDeviceText.swift \
+  bergr/Intelligence/GuidedReplySuggestions.swift \
   bergr/Intelligence/ReplySuggestions.swift \
   scripts/experiment_reply_suggestions.swift -o /tmp/bergr-reply-experiment
 /tmp/bergr-reply-experiment

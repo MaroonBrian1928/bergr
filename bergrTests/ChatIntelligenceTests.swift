@@ -77,60 +77,103 @@ struct ToolOutputSummaryTests {
 
 @MainActor
 struct ReplySuggestionTests {
-    @Test func parsesOneChipPerLineTrimmed() {
-        let reply = """
-        - Run the tests
-        "Commit it"
-        Explain the change
-        Fourth one
-        """
-        #expect(ReplySuggestions.parse(reply) == ["Run the tests", "Commit it", "Explain the change"])
+    private func plan(_ status: ReplySuggestionStatus = .unfinished, evidence: String = "The export test still fails on UTC dates.",
+                      choices: [String] = [], reply: String = "Fix UTC date handling") -> ReplySuggestionPlan {
+        ReplySuggestionPlan(requestedWork: "Fix the export", status: status, evidence: evidence,
+                            choices: choices, nextReply: reply)
     }
 
-    @Test func dropsLongLinesAndDuplicates() {
+    private func encoded(_ plan: ReplySuggestionPlan) -> String {
+        String(decoding: try! JSONEncoder().encode(plan), as: UTF8.self)
+    }
+
+    @Test func parsesTrimmedLinesAndCapsAtTwo() {
+        #expect(ReplySuggestions.parse("- Run the tests\n\"Commit it\"\nExplain the change") == ["Run the tests", "Commit it"])
+    }
+
+    @Test func dropsLongLinesDuplicatesAndNoSuggestionSentinel() {
         let reply = """
-        This is a very long suggestion with too many words
+        This suggestion is far too long to fit into a useful reply chip
+        NONE
         Run the tests
         run the tests
         1. Commit it
         """
         #expect(ReplySuggestions.parse(reply) == ["Run the tests", "Commit it"])
-    }
-
-    @Test func emptyReplyGivesNoChips() {
         #expect(ReplySuggestions.parse("  \n \n").isEmpty)
     }
 
-    @Test func writesChipsForAFinishedMessageOnce() async {
-        let writer = FakeWriter(reply: "Run the tests\nCommit it")
+    @Test func completeWorkNeverProducesBusywork() {
+        let p = plan(.complete, evidence: "All tests pass.", reply: "Run the tests again")
+        #expect(ReplySuggestions.validated(p, text: "All tests pass.", userRequest: "Fix the export").isEmpty)
+    }
+
+    @Test func rejectsInventedEvidenceAndCompletedEvidence() {
+        #expect(ReplySuggestions.validated(plan(), text: "Everything is done.", userRequest: "Fix the export").isEmpty)
+        let p = plan(evidence: "The dashboard is complete and running locally.", reply: "Check the local build status")
+        #expect(ReplySuggestions.validated(p, text: p.evidence, userRequest: "Build locally; do not deploy.").isEmpty)
+    }
+
+    @Test func unfinishedWorkProducesOneActionNotTwoParaphrases() {
+        let p = plan(evidence: "The beta build is still processing.", reply: "Check beta processing status\nConfirm beta processing status")
+        #expect(ReplySuggestions.validated(p, text: p.evidence, userRequest: "Upload the beta") == ["Check beta processing status"])
+    }
+
+    @Test func offeredChoicesMustBeInTheActualQuestion() {
+        let p = plan(.question, evidence: "SQLite or Postgres?", choices: ["SQLite", "MongoDB"])
+        #expect(ReplySuggestions.validated(p, text: p.evidence, userRequest: "Add persistent storage") == ["SQLite"])
+    }
+
+    @Test func unrequestedPublishingAndCancellationAreRejected() {
+        let p = plan(evidence: "The release notes still need updating and committing.", reply: "Update release notes and commit them")
+        #expect(ReplySuggestions.validated(p, text: p.evidence, userRequest: "Update the release notes") == ["Update release notes"])
+        let onlyCommit = plan(evidence: p.evidence, reply: "Commit the release notes")
+        #expect(ReplySuggestions.validated(onlyCommit, text: onlyCommit.evidence, userRequest: "Update the release notes").isEmpty)
+        let cancel = plan(evidence: "The beta is still processing.", reply: "Cancel the beta upload")
+        #expect(ReplySuggestions.validated(cancel, text: cancel.evidence, userRequest: "Upload the beta").isEmpty)
+    }
+
+    @Test func explicitPermissionsAndNegativeConstraintsAreRespected() {
+        let p = plan(evidence: "The changes have not been committed or pushed.", reply: "Commit and push the changes")
+        #expect(ReplySuggestions.validated(p, text: p.evidence, userRequest: "Commit and push the changes") == [p.nextReply])
+        #expect(ReplySuggestions.validated(p, text: p.evidence, userRequest: "Do not commit or push").isEmpty)
+        #expect(ReplySuggestions.validated(p, text: p.evidence, userRequest: "Commit and push eventually. Do not commit or push yet.").isEmpty)
+        let deployment = plan(evidence: "Deployment is pending.", reply: "Deploy the dashboard")
+        #expect(ReplySuggestions.validated(deployment, text: deployment.evidence, userRequest: "Build locally. Don't deploy.").isEmpty)
+    }
+
+    @Test func writesChoicesForAFinishedMessageOnce() async {
+        let p = plan(.question, evidence: "SQLite or Postgres?", choices: ["SQLite", "Postgres"])
+        let writer = FakeWriter(reply: encoded(p))
         let suggestions = ReplySuggestions(writer: writer)
-        await suggestions.request(messageID: "m1", text: "All done.", working: false)
-        await suggestions.request(messageID: "m1", text: "All done.", working: false)
-        #expect(suggestions.chips["m1"] == ["Run the tests", "Commit it"])
+        for _ in 0..<2 {
+            await suggestions.request(messageID: "m1", text: p.evidence, working: false, userRequest: "Add persistent storage")
+        }
+        #expect(suggestions.chips["m1"] == ["SQLite", "Postgres"])
         #expect(await writer.calls == 1)
     }
 
-    @Test func listWriterPreservesAllSuggestions() {
-        let output = "Review the auth changes\nCheck callback edge cases"
-        #expect(FoundationModelsWriter.usable(output, preserveLines: true) == output)
-        #expect(FoundationModelsWriter.usable(output, preserveLines: false) == "Review the auth changes")
+    @Test func malformedModelOutputDoesNotBecomeAChip() async {
+        let suggestions = ReplySuggestions(writer: FakeWriter(reply: "Run notification tests\nTest notification delivery"))
+        await suggestions.request(messageID: "bad", text: "The beta is still processing.", working: false)
+        #expect(suggestions.chips["bad"] == nil)
     }
 
-    @Test func promptIncludesUserConstraintsAndLatestEnding() async {
-        let writer = FakeWriter(reply: "Review the auth changes\nCheck callback edge cases")
+    @Test func promptKeepsLatestUserGoalSeparateFromProgressAndPreservesAgentEnding() async {
+        let writer = FakeWriter(reply: nil)
         let suggestions = ReplySuggestions(writer: writer)
         await suggestions.request(messageID: "context", text: "Fixed the login loop.", working: false,
-                                  context: "User: Fix login; do not commit.")
+                                  context: String(repeating: "Agent: compiling\n", count: 300),
+                                  userRequest: "Fix login; do not commit.")
         let prompt = await writer.lastPrompt
-        #expect(prompt?.contains("do not commit") == true)
+        #expect(prompt?.contains("USER'S LATEST REQUEST:\nFix login; do not commit.") == true)
         #expect(prompt?.contains("Fixed the login loop") == true)
-        #expect(suggestions.chips["context"]?.count == 2)
         let long = String(repeating: "details ", count: 600) + "Which cache strategy do you prefer?"
         #expect(ReplySuggestions.prompt(text: long, context: "").contains("Which cache strategy do you prefer?"))
     }
 
     @Test func noChipsWhileTheAgentWorks() async {
-        let writer = FakeWriter(reply: "Run the tests")
+        let writer = FakeWriter(reply: nil)
         let suggestions = ReplySuggestions(writer: writer)
         await suggestions.request(messageID: "m1", text: "Working on it", working: true)
         #expect(suggestions.chips["m1"] == nil)

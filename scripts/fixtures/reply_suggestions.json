@@ -1,0 +1,100 @@
+[
+  {
+    "id": "release_pending",
+    "user": "Install the release, push the changes, and upload the beta. Earlier we removed an optional notification feature.",
+    "agent": "Done: Release 1.4 is installed on desktop and phone. Beta upload succeeded; the store is still processing it. Optional urgent notifications were removed. Release instructions updated. All changes pushed; CI passes. Privacy review and secret scans found no private data or secrets.",
+    "minReplies": 1,
+    "maxReplies": 1,
+    "required": [
+      "process|beta|store|ready|available"
+    ],
+    "forbidden": [
+      "notification|scan|commit|push|test|review"
+    ]
+  },
+  {
+    "id": "done",
+    "user": "Fix the login loop. Do not commit.",
+    "agent": "Fixed the login loop. All 18 auth tests pass. The changes are left uncommitted as requested. Nothing else is pending.",
+    "minReplies": 0,
+    "maxReplies": 0,
+    "required": [],
+    "forbidden": []
+  },
+  {
+    "id": "choices",
+    "user": "Reduce memory use.",
+    "agent": "We can stream the records or use smaller batches. Which approach would you prefer?",
+    "minReplies": 2,
+    "maxReplies": 2,
+    "required": [
+      "stream",
+      "batch"
+    ],
+    "forbidden": [
+      "test|review|commit"
+    ]
+  },
+  {
+    "id": "failure",
+    "user": "Add CSV export.",
+    "agent": "CSV export is implemented, but the export test still fails because dates use local time instead of UTC.",
+    "minReplies": 1,
+    "maxReplies": 1,
+    "required": [
+      "utc|timezone|date|time"
+    ],
+    "forbidden": [
+      "commit|deploy|pr|schema"
+    ]
+  },
+  {
+    "id": "pending_push",
+    "user": "Fix the bug, run tests, commit and push.",
+    "agent": "The bug is fixed and all tests pass. I have not committed or pushed the changes yet.",
+    "minReplies": 1,
+    "maxReplies": 1,
+    "required": [
+      "commit|push"
+    ],
+    "forbidden": [
+      "test|review|refactor"
+    ]
+  },
+  {
+    "id": "no_deploy",
+    "user": "Build the dashboard locally. Do not deploy anything.",
+    "agent": "The dashboard is complete, the local build passes, and I left it running locally. I can deploy it if you want.",
+    "minReplies": 0,
+    "maxReplies": 0,
+    "required": [],
+    "forbidden": []
+  },
+  {
+    "id": "two_tasks",
+    "user": "Fix the checkout bug and update the release notes.",
+    "agent": "The checkout fix passes its tests. The release notes still need updating, and the changes still need committing.",
+    "minReplies": 1,
+    "maxReplies": 1,
+    "required": [
+      "release|notes"
+    ],
+    "forbidden": [
+      "test|deploy|checkout|commit"
+    ]
+  },
+  {
+    "id": "question",
+    "user": "Add persistent storage.",
+    "agent": "Should I use SQLite or Postgres?",
+    "minReplies": 2,
+    "maxReplies": 2,
+    "required": [
+      "sqlite",
+      "postgres"
+    ],
+    "forbidden": [
+      "test|review|deploy"
+    ]
+  }
+]
