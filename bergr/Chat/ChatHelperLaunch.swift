@@ -30,11 +30,12 @@ enum ChatHelperLaunch {
 
     static func make(script: String, agent: String, pid: Int32, cwd: String,
                      sessionHint: String?, windows: Bool, expensive: Bool = false,
-                     cursor: Cursor? = nil, stage2: String? = nil) throws -> Plan {
+                     cursor: Cursor? = nil, stage2: String? = nil, once: Bool = false) throws -> Plan {
+        // `once` adds the helper's one-shot mode: print the latest usage event and exit.
         let payload = try JSONSerialization.data(withJSONObject: [
             "sha": sha256(script),
             "argv": ["agent-feed.py", agent, String(pid), cwd, sessionHint ?? "-", expensive ? "1" : "0",
-                     cursor?.session ?? "-", String(cursor?.offset ?? 0)],
+                     cursor?.session ?? "-", String(cursor?.offset ?? 0)] + (once ? ["once"] : []),
         ])
         let code = Data((stage2 ?? stage2Source ?? "").utf8)
         let line = "import base64,json;D=json.loads(base64.b64decode('\(payload.base64EncodedString())'));"

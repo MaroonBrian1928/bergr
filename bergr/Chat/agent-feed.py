@@ -28,7 +28,10 @@
 #   {"t":"usage","model":..,"effort":..,"used":<tokens>,"limit":<tokens>|null,
 #    "session":{"percent":..,"resets_at":<epoch s>}|null,"weekly":{..}|null,
 #    "observed_at":<original snapshot epoch s>|null}             context and plan usage
-# Usage: agent-feed.py <claude|codex|antigravity> <pid> <cwd> [session-id|-] [expensive 0|1] [cursor-session|-] [cursor-offset]
+# Usage: agent-feed.py <claude|codex|antigravity> <pid> <cwd> [session-id|-] [expensive 0|1] [cursor-session|-] [cursor-offset] [once]
+# With "once" as the 8th argument the helper follows nothing: it prints the newest usage event of the
+# agent's transcript (or {"t":"none"}) and exits. The Usage screen and the 80% alerts read agents
+# whose chat isn't open this way.
 # Bergr starts it through agent-stage2.py (cached by hash on the machine), including on Windows.
 # The session id comes from the agent's launch command (claude --resume <id>, codex resume <id>).
 # Read-only: it never writes to the agents' files.
@@ -52,7 +55,8 @@ try:
         CURSOR = (_arg(6), int(_arg(7, "0")))
 except ValueError:
     CURSOR = None
-PING_EVERY = 15  # seconds of silence before a keep-alive ping
+ONCE = _arg(8) == "once"
+PING_EVERY = 15 # seconds of silence before a keep-alive ping
 CURSOR_EVERY = 3
 MAX_IMAGE = 1_500_000  # decoded bytes
 HOME = os.path.expanduser("~")
@@ -1738,7 +1742,46 @@ def intro():
         refresh_models(force=True)
 
 
+def read_usage_once(source):
+    """The newest usage event in the tail of the agent's transcript, or None."""
+    if AGENT == "antigravity":
+        return antigravity_model()
+    path = source.locate()
+    if not path:
+        return None
+    for lines in (300, 4000):
+        tail = Tail(path)
+        try:
+            tail.start_backlog(lines)
+        except OSError:
+            return None
+        usage = None
+        for d in tail.lines():
+            try:
+                for ev in source.parse(d) or ():
+                    if ev.get("t") == "usage":
+                        usage = ev
+            except Exception:
+                continue
+        if usage:
+            return usage
+    return None
+
+
+def once():
+    try:
+        kinds = {"claude": Claude, "codex": Codex, "antigravity": Antigravity}
+        usage = read_usage_once(kinds[AGENT]()) if AGENT in kinds else None
+    except Exception:
+        usage = None
+    emit(usage or {"t": "none"})
+    flush()
+
+
 def main():
+    if ONCE:
+        once()
+        return
     threading.Thread(target=serve_requests, daemon=True).start()
     try:
         if AGENT == "claude":

@@ -28,6 +28,12 @@ struct UsageScreen: View {
             }
         }
         .formStyle(.grouped)
+        // Agents whose chat isn't open are read once from their transcripts, on opening and
+        // when the list of agents changes.
+        .task(id: UsageReadings.targets(hosts: hosts.hosts, sessions: sessions).map(\.id)) {
+            await UsageProbe.shared.refresh(UsageReadings.targets(hosts: hosts.hosts, sessions: sessions),
+                                            minAge: UsageProbe.screenAge)
+        }
         .navigationTitle("Usage")
         .inlineNavigationTitle()
         #if os(macOS)
@@ -51,7 +57,8 @@ struct UsageScreen: View {
                 Text("\(model) · context \(context)")
                     .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
             } else {
-                Text("Open the chat to read usage")
+                Text(reading.failed ? "Couldn't read usage"
+                     : reading.empty ? "No usage recorded yet" : "Reading usage…")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }

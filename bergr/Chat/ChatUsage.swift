@@ -1,6 +1,22 @@
 import SwiftUI
 
 extension ChatFeed.Usage {
+    /// A helper `usage` event (what `agent-feed.py` prints, followed or in its one-shot mode).
+    init?(event: [String: Any]) {
+        guard event["t"] as? String == "usage" else { return nil }
+        func window(_ value: Any?) -> Window? {
+            guard let w = value as? [String: Any], let percent = (w["percent"] as? NSNumber)?.doubleValue
+            else { return nil }
+            return Window(percent: percent,
+                          resetsAt: (w["resets_at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) })
+        }
+        self.init(
+            model: event["model"] as? String, effort: event["effort"] as? String, mode: event["mode"] as? String,
+            used: (event["used"] as? NSNumber)?.intValue ?? 0, limit: (event["limit"] as? NSNumber)?.intValue,
+            session: window(event["session"]), weekly: window(event["weekly"]),
+            observedAt: (event["observed_at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) })
+    }
+
     /// `claude-opus-5-5` → "Opus 5.5"; other names as they are.
     var modelName: String? {
         guard let model else { return nil }

@@ -135,10 +135,21 @@ struct UsageAlertsModifier: ViewModifier {
 struct UsageAlertsHost: View {
     let sessions: SessionStore
     @Environment(HostStore.self) private var hosts
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Color.clear
             .modifier(UsageAlertsModifier(readings: UsageReadings.readings(hosts: hosts.hosts, sessions: sessions)))
             .accessibilityHidden(true)
+            // While the app is active, read working agents without an open chat now and then; the
+            // probe itself keeps each agent to one read per five minutes.
+            .task(id: scenePhase == .active) {
+                guard scenePhase == .active else { return }
+                while !Task.isCancelled {
+                    await UsageProbe.shared.refresh(UsageReadings.targets(hosts: hosts.hosts, sessions: sessions),
+                                                    minAge: UsageProbe.pollInterval, onlyWorking: true)
+                    try? await Task.sleep(for: .seconds(30))
+                }
+            }
     }
 }

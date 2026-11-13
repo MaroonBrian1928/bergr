@@ -1017,5 +1017,51 @@ class LocalFeedStartup(Base):
                             and ev.get("model") == "test-model" for ev in events), stderr)
 
 
+class OneShotUsage(Base):
+    """argv "once": print the newest usage event of the transcript and exit."""
+
+    def run_once(self, agent, hint):
+        encoded = base64.b64encode(SOURCE.encode()).decode()
+        command = "import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))"
+        out = subprocess.run([sys.executable, "-I", "-c", command, encoded, agent, "0", "/work", hint, "0", "-", "0", "once"],
+                             env=dict(os.environ, HOME=self.home), capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
+        return [json.loads(line) for line in out.stdout.splitlines()], out.stderr
+
+    def test_claude_prints_the_latest_usage_and_exits(self):
+        def turn(n, used):
+            return {"type": "assistant", "uuid": f"a{n}", "sessionId": "sess1", "message": {
+                "model": "claude-opus-5-5", "content": [{"type": "text", "text": "hi"}],
+                "usage": {"input_tokens": used, "output_tokens": 10}}}
+        write_jsonl(os.path.join(self.home, ".claude", "projects", "-work", "sess1.jsonl"),
+                    [turn(1, 100), {"type": "user", "uuid": "u1", "message": {"content": "q"}}, turn(2, 5000)])
+        limits = os.path.join(self.home, ".cache", "herdr-chat", "claude-limits.json")
+        os.makedirs(os.path.dirname(limits))
+        json.dump({"limits": [{"minutes": 300, "used": 83.0, "resets": time.time() + 3600}]}, open(limits, "w"))
+        events, err = self.run_once("claude", "sess1")
+        self.assertEqual(len(events), 1, err)
+        self.assertEqual(events[0]["t"], "usage")
+        self.assertEqual(events[0]["used"], 5010)
+        self.assertEqual(events[0]["session"]["percent"], 83.0)
+
+    def test_codex_prints_usage_with_observed_time(self):
+        rollout = os.path.join(self.home, ".codex", "sessions", "2026", "11", "11", "rollout-test.jsonl")
+        write_jsonl(rollout, [
+            {"type": "session_meta", "payload": {"id": "test", "cwd": "/work", "source": "cli"}},
+            {"type": "turn_context", "payload": {"model": "gpt-x", "effort": "high"}},
+            {"type": "event_msg", "timestamp": "2026-11-11T10:00:00Z", "payload": {"type": "token_count", "info": {
+                "last_token_usage": {"total_tokens": 42}, "model_context_window": 1000},
+                "rate_limits": {"primary": {"used_percent": 91, "window_minutes": 300, "resets_at": 1900000000}}}},
+        ])
+        events, err = self.run_once("codex", "test")
+        self.assertEqual(len(events), 1, err)
+        self.assertEqual(events[0]["used"], 42)
+        self.assertEqual(events[0]["session"]["percent"], 91)
+        self.assertIsNotNone(events[0]["observed_at"])
+
+    def test_no_conversation_prints_none(self):
+        events, _ = self.run_once("claude", "missing")
+        self.assertEqual(events, [{"t": "none"}])
+
+
 if __name__ == "__main__":
     unittest.main()
