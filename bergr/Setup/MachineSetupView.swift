@@ -49,7 +49,9 @@ struct MachineSetupSection: View {
                 Section { summary }
             Section {
                 row(.core, symbol: "server.rack") { EmptyView() }
+                row(.git, symbol: "arrow.triangle.branch") { EmptyView() }
                 row(.python, symbol: "curlybraces") { EmptyView() }
+                if !setup.windows { row(.sleep, symbol: "moon.zzz") { EmptyView() } }
             } header: {
                 Text("Machine")
             }
@@ -78,7 +80,7 @@ struct MachineSetupSection: View {
 
     /// Everything the checks found, in one line at the top: the answer to "is this machine ready?".
     private var states: [CheckState] {
-        SetupItem.allCases.filter { $0 != .agents }.map { setup.states[$0] ?? .checking }
+        setup.items.map { setup.states[$0] ?? .checking }
             + AgentCLI.allCases.map { setup.agents[$0] ?? .checking }
     }
 
@@ -118,21 +120,45 @@ struct MachineSetupSection: View {
 
     private func row<Action: View>(_ item: SetupItem, symbol: String, @ViewBuilder action: () -> Action) -> some View {
         let state = setup.states[item] ?? .checking
-        return SetupRow(symbol: symbol, title: item.title, detail: Self.text(for: state)) {
+        let fix = setup.fix(for: item)
+        return SetupRow(symbol: symbol, title: item.title, detail: Self.text(for: state),
+                        command: fix?.command, hint: fix.map { _ in terminalHint }) {
             Self.icon(state)
+            if let fix { copyButton(item.title, id: item.rawValue, text: fix.command) }
             action()
         }
         .accessibilityIdentifier("setup-\(item.rawValue)")
     }
 
+    private var terminalHint: String { "Run this in a terminal on \(session.host.name)." }
+
     private func agentRow(_ agent: AgentCLI) -> some View {
         let state = setup.agents[agent] ?? .checking
-        let command = agent.installCommand(windows: setup.windows)
-        let missing: Bool = if case .missing = state { true } else { false }
+        let fix = setup.fix(for: agent)
+        let repair = setup.repair.states[MachineSetup.repairID(agent)]
+        let running = repair == .running
+        var failure: String?
+        if case .failed(let text) = repair { failure = text }
+        let hint: String? = if running { "Installing. This can take a minute." }
+            else if failure != nil { fix?.runnable == true ? "Didn't finish. You can run it yourself, or copy it." : nil }
+            else if let fix, !fix.runnable { terminalHint }
+            else { nil }
         return SetupRow(symbol: "sparkles", title: agent.title, detail: Self.text(for: state),
-                        command: missing ? command : nil) {
+                        command: fix?.command, hint: hint, output: failure) {
             Self.icon(state)
-            if missing, let command { copyButton(agent.title, id: agent.rawValue, text: command) }
+            if let fix {
+                if running {
+                    ProgressView()
+                } else {
+                    if fix.runnable {
+                        Button("Run") { Task { await setup.install(agent) } }
+                            .buttonStyle(.bordered)
+                            .disabled(session.state != .connected)
+                            .accessibilityLabel("Install \(agent.title)")
+                    }
+                    copyButton(agent.title, id: agent.rawValue, text: fix.command)
+                }
+            }
         }
     }
 
@@ -189,7 +215,7 @@ struct MachineSetupSection: View {
     private static func text(for state: CheckState) -> String {
         switch state {
         case .checking: "Checking…"
-        case .ready(let detail), .missing(let detail), .outdated(let detail): detail
+        case .ready(let detail), .missing(let detail), .outdated(let detail), .warning(let detail): detail
         case .failed(let reason): "Couldn't check: \(reason)"
         }
     }
@@ -205,6 +231,8 @@ struct MachineSetupSection: View {
             Image(systemName: "circle").foregroundStyle(.secondary)
         case .outdated:
             Image(systemName: "arrow.up.circle.fill").foregroundStyle(.orange)
+        case .warning:
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
         }
@@ -218,6 +246,10 @@ private struct SetupRow<Trailing: View>: View {
     let title: String
     let detail: String
     var command: String? = nil
+    /// A line under the command: why it's there, or what to do with it.
+    var hint: String? = nil
+    /// The tail of a command's output after a failed run.
+    var output: String? = nil
     @ViewBuilder let trailing: Trailing
 
     var body: some View {
@@ -239,6 +271,16 @@ private struct SetupRow<Trailing: View>: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 6).padding(.vertical, 3)
                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+                        .textSelection(.enabled)
+                }
+                if let hint {
+                    Text(hint).font(.footnote).foregroundStyle(.secondary)
+                }
+                if let output {
+                    Text(output)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.red)
+                        .lineLimit(8)
                         .textSelection(.enabled)
                 }
             }

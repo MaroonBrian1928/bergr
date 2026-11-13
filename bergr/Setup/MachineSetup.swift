@@ -8,6 +8,10 @@ final class MachineSetup {
     private(set) var agents: [AgentCLI: CheckState] = [:]
     private(set) var busy: SetupItem?
     private(set) var actionError: String?
+    /// The Run buttons' progress and failures, by `repairID`.
+    let repair = SetupRepair()
+    /// The machine's OS, once a check has seen it.
+    private(set) var hostOS: SetupCheck.HostOS?
 
     init(session: HostSession) {
         self.session = session
@@ -15,10 +19,18 @@ final class MachineSetup {
 
     var windows: Bool { session.isWindowsHost }
 
+    /// The rows that apply to this machine, in order (sleep is not checked on Windows).
+    var items: [SetupItem] { SetupItem.allCases.filter { $0 != .agents && !($0 == .sleep && windows) } }
+
+    static func repairID(_ agent: AgentCLI) -> String { "agent.\(agent.rawValue)" }
+
     func check() async {
         guard session.state == .connected else { return }
-        states[.core] = .ready(session.coreVersion.map { "version \($0)" } ?? "running")
+        if windows { hostOS = .windows }
+        states[.core] = SetupCheck.coreState(version: session.coreVersion)
+        states[.git] = await gitState()
         states[.python] = await pythonState()
+        if !windows { states[.sleep] = await sleepState() }
         for agent in AgentCLI.allCases { agents[agent] = await agentState(agent) }
         states[.push] = await pushState()
         states[.statusLine] = await statusLineState()
@@ -41,10 +53,42 @@ final class MachineSetup {
                 actionError = error.localizedDescription
             }
             states[.statusLine] = await statusLineState()
-        case .core, .python, .agents:
+        case .core, .git, .python, .sleep, .agents:
             break
         }
         busy = nil
+    }
+
+    // MARK: Fixes
+
+    /// What fixes this item or agent, if Bergr knows: a command to run, or one to copy.
+    func fix(for item: SetupItem) -> SetupFix? {
+        switch (item, states[item]) {
+        case (.git, .missing?): SetupCheck.gitFix(os: hostOS)
+        case (.sleep, .warning?): SetupCheck.sleepFix(os: hostOS)
+        default: nil
+        }
+    }
+
+    func fix(for agent: AgentCLI) -> SetupFix? {
+        switch agents[agent] {
+        case .missing?: SetupCheck.installFix(agent, windows: windows)
+        case .warning?: SetupCheck.signInHint(agent).map { SetupFix(command: $0, runnable: false) }
+        default: nil
+        }
+    }
+
+    /// Installs an agent over the command channel, then checks it again.
+    func install(_ agent: AgentCLI) async {
+        guard session.state == .connected, let fix = SetupCheck.installFix(agent, windows: windows), fix.runnable else { return }
+        await repair.run(Self.repairID(agent), fix: fix,
+                         execute: { try await self.session.commandOutput($0, timeout: .seconds(300)) },
+                         recheck: {
+            let state = await self.agentState(agent)
+            self.agents[agent] = state
+            if case .missing = state { return false }
+            return true
+        })
     }
 
     // MARK: Checks
@@ -74,7 +118,35 @@ final class MachineSetup {
             let output = try await run(SetupCheck.agentCommand(agent, windows: windows))
             let found = SetupCheck.parseAgent(output)
             guard found.installed else { return .missing("Not installed") }
-            return .ready(found.version ?? "installed")
+            let version = found.version ?? "installed"
+            // A failed probe leaves the agent as installed: only a clear "not signed in" warns.
+            if let command = SetupCheck.signInCommand(agent, windows: windows),
+               let probe = try? await run(command),
+               SetupCheck.parseSignedIn(agent, output: probe) == false {
+                return .warning("\(version). Not signed in. Run `\(SetupCheck.signInHint(agent) ?? agent.commands[0])` in a terminal on \(session.host.name).")
+            }
+            return .ready(version)
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    private func gitState() async -> CheckState {
+        do {
+            let output = try await run(SetupCheck.gitCommand(windows: windows))
+            if !windows { hostOS = SetupCheck.parseOS(output) ?? hostOS }
+            if let version = SetupCheck.parseGit(output) { return .ready("git \(version)") }
+            return .missing("Not installed. Changes needs it.")
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    private func sleepState() async -> CheckState {
+        do {
+            let output = try await run(SetupCheck.sleepCommand())
+            if output.hasPrefix("darwin") { hostOS = .mac } else if output.hasPrefix("linux") { hostOS = .linux }
+            return SetupCheck.sleepState(SetupCheck.parseSleep(output))
         } catch {
             return .failed(error.localizedDescription)
         }
