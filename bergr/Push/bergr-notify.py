@@ -28,7 +28,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 14
+VERSION = 15
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 
 
@@ -120,6 +120,185 @@ def dangerous_reason(text):
         if regex.search(text or ""):
             return reason
     return None
+
+
+# "Always allow" rules (v15): a phone registers device["rules"], each {machine, cwd, agent, command,
+# prefix}. Mirrors bergr/Approvals/ApprovalRule.swift; both follow bergrTests/approval-rule-cases.json.
+METACHARACTERS = set(";&|$`><\n\r")
+_BORDERS = set("│┃║╭╮╰╯┌┐└┘─━═┆┊╎|")
+_MARKERS = set("❯›>▶►→➤▸")
+
+
+def command_eligible(command):
+    """A plain command a rule may cover: no shell metacharacters, not dangerous."""
+    return (isinstance(command, str) and command != "" and not (set(command) & METACHARACTERS)
+            and dangerous_reason(command) is None)
+
+
+def rule_matches(rule, machine, cwd, agent, command):
+    """Exact command, or the rule's prefix followed by the end or a space; same machine, folder, agent."""
+    if not isinstance(rule, dict):
+        return False
+    r_cmd, r_machine, r_cwd, r_agent = (rule.get(k) for k in ("command", "machine", "cwd", "agent"))
+    if not all(isinstance(v, str) for v in (r_machine, r_cwd, r_agent)) or not r_machine or not r_cwd:
+        return False
+    if r_machine != machine or r_cwd != cwd or r_agent != agent:
+        return False
+    if not command_eligible(r_cmd) or not command_eligible(command):
+        return False
+    if command == r_cmd:
+        return True
+    return rule.get("prefix") is True and command.startswith(r_cmd + " ")
+
+
+def _clean(line):
+    i, j = 0, len(line)
+    while i < j and (line[i].isspace() or line[i] in _BORDERS):
+        i += 1
+    while j > i and (line[j - 1].isspace() or line[j - 1] in _BORDERS):
+        j -= 1
+    return line[i:j]
+
+
+def _option(text):
+    selected = False
+    if text[:1] in _MARKERS and text:
+        selected = True
+        text = text[1:].lstrip(" ")
+    m = re.match(r"([0-9]{1,2})\. (.*)$", text, re.S)
+    if not m:
+        return None
+    label = m.group(2).strip(" \t")
+    return (int(m.group(1)), label, selected) if label else None
+
+
+def prompt_command(lines, cols, agent):
+    """The command of Claude Code's Bash permission prompt at the bottom of the screen, when the screen
+    is exactly that prompt with the cursor on "1. Yes"; None whenever unsure."""
+    if agent != "claude-code" or not isinstance(cols, int):
+        return None
+    lines = [_clean(l) for l in lines]
+    while lines and (lines[-1] == "" or lines[-1].startswith("Esc to cancel")):
+        lines.pop()
+    menu = []
+    while lines and _option(lines[-1]):
+        menu.insert(0, _option(lines.pop()))
+    if (len(menu) < 2 or any(o[0] != i + 1 for i, o in enumerate(menu)) or menu[0][1] != "Yes"
+            or not menu[0][2] or any(o[2] for o in menu[1:])):
+        return None
+    if not lines or lines.pop() != "Do you want to proceed?":
+        return None
+    while lines and lines[-1] == "":
+        lines.pop()
+    content = []
+    while lines and lines[-1] != "" and lines[-1] != "Bash command":
+        content.insert(0, lines.pop())
+    while lines and lines[-1] == "":
+        lines.pop()
+    if not lines or lines[-1] != "Bash command" or not 1 <= len(content) <= 2:
+        return None
+    command = content[0]
+    # A line this long may have wrapped: the second line could be the rest of the command.
+    if len(command) + 8 > cols or not command_eligible(command):
+        return None
+    return command
+
+
+def device_rules(cfg):
+    """(machine id, rule) for every rule a device registered for this machine."""
+    out = []
+    for d in cfg.get("devices") or []:
+        if isinstance(d, dict) and isinstance(d.get("host_id"), str) and isinstance(d.get("rules"), list):
+            out += [(d["host_id"], r) for r in d["rules"] if isinstance(r, dict)]
+    return out
+
+
+def _hc_json(args, runner):
+    out = runner(["hc"] + args + ["--json"])
+    value = json.loads(out) if out else None
+    return value if isinstance(value, dict) else None
+
+
+def _hc_run(args):
+    res = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+    if res.returncode != 0:
+        raise RuntimeError(f"{' '.join(args[:2])} exited with {res.returncode}")
+    return res.stdout
+
+
+def _screen_command(address, runner):
+    """(command, record) of a local terminal blocked on a Bash prompt, or (None, record)."""
+    term = _hc_json(["get", address], runner)
+    if not term:
+        return None, None
+    status = term.get("status") if isinstance(term.get("status"), dict) else {}
+    if status.get("state") != "blocked" or status.get("kind") not in (None, "permission"):
+        return None, term
+    screen = _hc_json(["read", address], runner)
+    if not screen or not isinstance(screen.get("text"), str):
+        return None, term
+    return prompt_command(screen["text"].split("\n"), term.get("cols"), status.get("app")), term
+
+
+def auto_answer(cfg, address, runner=_hc_run):
+    """Answers Yes for a blocked local terminal when a registered rule covers its command exactly as on
+    screen. Returns (command, rule, record) when it pressed Enter, else None. Never for another machine's
+    terminal (an address with "/"), a dangerous command, or a prompt it can't read with certainty."""
+    rules = device_rules(cfg)
+    if not rules or not isinstance(address, str) or not address or "/" in address:
+        return None
+    try:
+        command, term = _screen_command(address, runner)
+        if not command:
+            return None
+        status = term.get("status") or {}
+        fg = term.get("foreground") if isinstance(term.get("foreground"), dict) else {}
+        cwd = _text(fg.get("cwd")) or _text(term.get("cwd"))
+        agent = _text(status.get("app"))
+        rule = next((r for machine, r in rules if rule_matches(r, machine, cwd, agent, command)), None)
+        if rule is None:
+            return None
+        # Read once more just before pressing: still the same command, still the same folder.
+        again, term2 = _screen_command(address, runner)
+        fg2 = (term2 or {}).get("foreground") if isinstance((term2 or {}).get("foreground"), dict) else {}
+        if again != command or (_text(fg2.get("cwd")) or _text((term2 or {}).get("cwd"))) != cwd:
+            return None
+        runner(["hc", "keys", address, "enter"])
+        return command, rule, term
+    except Exception as e:
+        log(f"auto-answer check failed for {address}: {e}")
+        return None
+
+
+AUTO_LOG_LIMIT = 200
+
+
+def record_auto_answer(path, command, rule, term, now=None):
+    """Appends to auto-approvals.json (next to push.json), which the app reads into its approvals log."""
+    import uuid
+    try:
+        with open(path) as f:
+            entries = json.load(f)
+        if not isinstance(entries, list):
+            entries = []
+    except (OSError, ValueError):
+        entries = []
+    entries.append({"id": str(uuid.uuid4()).upper(), "at": time.time() if now is None else now, "command": command,
+                    "machine": rule.get("machine"), "cwd": rule.get("cwd"), "agent": rule.get("agent"),
+                    "address": term.get("address") if isinstance(term, dict) else None})
+    entries = entries[-AUTO_LOG_LIMIT:]
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(entries, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        log(f"could not save auto-approvals: {e}")
+    return entries
+
+
+def auto_log_path(config_path=None):
+    return os.path.join(os.path.dirname(config_path or default_config_path()), "auto-approvals.json")
 
 
 def last_sentences(text, count=2):
@@ -840,6 +1019,15 @@ def run():
                     if not alerts:
                         continue
                     for a in alerts:
+                        done = auto_answer(cfg, a["address"]) if a["state"] == "blocked" else None
+                        if done:
+                            command, rule, term = done
+                            log(f"auto-approved {command!r} for {a['address']}")
+                            record_auto_answer(auto_log_path(), command, rule, term)
+                            # Quiet (passive, like a finished agent): nothing to do.
+                            send_alert(cfg, f"Auto-approved `{command}` on {host}", a["body"], a["address"], host,
+                                       jwt_cache, on_reply=poster.learn, state="done")
+                            continue
                         log(f"alert for {a['address']}: {a['title']}")
                         send_alert(cfg, a["title"], a["body"], a["address"], host, jwt_cache,
                                    on_reply=poster.learn, state=a["state"], q=a.get("q"))

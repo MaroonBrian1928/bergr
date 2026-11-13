@@ -200,7 +200,7 @@ final class PushRegistration {
 
     private func observe() {
         let current = withObservationTracking {
-            (enabled, deviceToken, alerts, prefs, (sessions?.ids ?? []).compactMap { id in
+            (enabled, deviceToken, alerts, prefs, ApprovalRuleStore.shared.rules, (sessions?.ids ?? []).compactMap { id in
                 sessions?.existing(id).map { ($0, $0.state == .connected && $0.canRunCommands) }
             })
         } onChange: { [weak self] in
@@ -209,16 +209,18 @@ final class PushRegistration {
         guard let token = current.1 else { return }
         let alerts = current.2
         let prefs = current.3
-        for (session, ready) in current.4 where ready {
+        let rules = current.4
+        for (session, ready) in current.5 where ready {
             let id = session.host.id
             let identity = ObjectIdentifier(session)
-            let state = "\(token)|\(current.0)|\(alerts)|\(TimeZone.current.identifier)|\(prefs.fingerprint(host: id))"
+            let state = "\(token)|\(current.0)|\(alerts)|\(TimeZone.current.identifier)|\(prefs.fingerprint(host: id))|\(Self.rulesFingerprint(rules, host: id))"
             if let last = written[id], last.session == identity, last.state == state { continue }
             // Removing needs no secret (the payload only uses the device id), so it still works
             // after the relay secret was forgotten.
             guard let secret = relaySecret ?? (current.0 ? nil : "") else { continue }
             written[id] = (identity, state)
-            let command = Self.command(token: token, secret: secret, enabled: current.0, alerts: alerts, host: id, prefs: prefs)
+            let command = Self.command(token: token, secret: secret, enabled: current.0, alerts: alerts, host: id, prefs: prefs,
+                                       rules: rules)
             let enabled = current.0
             Task { @MainActor [weak self] in
                 if enabled, let reason = await Self.probe(session) {
@@ -230,7 +232,10 @@ final class PushRegistration {
                     if enabled { self?.helperState[id] = .failed("couldn't save this phone on the machine (is python3 there?)") }
                     return
                 }
-                if enabled { await self?.checkHelper(on: session) } else { await self?.removeHelper(on: session) }
+                if enabled {
+                    await self?.checkHelper(on: session)
+                    await Self.importAutoApprovals(on: session)
+                } else { await self?.removeHelper(on: session) }
             }
         }
     }
@@ -445,7 +450,8 @@ final class PushRegistration {
     /// What goes in the payload for this device: the relay and its secret, not the APNs token.
     nonisolated static func payload(token: String, secret: String, enabled: Bool, alerts: Bool = true,
                                     relay: URL = relayURL, name: String, key: Data? = PushAlertKey.current(),
-                                    host: UUID? = nil, prefs: NotificationPrefs? = nil) -> Data {
+                                    host: UUID? = nil, prefs: NotificationPrefs? = nil,
+                                    rules: [ApprovalRule]? = nil) -> Data {
         var device: [String: Any] = ["id": deviceID(token: token), "relay": relay.absoluteString,
                                      "secret": secret, "name": name]
         // Bergr's id for this machine, sent back with each alert so a tap opens this machine.
@@ -455,15 +461,32 @@ final class PushRegistration {
         if !alerts { device["alerts"] = false }
         // Kinds, muted agents, quiet hours (v13 on); older helpers ignore the field.
         if let prefs { device["prefs"] = prefs.payload(host: host) }
+        // "Always allow" rules for this machine (v15 on); older helpers ignore the field.
+        if let rules { device["rules"] = ApprovalRuleStore.payload(rules, host: host) }
         let object: [String: Any] = ["op": enabled ? "add" : "remove", "device": device]
         return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
     }
 
     /// Script and payload both travel base64-encoded, so no shell quoting can break them.
     static func command(token: String, secret: String, enabled: Bool, alerts: Bool = true, host: UUID? = nil,
-                        prefs: NotificationPrefs? = nil) -> String {
+                        prefs: NotificationPrefs? = nil, rules: [ApprovalRule]? = nil) -> String {
         command(payload: payload(token: token, secret: secret, enabled: enabled, alerts: alerts,
-                                 name: DeviceName.current, host: host, prefs: prefs))
+                                 name: DeviceName.current, host: host, prefs: prefs, rules: rules))
+    }
+
+    nonisolated static func rulesFingerprint(_ rules: [ApprovalRule], host: UUID) -> String {
+        let data = try? JSONSerialization.data(
+            withJSONObject: ApprovalRuleStore.payload(rules, host: host), options: [.sortedKeys])
+        return data.map { String(decoding: $0, as: UTF8.self) } ?? ""
+    }
+
+    /// Brings the helper's auto-answers on this machine into the approvals log.
+    private static func importAutoApprovals(on session: HostSession) async {
+        guard let text = await output(AutoApprovalImport.readCommand, on: session), !text.isEmpty else { return }
+        let host = session.host
+        let entries = AutoApprovalImport.entries(
+            from: text, machine: host.name.isEmpty ? host.target.host : host.name, existing: ApprovalLog.load())
+        ApprovalLog.merge(entries)
     }
 
     nonisolated static func command(payload: Data) -> String {

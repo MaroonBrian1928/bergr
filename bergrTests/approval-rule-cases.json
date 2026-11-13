@@ -1,0 +1,83 @@
+{
+  "comment": "Shared by bergrTests/ApprovalRuleTests.swift and scripts/test_bergr_notify.py: the Swift and Python matchers must agree.",
+  "context": {"machine": "M1", "cwd": "/home/u/app", "agent": "claude-code"},
+  "match": [
+    {"rule": "npm test", "prefix": false, "command": "npm test", "expect": true},
+    {"rule": "npm test", "prefix": false, "command": "npm test -- --watch", "expect": false},
+    {"rule": "npm test", "prefix": false, "command": "npm test ", "expect": false},
+    {"rule": "npm test", "prefix": false, "command": "NPM TEST", "expect": false},
+    {"rule": "npm test", "prefix": true, "command": "npm test", "expect": true},
+    {"rule": "npm test", "prefix": true, "command": "npm test -- --watch", "expect": true},
+    {"rule": "npm test", "prefix": true, "command": "npm testing", "expect": false},
+    {"rule": "npm test", "prefix": true, "command": "npm test\t-x", "expect": false},
+    {"rule": "npm test", "prefix": true, "command": "npm test; rm x", "expect": false},
+    {"rule": "npm test", "prefix": true, "command": "npm test && curl x", "expect": false},
+    {"rule": "npm test", "prefix": true, "command": "npm test & x", "expect": false},
+    {"rule": "npm test", "prefix": true, "command": "npm test | sh", "expect": false},
+    {"rule": "npm test", "prefix": true, "command": "npm test $(whoami)", "expect": false},
+    {"rule": "npm test", "prefix": true, "command": "npm test `whoami`", "expect": false},
+    {"rule": "npm test", "prefix": true, "command": "npm test > out", "expect": false},
+    {"rule": "npm test", "prefix": true, "command": "npm test < in", "expect": false},
+    {"rule": "npm test", "prefix": true, "command": "npm test\nrm x", "expect": false},
+    {"rule": "npm test", "prefix": true, "command": "npm test\rrm x", "expect": false},
+    {"rule": "git", "prefix": true, "command": "git status", "expect": true},
+    {"rule": "git", "prefix": true, "command": "git reset --hard HEAD", "expect": false},
+    {"rule": "git", "prefix": true, "command": "git push --force", "expect": false},
+    {"rule": "rm", "prefix": true, "command": "rm -rf build", "expect": false},
+    {"rule": "chmod", "prefix": true, "command": "chmod -R 777 x", "expect": false},
+    {"rule": "", "prefix": true, "command": "ls", "expect": false},
+    {"rule": "", "prefix": false, "command": "", "expect": false},
+    {"rule": "ls;", "prefix": true, "command": "ls; x", "expect": false},
+    {"rule": "git status", "prefix": false, "command": "git status", "machine": "M2", "expect": false},
+    {"rule": "git status", "prefix": false, "command": "git status", "cwd": "/home/u/app/", "expect": false},
+    {"rule": "git status", "prefix": false, "command": "git status", "cwd": "/home/u", "expect": false},
+    {"rule": "git status", "prefix": false, "command": "git status", "agent": "codex", "expect": false}
+  ],
+  "prompt": [
+    {"name": "claude bash prompt in a box", "agent": "claude-code", "cols": 80, "expect": "npm test", "lines": [
+      "╭──────────────────────────────────────────────────────────────────────────────╮",
+      "│ Bash command                                                                 │",
+      "│                                                                              │",
+      "│   npm test                                                                   │",
+      "│   Run the tests                                                              │",
+      "│                                                                              │",
+      "│ Do you want to proceed?                                                      │",
+      "│ ❯ 1. Yes                                                                     │",
+      "│   2. Yes, and don't ask again for npm test commands in /home/u/app           │",
+      "│   3. No, and tell Claude what to do differently (esc)                        │",
+      "╰──────────────────────────────────────────────────────────────────────────────╯"]},
+    {"name": "no box, no description, footer", "agent": "claude-code", "cols": 80, "expect": "git status", "lines": [
+      "> earlier text",
+      "────────────────────────────────────────────────────────────────────────────────",
+      " Bash command",
+      "",
+      "   git status",
+      "",
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No, and tell Claude what to do differently (esc)",
+      "",
+      " Esc to cancel · Tab to add additional instructions",
+      ""]},
+    {"name": "codex is not parsed", "agent": "codex", "cols": 80, "expect": null, "lines": [
+      " Bash command", "", "   git status", "", " Do you want to proceed?", " ❯ 1. Yes", "   2. No"]},
+    {"name": "three lines is ambiguous", "agent": "claude-code", "cols": 80, "expect": null, "lines": [
+      " Bash command", "", "   npm test", "   -- --watch", "   Run the tests", "", " Do you want to proceed?", " ❯ 1. Yes", "   2. No"]},
+    {"name": "long line may be wrapped", "agent": "claude-code", "cols": 40, "expect": null, "lines": [
+      " Bash command", "", "   npm run build-and-test-everything-now", "   now", "", " Do you want to proceed?", " ❯ 1. Yes", "   2. No"]},
+    {"name": "cursor not on Yes", "agent": "claude-code", "cols": 80, "expect": null, "lines": [
+      " Bash command", "", "   npm test", "", " Do you want to proceed?", "   1. Yes", " ❯ 2. No"]},
+    {"name": "edit prompt is not a command", "agent": "claude-code", "cols": 80, "expect": null, "lines": [
+      " Edit file", "", "   /etc/hosts", "", " Do you want to make this edit to hosts?", " ❯ 1. Yes", "   2. No"]},
+    {"name": "first option is not plain Yes", "agent": "claude-code", "cols": 80, "expect": null, "lines": [
+      " Bash command", "", "   npm test", "", " Do you want to proceed?", " ❯ 1. Yes, and don't ask again", "   2. No"]},
+    {"name": "other text under the menu", "agent": "claude-code", "cols": 80, "expect": null, "lines": [
+      " Bash command", "", "   npm test", "", " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", " something else"]},
+    {"name": "question differs", "agent": "claude-code", "cols": 80, "expect": null, "lines": [
+      " Bash command", "", "   npm test", "", " Do you want to delete everything?", " ❯ 1. Yes", "   2. No"]},
+    {"name": "no header", "agent": "claude-code", "cols": 80, "expect": null, "lines": [
+      "   npm test", "", " Do you want to proceed?", " ❯ 1. Yes", "   2. No"]},
+    {"name": "only one option", "agent": "claude-code", "cols": 80, "expect": null, "lines": [
+      " Bash command", "", "   npm test", "", " Do you want to proceed?", " ❯ 1. Yes"]}
+  ]
+}

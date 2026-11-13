@@ -820,5 +820,88 @@ class HealthAlertTests(unittest.TestCase):
         self.assertGreaterEqual(notify.VERSION, 14)
 
 
+CASES = json.load(open(os.path.join(HERE, "..", "bergrTests", "approval-rule-cases.json"), encoding="utf-8"))
+PROMPT = CASES["prompt"][0]["lines"]
+
+
+class ApprovalRuleTests(unittest.TestCase):
+    """The same cases as bergrTests/ApprovalRuleTests.swift."""
+
+    def test_shared_match_cases(self):
+        ctx = CASES["context"]
+        for c in CASES["match"]:
+            rule = {"machine": ctx["machine"], "cwd": ctx["cwd"], "agent": ctx["agent"],
+                    "command": c["rule"], "prefix": c["prefix"]}
+            got = notify.rule_matches(rule, c.get("machine", ctx["machine"]), c.get("cwd", ctx["cwd"]),
+                                      c.get("agent", ctx["agent"]), c["command"])
+            self.assertEqual(got, c["expect"], c)
+
+    def test_shared_prompt_cases(self):
+        for c in CASES["prompt"]:
+            self.assertEqual(notify.prompt_command(c["lines"], c["cols"], c["agent"]), c["expect"], c["name"])
+
+    def test_malformed_rules_never_match(self):
+        for rule in (None, [], {}, {"machine": "M1", "cwd": "/a", "agent": "claude-code", "command": "ls", "prefix": "yes"}):
+            self.assertFalse(notify.rule_matches(rule, "M1", "/a", "claude-code", "ls -l"))
+
+    def _runner(self, screens, cwd="/home/u/app", kind="permission"):
+        screens = list(screens)
+        def run(args):
+            if args[1] == "get":
+                return json.dumps({"address": "t1", "cols": 80, "cwd": "/home/u", "foreground": {"cwd": cwd},
+                                   "status": {"app": "claude-code", "state": "blocked", "kind": kind}})
+            if args[1] == "read":
+                return json.dumps({"text": "\n".join(screens.pop(0) if len(screens) > 1 else screens[0])})
+            return ""
+        return run
+
+    def _cfg(self, command="npm test", prefix=False):
+        rule = {"machine": "M1", "cwd": "/home/u/app", "agent": "claude-code", "command": command, "prefix": prefix}
+        return {"devices": [{"id": "d", "relay": "https://r", "secret": "s", "host_id": "M1", "rules": [rule]}]}
+
+    def _spy(self, runner, calls):
+        def spy(args):
+            calls.append(args)
+            return runner(args)
+        return spy
+
+    def test_auto_answer_presses_enter_when_a_rule_covers_it(self):
+        calls = []
+        done = notify.auto_answer(self._cfg(), "t1", self._spy(self._runner([PROMPT]), calls))
+        self.assertEqual(done[0], "npm test")
+        self.assertEqual(calls[-1], ["hc", "keys", "t1", "enter"])
+        calls = []
+        self.assertIsNotNone(notify.auto_answer(self._cfg("npm", prefix=True), "t1", self._spy(self._runner([PROMPT]), calls)))
+
+    def test_auto_answer_refuses(self):
+        changed = [l.replace("npm test   ", "npm tests  ") for l in PROMPT]
+        other_machine = {"devices": [{"id": "d", "host_id": "M2", "rules": self._cfg()["devices"][0]["rules"]}]}
+        cases = [
+            (self._cfg("npm"), "t1", self._runner([PROMPT])),                      # exact rule, other command
+            (self._cfg(), "popos/t1", self._runner([PROMPT])),                     # another machine's terminal
+            (self._cfg(), "t1", self._runner([PROMPT], cwd="/home/u/other")),      # other folder
+            (self._cfg(), "t1", self._runner([PROMPT], kind="question")),          # not a permission prompt
+            (self._cfg(), "t1", self._runner([PROMPT, changed])),                  # changed before pressing
+            (other_machine, "t1", self._runner([PROMPT])),                         # rule for another machine
+            ({"devices": []}, "t1", self._runner([PROMPT])),
+        ]
+        for i, (cfg, address, runner) in enumerate(cases):
+            calls = []
+            self.assertIsNone(notify.auto_answer(cfg, address, self._spy(runner, calls)), i)
+            self.assertNotIn("keys", [a[1] for a in calls], i)
+
+    def test_auto_answer_is_logged(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "auto-approvals.json")
+            rule = self._cfg()["devices"][0]["rules"][0]
+            notify.record_auto_answer(path, "npm test", rule, {"address": "t1"}, now=5)
+            entries = notify.record_auto_answer(path, "npm test", rule, {"address": "t1"}, now=6)
+            self.assertEqual([e["at"] for e in entries], [5, 6])
+            self.assertEqual(entries[0]["cwd"], "/home/u/app")
+
+    def test_version_bumped_for_rules(self):
+        self.assertGreaterEqual(notify.VERSION, 15)
+
+
 if __name__ == "__main__":
     unittest.main()

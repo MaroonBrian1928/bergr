@@ -729,12 +729,20 @@ struct ChatView: View {
                 // Not while a question card is open: the cards answer it, and the screen-guessed
                 // buttons (Yes, No, Return, Esc) only showed without the question.
                 Isolated {
+                    let scope = session.map {
+                        ApprovalScope(machine: $0.host.id.uuidString, machineName: $0.host.name,
+                                      cwd: terminal.foreground?.cwd ?? terminal.cwd,
+                                      agent: terminal.status?.app ?? terminal.displayName)
+                    }
                     AnswerSlot(terminal: terminal, model: model, blocked: state == "blocked" && !questionOpen, palette: palette,
-                               transition: arrival) { question, answer in
+                               transition: arrival, scope: scope) { question, answer in
                         feed.recordDecision(question: question, answer: answer)
                         ApprovalLog.record(
                             machine: session?.host.name ?? "", agent: terminal.status?.app ?? terminal.displayName,
-                            question: question, answer: answer, source: .card)
+                            question: question, answer: answer, source: .card,
+                            command: ApprovalRuleMatcher.promptCommand(
+                                lines: model.frame.textLines, cols: model.frame.cols, agent: terminal.status?.app),
+                            cwd: scope?.cwd, hostID: scope?.machine)
                     }
                 }
             }
@@ -2444,12 +2452,15 @@ private struct AnswerSlot: View {
     let blocked: Bool
     let palette: ChatPalette
     let transition: AnyTransition
+    var scope: ApprovalScope? = nil
     let record: (String, String) -> Void
 
     var body: some View {
         if blocked || model.inLogin {
-            AnswerCard(status: terminal.status, model: model, palette: palette) { record($0, $1) }
+            AnswerCard(status: terminal.status, model: model, palette: palette, scope: scope) { record($0, $1) }
                 .transition(transition)
+        } else if let offer = AlwaysAllowOffers.shared.current, offer.scope == scope {
+            AlwaysAllowBanner(offer: offer, palette: palette).transition(transition)
         }
     }
 }

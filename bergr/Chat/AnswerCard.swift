@@ -221,6 +221,9 @@ struct AnswerCard: View {
     let palette: ChatPalette
     /// Called with the question and the answer picked, so the chat can keep a record of it.
     var onAnswer: ((String, String) -> Void)?
+    /// Where this prompt is (machine, folder, agent): with it, a Yes to a plain command offers
+    /// "Always allow" afterwards.
+    var scope: ApprovalScope?
     @Environment(\.colorScheme) private var scheme
     @State private var tapped = 0
     @State private var changed = false
@@ -232,10 +235,11 @@ struct AnswerCard: View {
     private let explainer = CommandExplainer(writer: OnDeviceText.shared)
 
     init(status: TerminalStatus?, model: TerminalScreenModel, palette: ChatPalette,
-         onAnswer: ((String, String) -> Void)? = nil) {
+         scope: ApprovalScope? = nil, onAnswer: ((String, String) -> Void)? = nil) {
         self.status = status
         self.model = model
         self.palette = palette
+        self.scope = scope
         self.onAnswer = onAnswer
     }
 
@@ -479,6 +483,10 @@ struct AnswerCard: View {
             return
         }
         if model.watching { model.setWatching(false) }
+        if choice.number == 1, choice.label == "Yes", let scope,
+           let command = ApprovalRuleMatcher.promptCommand(lines: lines, cols: model.frame.cols, agent: status?.app) {
+            AlwaysAllowOffers.shared.offer(command: command, scope: scope)
+        }
         let context = AnswerParser.context(in: lines)
         let question = ([AnswerParser.question(in: lines)].compactMap { $0 } + context.suffix(1)).joined(separator: " — ")
         onAnswer?(question.isEmpty ? (status?.title ?? "Question") : question, choice.label)
@@ -572,6 +580,78 @@ struct LoginStepCard: View {
         }
         .padding(14)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+    }
+}
+
+/// The "Always allow" offer after a Yes to a plain command, kept for a few seconds after the card
+/// goes away (the prompt is answered, so the card itself hides).
+@MainActor @Observable
+final class AlwaysAllowOffers {
+    static let shared = AlwaysAllowOffers()
+    struct Offer: Equatable {
+        let command: String
+        let scope: ApprovalScope
+        let id = UUID()
+    }
+    private(set) var current: Offer?
+
+    func offer(command: String, scope: ApprovalScope) {
+        let covered = ApprovalRuleStore.shared.rules.contains {
+            ApprovalRuleMatcher.matches($0, machine: scope.machine, cwd: scope.cwd, agent: scope.agent, command: command)
+        }
+        guard !covered else { return }
+        let offer = Offer(command: command, scope: scope)
+        current = offer
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(10))
+            if self.current == offer { self.current = nil }
+        }
+    }
+
+    func dismiss() { current = nil }
+}
+
+/// "Always allow `npm test` here": one tap makes the rule; the menu picks a shorter prefix instead.
+struct AlwaysAllowBanner: View {
+    let offer: AlwaysAllowOffers.Offer
+    let palette: ChatPalette
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button {
+                ApprovalRuleStore.shared.add(scope: offer.scope, command: offer.command, prefix: false)
+                AlwaysAllowOffers.shared.dismiss()
+            } label: {
+                Text("Always allow `\(offer.command)` here")
+                    .font(.footnote.weight(.semibold))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(PressStyle())
+            .foregroundStyle(palette.text)
+            Menu {
+                ForEach(ApprovalRuleMatcher.prefixes(of: offer.command), id: \.self) { prefix in
+                    Button("Commands starting with \(prefix)") {
+                        ApprovalRuleStore.shared.add(scope: offer.scope, command: prefix, prefix: true)
+                        AlwaysAllowOffers.shared.dismiss()
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle").frame(minWidth: 32, minHeight: 32)
+            }
+            .accessibilityLabel("Allow a prefix")
+            Button { AlwaysAllowOffers.shared.dismiss() } label: {
+                Image(systemName: "xmark").frame(minWidth: 32, minHeight: 32)
+            }
+            .macPlainButton()
+            .foregroundStyle(palette.secondary)
+            .accessibilityLabel("Not now")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
     }
