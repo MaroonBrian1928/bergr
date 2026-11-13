@@ -676,5 +676,90 @@ class PosterCadenceTests(unittest.TestCase):
         self.assertNotIn("s3cret", self.poster.devices)
 
 
+class PrefsTests(unittest.TestCase):
+    """Per-kind switches, muted agents and quiet hours (v13); no prefs behaves as before."""
+    DEVICE = {"id": "abcd", "relay": "https://r.example", "secret": "s"}
+    NOON = 1704110400  # 2024-01-01 12:00:00 UTC
+
+    def quiet(self, start, end, offset=0, **kw):
+        return dict({"quiet": {"start": start, "end": end}, "tz_offset": offset}, **kw)
+
+    def test_no_prefs_allows_everything(self):
+        for st in ("blocked", "error", "done", None):
+            self.assertTrue(notify.prefs_allow(None, st, "t1"))
+            self.assertTrue(notify.prefs_allow({}, st, "t1"))
+        self.assertTrue(notify.prefs_allow("junk", "done", "t1"))
+
+    def test_kinds(self):
+        prefs = {"kinds": {"needs_you": True, "finished": False, "error": True}}
+        self.assertTrue(notify.prefs_allow(prefs, "blocked", "t1"))
+        self.assertFalse(notify.prefs_allow(prefs, "done", "t1"))
+        self.assertTrue(notify.prefs_allow(prefs, "error", "t1"))
+        self.assertFalse(notify.prefs_allow({"kinds": {"needs_you": False}}, "blocked", "t1"))
+
+    def test_muted_agent_even_for_needs_you(self):
+        prefs = {"muted": ["t1"]}
+        self.assertFalse(notify.prefs_allow(prefs, "blocked", "t1"))
+        self.assertTrue(notify.prefs_allow(prefs, "blocked", "t2"))
+
+    def test_quiet_hours_same_day_window(self):
+        prefs = self.quiet(11 * 60, 13 * 60)  # noon is inside
+        self.assertFalse(notify.prefs_allow(prefs, "done", "t1", self.NOON))
+        self.assertFalse(notify.prefs_allow(prefs, "error", "t1", self.NOON))
+        self.assertTrue(notify.prefs_allow(prefs, "blocked", "t1", self.NOON))
+        self.assertTrue(notify.prefs_allow(prefs, "done", "t1", self.NOON + 3600))  # 13:00 is outside
+
+    def test_quiet_hours_crossing_midnight(self):
+        prefs = self.quiet(22 * 60, 7 * 60)
+        at = lambda hour, minute=0: self.NOON + (hour - 12) * 3600 + minute * 60
+        self.assertFalse(notify.prefs_allow(prefs, "done", "t1", at(23)))
+        self.assertFalse(notify.prefs_allow(prefs, "done", "t1", at(3)))
+        self.assertFalse(notify.prefs_allow(prefs, "done", "t1", at(6, 59)))
+        self.assertTrue(notify.prefs_allow(prefs, "done", "t1", at(7)))
+        self.assertTrue(notify.prefs_allow(prefs, "done", "t1", at(12)))
+        self.assertTrue(notify.prefs_allow(prefs, "done", "t1", at(21, 59)))
+        self.assertFalse(notify.prefs_allow(prefs, "done", "t1", at(22)))
+        self.assertTrue(notify.prefs_allow(prefs, "blocked", "t1", at(23)))
+
+    def test_quiet_hours_use_the_phones_time_zone(self):
+        prefs = self.quiet(22 * 60, 7 * 60, offset=-300)  # UTC-5: noon UTC is 07:00, outside
+        self.assertTrue(notify.prefs_allow(prefs, "done", "t1", self.NOON))
+        self.assertFalse(notify.prefs_allow(prefs, "done", "t1", self.NOON - 3600))  # 06:00 local
+        named = dict(prefs, tz="America/New_York")
+        self.assertFalse(notify.prefs_allow(named, "done", "t1", self.NOON - 3600))
+        self.assertTrue(notify.prefs_allow(named, "done", "t1", self.NOON))
+
+    def test_empty_or_bad_quiet_window_is_ignored(self):
+        self.assertTrue(notify.prefs_allow(self.quiet(60, 60), "done", "t1", self.NOON))
+        self.assertTrue(notify.prefs_allow({"quiet": {"start": "x", "end": 1}}, "done", "t1", self.NOON))
+
+    def test_test_alert_always_passes(self):
+        self.assertTrue(notify.prefs_allow({"kinds": {"finished": False}, "muted": ["test"]}, None, "test"))
+
+    def send(self, device, state, address="t1"):
+        sent = []
+        orig = notify.send_relay
+        notify.send_relay = lambda d, *a: sent.append(d["id"])
+        try:
+            notify.send_alert({"devices": [device]}, "t", "b", address, "pop", notify.JwtCache(), state=state)
+        finally:
+            notify.send_relay = orig
+        return sent
+
+    def test_send_alert_honours_prefs_per_device(self):
+        off = dict(self.DEVICE, prefs={"kinds": {"finished": False}})
+        self.assertEqual(self.send(off, "done"), [])
+        self.assertEqual(self.send(off, "blocked"), ["abcd"])
+        self.assertEqual(self.send(dict(self.DEVICE, prefs={"muted": ["t1"]}), "blocked"), [])
+        self.assertEqual(self.send(dict(self.DEVICE, prefs={"muted": ["t1"]}), "blocked", "t2"), ["abcd"])
+
+    def test_old_registration_without_prefs_behaves_as_before(self):
+        for state in ("blocked", "error", "done", None):
+            self.assertEqual(self.send(self.DEVICE, state), ["abcd"])
+
+    def test_version_is_bumped(self):
+        self.assertGreaterEqual(notify.VERSION, 13)
+
+
 if __name__ == "__main__":
     unittest.main()

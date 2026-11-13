@@ -18,6 +18,12 @@ enum Delivery {
         set { UserDefaults.standard.set(newValue, forKey: notificationsKey); apply() }
     }
 
+    /// Kinds, muted agents and quiet hours. Setting it re-registers with the helpers.
+    static var prefs: NotificationPrefs {
+        get { NotificationPrefs.load() }
+        set { newValue.save(); apply() }
+    }
+
     /// The Live Activity, from either source.
     static var lockScreen: Bool {
         get { UserDefaults.standard.bool(forKey: LiveActivityKeys.push) }

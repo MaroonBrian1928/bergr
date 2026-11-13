@@ -29,7 +29,12 @@ final class PushRegistration {
     /// Whether the helpers send this phone notifications (Settings → Notifications). Off, they
     /// still keep the Live Activity current. Mirrors `Delivery.notifications`.
     private(set) var alerts = UserDefaults.standard.object(forKey: Delivery.notificationsKey) as? Bool ?? true
-    func alertsChanged() { if alerts != Delivery.notifications { alerts = Delivery.notifications } }
+    func alertsChanged() {
+        if alerts != Delivery.notifications { alerts = Delivery.notifications }
+        if prefs != NotificationPrefs.load() { prefs = NotificationPrefs.load() }
+    }
+    /// Kinds, muted agents and quiet hours, sent to each machine. Mirrors `Delivery.prefs`.
+    private(set) var prefs = NotificationPrefs.load()
     /// Lowercase hex APNs token, once iOS has issued one.
     var deviceToken: String?
     var lastError: String?
@@ -195,7 +200,7 @@ final class PushRegistration {
 
     private func observe() {
         let current = withObservationTracking {
-            (enabled, deviceToken, alerts, (sessions?.ids ?? []).compactMap { id in
+            (enabled, deviceToken, alerts, prefs, (sessions?.ids ?? []).compactMap { id in
                 sessions?.existing(id).map { ($0, $0.state == .connected && $0.canRunCommands) }
             })
         } onChange: { [weak self] in
@@ -203,16 +208,17 @@ final class PushRegistration {
         }
         guard let token = current.1 else { return }
         let alerts = current.2
-        let state = "\(token)|\(current.0)|\(alerts)"
-        for (session, ready) in current.3 where ready {
+        let prefs = current.3
+        for (session, ready) in current.4 where ready {
             let id = session.host.id
             let identity = ObjectIdentifier(session)
+            let state = "\(token)|\(current.0)|\(alerts)|\(TimeZone.current.identifier)|\(prefs.fingerprint(host: id))"
             if let last = written[id], last.session == identity, last.state == state { continue }
             // Removing needs no secret (the payload only uses the device id), so it still works
             // after the relay secret was forgotten.
             guard let secret = relaySecret ?? (current.0 ? nil : "") else { continue }
             written[id] = (identity, state)
-            let command = Self.command(token: token, secret: secret, enabled: current.0, alerts: alerts, host: id)
+            let command = Self.command(token: token, secret: secret, enabled: current.0, alerts: alerts, host: id, prefs: prefs)
             let enabled = current.0
             Task { @MainActor [weak self] in
                 if enabled, let reason = await Self.probe(session) {
@@ -439,7 +445,7 @@ final class PushRegistration {
     /// What goes in the payload for this device: the relay and its secret, not the APNs token.
     nonisolated static func payload(token: String, secret: String, enabled: Bool, alerts: Bool = true,
                                     relay: URL = relayURL, name: String, key: Data? = PushAlertKey.current(),
-                                    host: UUID? = nil) -> Data {
+                                    host: UUID? = nil, prefs: NotificationPrefs? = nil) -> Data {
         var device: [String: Any] = ["id": deviceID(token: token), "relay": relay.absoluteString,
                                      "secret": secret, "name": name]
         // Bergr's id for this machine, sent back with each alert so a tap opens this machine.
@@ -447,14 +453,17 @@ final class PushRegistration {
         if let key { device["key"] = key.base64EncodedString() }
         // Off: the helper keeps the Live Activity current but sends no notifications (v10 on).
         if !alerts { device["alerts"] = false }
+        // Kinds, muted agents, quiet hours (v13 on); older helpers ignore the field.
+        if let prefs { device["prefs"] = prefs.payload(host: host) }
         let object: [String: Any] = ["op": enabled ? "add" : "remove", "device": device]
         return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
     }
 
     /// Script and payload both travel base64-encoded, so no shell quoting can break them.
-    static func command(token: String, secret: String, enabled: Bool, alerts: Bool = true, host: UUID? = nil) -> String {
+    static func command(token: String, secret: String, enabled: Bool, alerts: Bool = true, host: UUID? = nil,
+                        prefs: NotificationPrefs? = nil) -> String {
         command(payload: payload(token: token, secret: secret, enabled: enabled, alerts: alerts,
-                                 name: DeviceName.current, host: host))
+                                 name: DeviceName.current, host: host, prefs: prefs))
     }
 
     nonisolated static func command(payload: Data) -> String {

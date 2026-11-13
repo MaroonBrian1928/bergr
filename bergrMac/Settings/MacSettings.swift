@@ -95,6 +95,7 @@ struct MacSettings: View {
                 } footer: {
                     Text("Bergr keeps watching your machines while it is running. Alerts respect your macOS notification settings and Focus.")
                 }
+                if notifications { NotificationPrefsSection() }
             }
             .modifier(SettingsPane())
             .tabItem { Label("Notifications", systemImage: "bell") }

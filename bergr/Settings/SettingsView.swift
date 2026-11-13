@@ -213,6 +213,8 @@ struct SettingsView: View {
                 }
             }
 
+            if notifications { NotificationPrefsSection() }
+
             if push.enabled, let sessions {
                 Section {
                     ForEach(sessions.ids.compactMap { sessions.existing($0) }.filter { $0.state == .connected }, id: \.host.id) { session in

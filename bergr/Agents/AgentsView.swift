@@ -393,6 +393,7 @@ struct AgentsView: View {
             .tag("\(host.id.uuidString)|\(terminal.address)")
             .contextMenu {
                 Button("Open", systemImage: "arrow.forward.circle") { open(host.id, terminal.address) }
+                MuteNotificationsButton(host: host.id, terminal: terminal)
                 if let openBeside {
                     Button("Open Beside", systemImage: "rectangle.split.2x1") {
                         openBeside(host.id, terminal.address)
@@ -601,4 +602,19 @@ private struct AgentsListBehavior: ViewModifier {
     /// The addresses in list order: a change re-sorts the rows, which then glide.
     let orderKey: [String]
     func body(content: Content) -> some View { view.applyBehavior(content, orderKey: orderKey) }
+}
+
+/// "Mute notifications" / "Unmute" for one agent, in its row's context menu.
+struct MuteNotificationsButton: View {
+    let host: UUID
+    let terminal: Terminal
+
+    var body: some View {
+        let muted = Delivery.prefs.isMuted(host: host, address: terminal.address)
+        Button(muted ? "Unmute" : "Mute Notifications", systemImage: muted ? "bell" : "bell.slash") {
+            var prefs = Delivery.prefs
+            prefs.setMuted(!muted, host: host, address: terminal.address, name: terminal.displayName)
+            Delivery.prefs = prefs
+        }
+    }
 }

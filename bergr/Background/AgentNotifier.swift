@@ -124,6 +124,9 @@ final class AgentNotifier {
     private func post(_ alert: Alert, agent: String, transcript: [String]) {
         // Settings → Notifications.
         guard UserDefaults.standard.bool(forKey: Delivery.notificationsKey) else { return }
+        // Per-kind switches, muted agents and quiet hours.
+        guard NotificationPrefs.load().allows(kind: alert.kind, host: alert.host, address: alert.address,
+                                              minute: NotificationPrefs.minute(of: Date())) else { return }
         // The body is the model's one-sentence summary of the chat when there is one (within
         // NotificationSummary.timeout), else the status text.
         Task { @MainActor in

@@ -12,6 +12,7 @@ separate sandbox and production keys under apns.sandbox / apns.production) and "
 Usage: bergr-notify.py [--test | --version]   (--test sends one test alert to every device and exits)
 """
 import base64
+import datetime
 import hashlib
 import hmac
 import json
@@ -26,7 +27,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 12
+VERSION = 13
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 
 
@@ -66,6 +67,50 @@ DANGEROUS_RULES = [
     ("destructive migration (reset / rollback / drop)", r"\bmigrate\b[^;&|\n]*\b(?:reset|rollback|drop)\b"),
 ]
 _DANGEROUS = [(reason, re.compile(pattern, re.I)) for reason, pattern in DANGEROUS_RULES]
+
+
+# Notification settings a phone registers (device["prefs"], v13 on): kinds, muted agents, quiet
+# hours in the phone's time zone. Missing or malformed prefs allow everything, as before.
+PREF_KIND = {"blocked": "needs_you", "error": "error", "done": "finished"}
+
+
+def _local_minute(quiet_tz, tz_offset, now):
+    """Minutes after midnight on the phone: its zone name when this Python knows it (follows
+    daylight saving), else the offset it registered with."""
+    if quiet_tz:
+        try:
+            import zoneinfo
+            t = datetime.datetime.fromtimestamp(now, zoneinfo.ZoneInfo(quiet_tz))
+            return t.hour * 60 + t.minute
+        except Exception:
+            pass
+    offset = tz_offset if isinstance(tz_offset, (int, float)) and not isinstance(tz_offset, bool) else 0
+    t = datetime.datetime.fromtimestamp(now + offset * 60, datetime.timezone.utc)
+    return t.hour * 60 + t.minute
+
+
+def prefs_allow(prefs, state, address, now=None):
+    """Whether a phone with these prefs wants an alert in `state` for `address`. Kind switch off,
+    agent muted, or quiet hours (only blocked gets through) drop it. A state outside ALERT_STATES
+    (a test alert) always passes."""
+    if not isinstance(prefs, dict) or state not in PREF_KIND:
+        return True
+    kinds = prefs.get("kinds")
+    if isinstance(kinds, dict) and kinds.get(PREF_KIND[state], True) is False:
+        return False
+    muted = prefs.get("muted")
+    if isinstance(muted, list) and address in muted:
+        return False
+    quiet = prefs.get("quiet")
+    if isinstance(quiet, dict) and state != "blocked":
+        start, end = quiet.get("start"), quiet.get("end")
+        ints = all(isinstance(v, int) and not isinstance(v, bool) for v in (start, end))
+        if ints and start != end:
+            minute = _local_minute(prefs.get("tz"), prefs.get("tz_offset"),
+                                   time.time() if now is None else now)
+            if (start <= minute < end) if start < end else (minute >= start or minute < end):
+                return False
+    return True
 
 
 def dangerous_reason(text):
@@ -619,7 +664,8 @@ def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None, state=
     devices = [d for d in cfg.get("devices") or [] if isinstance(d, dict)]
     # Devices registered through a relay carry its address and a secret; the relay holds the key.
     # A device with "alerts": false wants only the Live Activity kept current, not notifications.
-    for device in [d for d in devices if d.get("relay") and d.get("secret") and d.get("alerts", True) is not False]:
+    for device in [d for d in devices if d.get("relay") and d.get("secret") and d.get("alerts", True) is not False
+                   and prefs_allow(d.get("prefs"), state, address)]:
         try:
             # The app's own id for this machine when it gave one, so a tap opens the right one.
             reply = send_relay(device, title, body, address, device.get("host_id") or host, state, q)
@@ -632,6 +678,8 @@ def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None, state=
     if mode == "apns":
         now = int(time.time())
         for device in cfg.get("devices") or []:
+            if isinstance(device, dict) and not prefs_allow(device.get("prefs"), state, address):
+                continue
             try:
                 send_apns(cfg, device, title, body, address, host, jwt_cache, now, state)
                 sent += 1
