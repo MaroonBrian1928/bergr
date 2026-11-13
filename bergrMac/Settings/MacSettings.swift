@@ -128,7 +128,7 @@ struct MacSettings: View {
         // Width only: each tab is as tall as its content, like a Mac settings window.
         .frame(width: 600)
         .sheet(isPresented: $showingLicenses) { MacLicensesSheet() }
-        .sheet(item: $editing) { HostEditor(host: $0).frame(width: 620, height: 640) }
+        .sheet(item: $editing) { HostEditor(host: $0, setupSession: sessions.existing($0.id)).frame(width: 620, height: 640) }
     }
 }
 

@@ -5,7 +5,6 @@ import SwiftUI
 struct MachineSetupView: View {
     let session: HostSession
     @State private var setup: MachineSetup
-    @State private var copied: String?
     @Environment(\.dismiss) private var dismiss
 
     init(session: HostSession) {
@@ -16,32 +15,7 @@ struct MachineSetupView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section { summary }
-                Section {
-                    row(.core, symbol: "server.rack") { EmptyView() }
-                    row(.python, symbol: "curlybraces") { EmptyView() }
-                } header: {
-                    Text("Machine")
-                }
-                Section {
-                    ForEach(AgentCLI.allCases) { agent in agentRow(agent) }
-                } header: {
-                    Text("Agents")
-                } footer: {
-                    Text("Install the agents you use. Bergr shows the ones it finds.")
-                }
-                Section {
-                    row(.push, symbol: "bell.badge") { pushAction }
-                    row(.statusLine, symbol: "gauge.with.dots.needle.33percent") { statusLineAction }
-                } header: {
-                    Text("Bergr")
-                } footer: {
-                    if let error = setup.actionError {
-                        Text(error).foregroundStyle(.red)
-                    } else {
-                        Text("The push helper alerts you when an agent needs you. The status line shows context and plan usage in the chat.")
-                    }
-                }
+                MachineSetupSection(session: session, setup: setup)
             }
             .formStyle(.grouped)
             .navigationTitle("Set Up \(session.host.name)")
@@ -62,6 +36,42 @@ struct MachineSetupView: View {
         #if os(macOS)
         .frame(minWidth: 480, idealWidth: 520, minHeight: 560, idealHeight: 640)
         #endif
+    }
+}
+
+/// The checklist's sections, for a Form: the machine's items, agents and Bergr's helpers.
+struct MachineSetupSection: View {
+    let session: HostSession
+    let setup: MachineSetup
+    @State private var copied: String?
+
+    var body: some View {
+                Section { summary }
+            Section {
+                row(.core, symbol: "server.rack") { EmptyView() }
+                row(.python, symbol: "curlybraces") { EmptyView() }
+            } header: {
+                Text("Machine")
+            }
+            Section {
+                ForEach(AgentCLI.allCases) { agent in agentRow(agent) }
+            } header: {
+                Text("Agents")
+            } footer: {
+                Text("Install the agents you use. Bergr shows the ones it finds.")
+            }
+            Section {
+                row(.push, symbol: "bell.badge") { pushAction }
+                row(.statusLine, symbol: "gauge.with.dots.needle.33percent") { statusLineAction }
+            } header: {
+                Text("Bergr")
+            } footer: {
+                if let error = setup.actionError {
+                    Text(error).foregroundStyle(.red)
+                } else {
+                    Text("The push helper alerts you when an agent needs you. The status line shows context and plan usage in the chat.")
+                }
+            }
     }
 
     // MARK: Summary

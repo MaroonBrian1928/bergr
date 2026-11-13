@@ -70,12 +70,8 @@ struct TerminalScreenView: View {
     private func prepareDirectHost(_ machine: LinkedMachine) async {
         settingUp = true
         defer { settingUp = false }
-        let line = keys.key(id: session.host.keyID)?.authorizedKeysLine
-        let found = await LinkedSetup.run(on: machine.name, keyLine: line, session: session)
-        let address = LinkedSetup.address(target: machine.target, found: found?.address) ?? machine.host ?? machine.name
-        addingMachine = Host(name: machine.name,
-                             target: SSHTarget(host: address, username: found?.user ?? session.host.target.username),
-                             keyID: session.host.keyID)
+        addingMachine = await LinkedSetup.prepareHost(
+            name: machine.name, host: machine.host, target: machine.target, parent: session, keys: keys)
     }
 
     private var theme: TerminalTheme { TerminalTheme.current(colorScheme, light: lightTheme, dark: darkTheme) }

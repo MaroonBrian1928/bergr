@@ -340,7 +340,7 @@ struct SettingsView: View {
         .bergrTint()
         .navigationTitle("Settings")
         .inlineNavigationTitle()
-        .sheet(item: $editing) { HostEditor(host: $0) }
+        .sheet(item: $editing) { HostEditor(host: $0, setupSession: sessions?.existing($0.id)) }
     }
 
     /// Bergr names the agents it works with; it isn't theirs.

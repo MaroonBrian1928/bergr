@@ -49,6 +49,9 @@ struct HostEditor: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     @State var host: Host
+    /// The machine's live session, when it has one: its Setup checklist shows in the form.
+    var setupSession: HostSession? = nil
+    @State private var setup: MachineSetup?
     @State private var address = ""
     @State private var port = ""
     @State private var session = ""
@@ -112,6 +115,9 @@ struct HostEditor: View {
                 systemSSHSection
                 #endif
                 sessionSection
+                if isExisting, let setupSession, let setup {
+                    MachineSetupSection(session: setupSession, setup: setup)
+                }
                 if isExisting {
                     Section {
                         Button("Delete Machine", role: .destructive) { confirmDelete = true }
@@ -123,6 +129,9 @@ struct HostEditor: View {
             #if os(macOS)
             .formStyle(.grouped)
             #endif
+            .task(id: setupSession?.state == .connected) {
+                if setupSession?.state == .connected { await setup?.check() }
+            }
             .tint(palette.accent)
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: test?.state) {
@@ -421,6 +430,7 @@ struct HostEditor: View {
     // MARK: Actions
 
     private func load() {
+        if setup == nil, isExisting, let setupSession { setup = MachineSetup(session: setupSession) }
         guard address.isEmpty, port.isEmpty else { return }
         port = host.target.port == 22 ? "" : String(host.target.port)
         session = host.session ?? ""

@@ -34,7 +34,7 @@ struct SidebarView: View {
                     }
                 }
                 .sheet(item: $editing) { host in
-                    HostEditor(host: host)
+                    HostEditor(host: host, setupSession: sessions.existing(host.id))
                 }
         } else {
             MachinesView(sessions: sessions, selection: $selectedHost)

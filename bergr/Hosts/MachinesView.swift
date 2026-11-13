@@ -15,6 +15,7 @@ struct MachinesView: View {
     @State private var showingKeys = false
     @State private var showingSettings = false
     @State private var setupHost: Host?
+    @State private var showingMigration = false
 
     private var duplicates: [UUID: Host] {
         SameMachine.duplicates(hosts.hosts.map { ($0, sessions.existing($0.id)?.coreName) })
@@ -124,6 +125,10 @@ struct MachinesView: View {
                     if LocalCore.isAvailable && !hosts.hasLocal {
                         Button("Add This Mac", systemImage: "desktopcomputer") { selection = hosts.addLocal().id }
                     }
+                    Divider()
+                    Button("Connect Linked Machines Directly", systemImage: "arrow.triangle.branch") {
+                        showingMigration = true
+                    }
                 } label: {
                     Label("Add Machine", systemImage: "plus")
                 } primaryAction: {
@@ -132,7 +137,10 @@ struct MachinesView: View {
             }
         }
         .sheet(item: $editing) { host in
-            HostEditor(host: host)
+            HostEditor(host: host, setupSession: sessions.existing(host.id))
+        }
+        .sheet(isPresented: $showingMigration) {
+            DirectMigrationSheet(store: hosts, sessions: sessions, keys: keys)
         }
         .sheet(item: $setupHost) { host in
             MachineSetupView(session: sessions.session(for: host))

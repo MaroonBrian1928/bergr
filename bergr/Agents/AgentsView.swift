@@ -86,6 +86,8 @@ struct AgentsView: View {
     @State private var searchText = ""
     @State private var searchModel = TranscriptSearchModel()
     @State private var digest = AwayDigestModel()
+    @State private var showingMigration = false
+    @AppStorage("bergr.directBanner.dismissed") private var dismissedBanner = ""
 
     init(sessions: SessionStore, openBeside: ((_ host: Host.ID, _ address: String) -> Void)? = nil,
          open: @escaping (_ host: Host.ID, _ address: String) -> Void) {
@@ -104,8 +106,27 @@ struct AgentsView: View {
             if !digest.entries.isEmpty {
                 Section { DigestCard(model: digest, open: open) }
             }
+            let direct = DirectMigration.candidates(store: hosts, sessions: sessions)
+            if DirectMigration.showBanner(direct, dismissedKey: dismissedBanner) {
+                Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: "arrow.triangle.branch").foregroundStyle(.secondary)
+                        Text(direct.count == 1 ? "1 machine is reached through another."
+                             : "\(direct.count) machines are reached through another.")
+                            .font(.footnote)
+                        Button("Connect directly") { showingMigration = true }
+                            .font(.footnote.weight(.semibold)).buttonStyle(.borderless)
+                        Spacer(minLength: 4)
+                        Button("Dismiss", systemImage: "xmark") { dismissedBanner = DirectMigration.bannerKey(direct) }
+                            .labelStyle(.iconOnly).buttonStyle(.borderless).foregroundStyle(.secondary)
+                    }
+                }
+            }
             if byAttention { attentionSections(lists) } else { machineSections(lists) }
             }
+        }
+        .sheet(isPresented: $showingMigration) {
+            DirectMigrationSheet(store: hosts, sessions: sessions, keys: keys)
         }
         .searchable(text: $searchText, prompt: "Search conversations")
         .onSubmit(of: .search) {
@@ -212,7 +233,7 @@ struct AgentsView: View {
                         ForEach(group.terminals) { terminal in row(terminal, host: host, session: session) }
                     }
                 } header: {
-                    MachineHeader(host: host, session: session, count: terminals.count)
+                    MachineHeader(host: host, session: session, count: terminals.count) { showingMigration = true }
                 }
             }
     }
@@ -455,6 +476,7 @@ private struct MachineHeader: View {
     let host: Host
     let session: HostSession
     let count: Int
+    let connectLinked: () -> Void
     private let monitor = MachineHealthMonitor.shared
     @State private var showingSetup = false
     @Environment(HostStore.self) private var hosts
@@ -479,6 +501,9 @@ private struct MachineHeader: View {
         .contextMenu {
             if !host.isDemo {
                 Button("Set Up \(host.name)…", systemImage: "checklist") { showingSetup = true }
+            }
+            if !host.isDemo {
+                Button("Connect Linked Machines Directly", systemImage: "arrow.triangle.branch", action: connectLinked)
             }
             Divider()
             Button("Move Up", systemImage: "arrow.up") { withAnimation { hosts.move(host, by: -1) } }
