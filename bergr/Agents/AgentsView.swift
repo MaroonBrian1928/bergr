@@ -216,7 +216,7 @@ struct AgentsView: View {
                         .selectionDisabled()
                     }
                     if case .connected = session.state, terminals.isEmpty {
-                        Text("No agents running. Open this machine and tap New Terminal to start one.")
+                        Text("No agents running. Open this machine and tap New Session to start one.")
                             .font(.footnote)
                             .foregroundStyle(.tertiary)
                             .selectionDisabled()
@@ -389,7 +389,8 @@ struct AgentsView: View {
 
     @ViewBuilder
     private func row(_ terminal: Terminal, host: Host, session: HostSession, machine: String? = nil) -> some View {
-        SubagentRow(terminal: terminal, session: session, machine: machine)
+        SubagentRow(terminal: terminal, session: session, machine: machine,
+                    connect: AnswerFlow.live(sessions: sessions, hosts: hosts, keys: keys))
             .tag("\(host.id.uuidString)|\(terminal.address)")
             .contextMenu {
                 Button("Open", systemImage: "arrow.forward.circle") { open(host.id, terminal.address) }
@@ -451,9 +452,74 @@ private struct SubagentRow: View {
     let terminal: Terminal
     let session: HostSession
     let machine: String?
+    let connect: (UUID, String) async -> AnswerFlow.Screen?
     @State private var lifecycle = AgentLifecycle()
+    @State private var sending: String?
+    @State private var problem: String?
+
+    private var canManage: Bool { terminal.isLive && terminal.isAgent && !terminal.address.contains("/") }
+    private var canRestart: Bool { canManage && ChatAgent.detect(terminal).map { $0 != .antigravity } == true }
+    private var inlineOptions: [String] {
+        terminal.isLive && !terminal.address.contains("/") ? InlineAnswer.options(status: terminal.status) : []
+    }
+
+    private func answer(_ index: Int) {
+        guard sending == nil,
+              let request = InlineAnswer.request(host: session.host.id, terminal: terminal, index: index) else { return }
+        sending = request.question.options[index]
+        problem = nil
+        Task {
+            let outcome = await InlineAnswer.perform(request, connect: connect) { question, answer, source in
+                AnswerRecorder.record(question: question, answer: answer, session: session, terminal: terminal, source: source)
+            }
+            sending = nil
+            guard outcome != .sent else { return }
+            problem = outcome == .failed ? "Couldn't send. Open the chat to answer." : "The question changed. Open the chat."
+            try? await Task.sleep(for: .seconds(4))
+            problem = nil
+        }
+    }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            rowContent
+            if !inlineOptions.isEmpty || problem != nil || sending != nil { inlineAnswers }
+        }
+        #if os(iOS)
+        .swipeActions(edge: .leading) {
+            MuteSwipeButton(host: session.host.id, terminal: terminal)
+        }
+        .swipeActions(edge: .trailing) {
+            if canManage {
+                Button("End", systemImage: "stop.circle", role: .destructive) { lifecycle.confirming = .end }
+                if canRestart {
+                    Button("Restart", systemImage: "arrow.clockwise") { lifecycle.confirming = .restart }.tint(.orange)
+                }
+            }
+        }
+        #endif
+    }
+
+    private var inlineAnswers: some View {
+        HStack(spacing: 8) {
+            if let problem {
+                Label(problem, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary)
+            } else if let sending {
+                ProgressView().controlSize(.small)
+                Text("Sending \(sending)…").font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(inlineOptions.enumerated()), id: \.offset) { index, label in
+                    Button(label) { answer(index) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityIdentifier("inline-\(label.lowercased())-\(terminal.address)")
+                }
+            }
+        }
+        .buttonBorderShape(.capsule)
+    }
+
+    private var rowContent: some View {
         AgentRow(terminal: terminal, subagents: session.runningSubagents(address: terminal.address), machine: machine,
                  unsent: ReplyDrafts.hasUnsent(for: "\(session.host.id.uuidString)|\(terminal.address)"))
             .contextMenu {
@@ -617,6 +683,22 @@ private struct AgentsListBehavior: ViewModifier {
     /// The addresses in list order: a change re-sorts the rows, which then glide.
     let orderKey: [String]
     func body(content: Content) -> some View { view.applyBehavior(content, orderKey: orderKey) }
+}
+
+/// Leading swipe on an agent's row: mute or unmute its notifications.
+struct MuteSwipeButton: View {
+    let host: UUID
+    let terminal: Terminal
+
+    var body: some View {
+        let muted = Delivery.prefs.isMuted(host: host, address: terminal.address)
+        Button(muted ? "Unmute" : "Mute", systemImage: muted ? "bell" : "bell.slash") {
+            var prefs = Delivery.prefs
+            prefs.setMuted(!muted, host: host, address: terminal.address, name: terminal.displayName)
+            Delivery.prefs = prefs
+        }
+        .tint(.indigo)
+    }
 }
 
 /// "Mute notifications" / "Unmute" for one agent, in its row's context menu.
