@@ -212,12 +212,25 @@ export class Device {
     // Live Activities end after 8 h (12 h on the Lock Screen): an older registration is gone.
     if (la && now - (la.at ?? now) > ACTIVITY_TTL_MS) la = undefined;
     const regOut = { token: reg.token, bundle_id: reg.bundle_id, sandbox: reg.sandbox };
+    // The icon badge: agents needing you across all this device's machines (fresh records only).
+    // Omitted (undefined) when the device turned badges off, or when no machine has reported.
+    const badgeOf = async () => {
+      if (reg.badge === false) return undefined;
+      const all = await this.machines();
+      const fresh = Object.values(all).filter((v) => now - v.at <= MACHINE_STALE_MS);
+      return fresh.length ? fresh.reduce((n, v) => n + v.needsYou, 0) : undefined;
+    };
     const laOut = la ? { active: true, mode: la.mode, hide_after: la.hideAfter ?? 86400 } : { active: false };
 
     switch (b.op) {
       case "push":
         if (!this.take("push", now)) return { limited: true };
-        return { reg: regOut, ...laOut };
+        return { reg: regOut, badge: await badgeOf(), ...laOut };
+
+      case "prefs":
+        // Absent means on (old apps); only an explicit false turns the badge off.
+        await s.put("reg", { ...reg, badge: b.badge !== false });
+        return { ok: true };
 
       case "unregister":
         return this.forget();
@@ -338,6 +351,7 @@ async function register(request, env) {
   const secret = b64url(raw);
   const hash = await sha256Hex(secret);
   const reg = { token, bundle_id: bundleId, sandbox, created: new Date().toISOString() };
+  if (body.badge === false) reg.badge = false;
   // Dual write: KV keeps the registration for rollback and for lazy seeding.
   await env.REGISTRATIONS.put(`reg:${hash}`, JSON.stringify(reg));
   await send(deviceStub(env, hash), { op: "seed", reg });
@@ -396,6 +410,7 @@ async function push(request, env) {
   if (!d) return err(401, "unauthorized");
   if (d.limited) return err(429, "rate limited");
   const reg = d.reg;
+  const badge = Number.isInteger(d.badge) ? { badge: d.badge } : {};
   const envName = reg.sandbox ? "sandbox" : "production";
   let jwt;
   try {
@@ -426,6 +441,7 @@ async function push(request, env) {
                 "mutable-content": 1,
                 sound: "default",
                 "thread-id": body.address,
+                ...badge,
                 ...level,
               },
               e: body.e,
@@ -437,6 +453,7 @@ async function push(request, env) {
                 alert: { title: body.title, body: body.body },
                 sound: "default",
                 "thread-id": body.address,
+                ...badge,
                 ...level,
               },
               address: body.address,
@@ -490,6 +507,15 @@ async function activityRegister(request, env) {
   });
   if (!a.out) return err(401, "unauthorized");
   return json(200, a.out);
+}
+
+async function prefs(request, env) {
+  if (!bearer(request)) return err(401, "unauthorized");
+  const body = await readJson(request);
+  if (body instanceof Response) return body;
+  const a = await authed(request, env, { op: "prefs", badge: body.badge });
+  if (!a.out) return err(401, "unauthorized");
+  return json(200, { ok: true });
 }
 
 async function activityUnregister(request, env) {
@@ -605,6 +631,7 @@ export async function handle(request, env) {
   try {
     if (pathname === "/v1/register" && m === "POST") return await register(request, env);
     if (pathname === "/v1/register" && m === "DELETE") return await unregister(request, env);
+    if (pathname === "/v1/prefs" && m === "POST") return await prefs(request, env);
     if (pathname === "/v1/push" && m === "POST") return await push(request, env);
     if (pathname === "/v1/activity" && m === "POST") return await activityRegister(request, env);
     if (pathname === "/v1/activity" && m === "DELETE") return await activityUnregister(request, env);

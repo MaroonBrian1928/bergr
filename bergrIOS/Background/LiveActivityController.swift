@@ -84,6 +84,11 @@ final class LiveActivityController {
             prompt: PromptBuilder.prompt(machines: machines, screens: screens))
     }
 
+    /// Agents waiting for you across all machines: what the icon badge shows.
+    nonisolated static func needsYouCount(machines: [LiveActivityMachine]) -> Int {
+        content(machines: machines)?.needsYou ?? 0
+    }
+
     /// Up to 4 live agents (needs-you first, then working, then done) with their last status sentence,
     /// for the medium widget.
     static func snapshotAgents(machines: [LiveActivityMachine], limit: Int = 4) -> [AgentsSnapshot.Agent] {
@@ -225,6 +230,7 @@ final class LiveActivityController {
         previous?.updated = snapshot.updated
         guard previous != snapshot else { return }
         lastSnapshot = snapshot
+        AppBadge.apply(needsYou: Self.needsYouCount(machines: current))
         snapshot.save()
         WidgetCenter.shared.reloadTimelines(ofKind: BergrAppGroup.widgetKind)
     }

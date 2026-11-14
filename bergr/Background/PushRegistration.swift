@@ -131,13 +131,15 @@ final class PushRegistration {
         let saved = UserDefaults.standard.dictionary(forKey: Self.secretKey) as? [String: String]
         if saved?["token"] == token, saved?["relay"] == Self.relayURL.absoluteString, saved?["secret"] != nil {
             deviceToken = token
+            syncBadgePref()
             return
         }
         var request = URLRequest(url: Self.relayURL.appending(path: "v1/register"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "token": token, "bundle_id": Bundle.main.bundleIdentifier ?? "", "sandbox": Self.sandbox])
+            "token": token, "bundle_id": Bundle.main.bundleIdentifier ?? "", "sandbox": Self.sandbox,
+            "badge": AppBadge.enabled()])
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
@@ -151,6 +153,18 @@ final class PushRegistration {
         } catch {
             lastError = "Couldn't reach the push relay: \(error.localizedDescription)"
         }
+    }
+
+    /// Tells the relay whether pushes should carry the icon badge (Settings → Show badge). Old
+    /// relays answer 404; nothing to do then.
+    func syncBadgePref() {
+        guard let secret = relaySecret else { return }
+        var request = URLRequest(url: Self.relayURL.appending(path: "v1/prefs"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["badge": AppBadge.enabled()])
+        Task { _ = try? await URLSession.shared.data(for: request) }
     }
 
     /// The relay secret for the current token.

@@ -564,3 +564,57 @@ test("one storage put per state post, and no separate timestamp row", async () =
   const ts = calls.map((c) => JSON.parse(c.init.body).aps.timestamp);
   assert.ok(ts[0] < ts[1] && ts[1] < ts[2]);
 });
+
+// ---- Icon badge: the sum of needs-you counts across the device's machines.
+const badgeOf = (call) => JSON.parse(call.init.body).aps.badge;
+
+test("push carries aps.badge: needs-you summed across machines", async () => {
+  const { env } = await makeEnv();
+  const secret = await withActivity(env);
+  await post(env, secret, { machine: "m1", needsYou: 2, working: 0, done: 0 });
+  await post(env, secret, { machine: "m2", needsYou: 1, working: 1, done: 0 });
+  calls.length = 0;
+  assert.equal((await doPush(env, secret)).status, 200);
+  assert.equal(badgeOf(calls[0]), 3);
+});
+
+test("badge is 0 when machines report nothing needing you", async () => {
+  const { env } = await makeEnv();
+  const secret = await withActivity(env);
+  await post(env, secret, { machine: "m1", needsYou: 0, working: 1, done: 0 });
+  calls.length = 0;
+  await doPush(env, secret);
+  assert.equal(badgeOf(calls[0]), 0);
+});
+
+test("badge omitted when the device turned it off (registration or prefs)", async () => {
+  const { env } = await makeEnv();
+  const secret = await withActivity(env);
+  await post(env, secret, { machine: "m1", needsYou: 2, working: 0, done: 0 });
+  const off = await handle(req("/v1/prefs", "POST", { badge: false }, auth(secret)), env);
+  assert.equal(off.status, 200);
+  calls.length = 0;
+  await doPush(env, secret);
+  assert.ok(!("badge" in JSON.parse(calls[0].init.body).aps));
+  await handle(req("/v1/prefs", "POST", { badge: true }, auth(secret)), env);
+  calls.length = 0;
+  await doPush(env, secret);
+  assert.equal(badgeOf(calls[0]), 2);
+
+  const reg2 = await handle(req("/v1/register", "POST", { token: TOKEN, bundle_id: "app.bergr", sandbox: true, badge: false }), env);
+  const { secret: s2 } = await reg2.json();
+  await handle(req("/v1/activity", "POST", { token: LA_TOKEN, mode: "counts" }, auth(s2)), env);
+  await post(env, s2, { machine: "m1", needsYou: 4, working: 0, done: 0 });
+  calls.length = 0;
+  await doPush(env, s2);
+  assert.ok(!("badge" in JSON.parse(calls[0].init.body).aps));
+});
+
+test("pref missing (old app) means badge on", async () => {
+  const { env } = await makeEnv();
+  const secret = await withActivity(env);
+  await post(env, secret, { machine: "m1", needsYou: 5, working: 0, done: 0 });
+  calls.length = 0;
+  await doPush(env, secret);
+  assert.equal(badgeOf(calls[0]), 5);
+});

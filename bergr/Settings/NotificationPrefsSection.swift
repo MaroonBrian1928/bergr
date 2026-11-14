@@ -5,6 +5,7 @@ import SwiftUI
 /// also re-registers with the helpers.
 struct NotificationPrefsSection: View {
     @State private var prefs = Delivery.prefs
+    @AppStorage(AppBadge.key) private var showBadge = true
 
     var body: some View {
         Section {
@@ -15,6 +16,13 @@ struct NotificationPrefsSection: View {
             Text("Notify me when an agent")
         } footer: {
             Text("Turn off the kinds you don't want. Muting one agent is in its context menu.")
+        }
+
+        Section {
+            Toggle("Show badge", isOn: $showBadge)
+                .onChange(of: showBadge) { AppBadge.settingChanged() }
+        } footer: {
+            Text("The number of agents that need you, on the app icon.")
         }
 
         Section {

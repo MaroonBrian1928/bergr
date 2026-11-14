@@ -23,6 +23,7 @@ struct MenuBarLabel: View {
             Image("MenuBarIcon")
             if !title.isEmpty { Text(title).monospacedDigit() }
         }
+        .onChange(of: counts.needsYou, initial: true) { _, needs in AppBadge.apply(needsYou: needs) }
         .accessibilityLabel("Bergr")
         .accessibilityValue(counts.needsYou + counts.working == 0
             ? "No agents need you"
