@@ -86,6 +86,18 @@ enum GitParsing {
         }
     }
 
+    /// `git ls-files --others --exclude-standard`: one path per line.
+    static func fileList(_ text: String) -> [String] {
+        text.split(whereSeparator: \.isNewline).map { unquote(String($0)) }.filter { !$0.isEmpty }
+    }
+
+    /// Files untracked now that weren't at the turn's baseline (all of them when there is no baseline list).
+    static func newFiles(now: [String], before: [String]?) -> [String] {
+        guard let before else { return now }
+        let old = Set(before)
+        return now.filter { !old.contains($0) }
+    }
+
     static func unquote(_ s: String) -> String {
         guard s.count >= 2, s.hasPrefix("\""), s.hasSuffix("\"") else { return s }
         return String(s.dropFirst().dropLast())

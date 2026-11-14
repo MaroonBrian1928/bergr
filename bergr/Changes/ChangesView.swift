@@ -8,10 +8,10 @@ struct ChangesSheet: View {
     @State private var model: ChangesModel
     @Environment(\.dismiss) private var dismiss
 
-    init(session: HostSession?, folder: String?, items: [ChatFeed.Item], toolOutput: [String: String]) {
+    init(session: HostSession?, folder: String?, address: String? = nil, items: [ChatFeed.Item], toolOutput: [String: String]) {
         self.items = items
         self.toolOutput = toolOutput
-        _model = State(initialValue: ChangesModel(folder: folder ?? "", lastReply: ChangesSummary.lastReply(in: items)) { [weak session] command in
+        _model = State(initialValue: ChangesModel(folder: folder ?? "", address: address, lastReply: ChangesSummary.lastReply(in: items)) { [weak session] command in
             guard let session else { throw CocoaError(.fileNoSuchFile) }
             return try await session.commandOutput(command)
         })
@@ -53,7 +53,20 @@ struct ChangesSheet: View {
         let status = model.status
         let stat = model.stat
         let paths = Set(stat.files.map(\.path))
+        let lastTurn = model.scope == .lastTurn
         return List {
+            Section {
+                Picker("Show", selection: Binding(get: { model.scope }, set: { s in Task { await model.setScope(s) } })) {
+                    Text("All changes").tag(ChangesModel.Scope.all)
+                    Text("Last turn").tag(ChangesModel.Scope.lastTurn)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .disabled(model.turnSnapshot != .available)
+                if model.turnSnapshot == .unavailable {
+                    Text(ChangesModel.turnUnavailableText).font(.caption).foregroundStyle(.secondary)
+                }
+            }
             switch model.summary {
             case .none: EmptyView()
             case .writing:
@@ -69,7 +82,7 @@ struct ChangesSheet: View {
                 if status.noCommits { Text("No commits yet").foregroundStyle(.secondary) }
             }
             Section {
-                if stat.files.isEmpty && status.untrackedCount == 0 {
+                if stat.files.isEmpty && (lastTurn ? model.newFiles.isEmpty : status.untrackedCount == 0) {
                     Text("No changes").foregroundStyle(.secondary)
                 }
                 ForEach(stat.files) { file in
@@ -85,18 +98,26 @@ struct ChangesSheet: View {
                     }
                 }
                 // Changes the stat doesn't list (a rename without edits, a staged new file).
-                ForEach(status.trackedChanges.filter { !paths.contains($0.path) }) { entry in
+                ForEach(lastTurn ? [] : status.trackedChanges.filter { !paths.contains($0.path) }) { entry in
                     HStack {
                         Text(entry.path).font(.system(.callout, design: .monospaced)).lineLimit(2).truncationMode(.middle)
                         Spacer(minLength: 4)
                         Text(entry.label).foregroundStyle(.secondary).font(.caption)
                     }
                 }
-                if status.untrackedCount > 0 {
+                if lastTurn {
+                    ForEach(model.newFiles, id: \.self) { path in
+                        HStack {
+                            Text(path).font(.system(.callout, design: .monospaced)).lineLimit(2).truncationMode(.middle)
+                            Spacer(minLength: 4)
+                            Text("new").foregroundStyle(.secondary).font(.caption)
+                        }
+                    }
+                } else if status.untrackedCount > 0 {
                     Label("\(status.untrackedCount) untracked", systemImage: "questionmark.folder").foregroundStyle(.secondary)
                 }
             } header: {
-                Text("Files" + (stat.files.isEmpty ? "" : "  +\(stat.insertions) -\(stat.deletions)"))
+                Text((lastTurn ? "Files in the last turn" : "Files") + (stat.files.isEmpty ? "" : "  +\(stat.insertions) -\(stat.deletions)"))
             }
             if let run = TestRun.last(in: items, output: toolOutput) {
                 Section("Last test run") {

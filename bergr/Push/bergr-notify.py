@@ -23,13 +23,14 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 17
+VERSION = 18
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 
 
@@ -606,6 +607,108 @@ class KeepAwake:
                 pass
 
 
+# Turn baselines (v18): when a terminal starts working, its cwd's tree is snapshotted with
+# `git stash create` (a commit of the tracked changes; the worktree, index and branches are not
+# touched) and kept under refs/bergr/turns/<name>, latest only. The list of untracked files at that
+# moment goes into a blob under refs/bergr/turns-untracked/<name> (the app reads both over git) and
+# into turns/<name>.json beside push.json. The finished alert says what the turn changed.
+GIT_TIMEOUT = 1.0
+TURN_REF = "refs/bergr/turns/"
+TURN_UNTRACKED_REF = "refs/bergr/turns-untracked/"
+
+
+def ref_name(address):
+    """The address as a ref component; the app (ChangesModel.turnRefName) does the same."""
+    name = re.sub(r"[^A-Za-z0-9_-]", "_", address)
+    return name or "_"
+
+
+def _git(cwd, args, timeout=GIT_TIMEOUT, stdin=None):
+    """Stdout of `git -C cwd args`, or None on any failure or timeout."""
+    try:
+        out = subprocess.run(["git", "-C", cwd] + args, input=stdin, capture_output=True, text=True,
+                             timeout=timeout, env=dict(os.environ, GIT_OPTIONAL_LOCKS="0"))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def untracked_files(cwd, timeout=GIT_TIMEOUT):
+    out = _git(cwd, ["ls-files", "--others", "--exclude-standard"], timeout)
+    return None if out is None else [l for l in out.split("\n") if l]
+
+
+def turns_dir(config_path=None):
+    return os.path.join(os.path.dirname(config_path or default_config_path()), "turns")
+
+
+def record_turn_baseline(address, cwd, config_path=None, timeout=GIT_TIMEOUT):
+    """Snapshots `cwd` as the baseline for `address`'s new turn. Returns the sha, or None (not a
+    repo, no commits, git failed or timed out)."""
+    if not cwd or not os.path.isdir(cwd):
+        return None
+    head = _git(cwd, ["rev-parse", "--verify", "-q", "HEAD"], timeout)
+    if head is None:
+        return None
+    snap = _git(cwd, ["stash", "create"], timeout)
+    if snap is None:
+        return None
+    sha = snap.strip() or head.strip()  # empty output: a clean tree
+    name = ref_name(address)
+    if _git(cwd, ["update-ref", TURN_REF + name, sha], timeout) is None:
+        return None
+    untracked = untracked_files(cwd, timeout) or []
+    blob = _git(cwd, ["hash-object", "-w", "--stdin"], timeout, stdin="\n".join(untracked) + "\n" if untracked else "")
+    if blob:
+        _git(cwd, ["update-ref", TURN_UNTRACKED_REF + name, blob.strip()], timeout)
+    try:
+        d = turns_dir(config_path)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, name + ".json"), "w") as f:
+            json.dump({"sha": sha, "cwd": cwd, "untracked": untracked}, f)
+    except OSError as e:
+        log(f"could not save turn baseline: {e}")
+    return sha
+
+
+def turn_stat(address, cwd, config_path=None, timeout=GIT_TIMEOUT):
+    """'4 files, +120 \u221218' for what changed since the turn's baseline, or None (no repo, no
+    baseline, nothing changed, timeout)."""
+    if not cwd or not os.path.isdir(cwd):
+        return None
+    name = ref_name(address)
+    try:
+        with open(os.path.join(turns_dir(config_path), name + ".json")) as f:
+            saved = json.load(f)
+        before = set(saved.get("untracked") or [])
+    except (OSError, ValueError, AttributeError):
+        before = set()
+    start = time.monotonic()
+    short = _git(cwd, ["diff", "--shortstat", TURN_REF + name], timeout)
+    if short is None:
+        return None
+    left = max(timeout - (time.monotonic() - start), 0.2)
+    now = untracked_files(cwd, left)
+    new = len(set(now or []) - before)
+    m = re.search(r"(\d+) files? changed", short)
+    files = (int(m.group(1)) if m else 0) + new
+    plus = re.search(r"(\d+) insertions?", short)
+    minus = re.search(r"(\d+) deletions?", short)
+    if not files:
+        return None
+    return f"{files} file{'s' if files != 1 else ''}, +{plus.group(1) if plus else 0} \u2212{minus.group(1) if minus else 0}"
+
+
+def started_working(prev_state, state):
+    """Addresses that went from another known state to working between two states."""
+    out = []
+    for address, (st, _) in state["last"].items():
+        before = prev_state["last"].get(address)
+        if st == "working" and before is not None and before[0] != "working":
+            out.append(address)
+    return out
+
+
 def log(msg):
     print(f"{time.strftime('%H:%M:%S')} bergr-notify: {msg}", file=sys.stderr, flush=True)
 
@@ -676,7 +779,7 @@ def make_jwt(team_id, key_id, key_path, now):
     return unsigned + "." + b64url(der_to_raw(out.stdout))
 
 
-def format_alert(term, state, machine=""):
+def format_alert(term, state, machine="", stat=None):
     """(title, body) for a terminal that just became `state` (blocked, error or done)."""
     status = term.get("status") if isinstance(term.get("status"), dict) else {}
     labels = term.get("labels") if isinstance(term.get("labels"), dict) else {}
@@ -696,9 +799,10 @@ def format_alert(term, state, machine=""):
     kind = status.get("kind")
     if state == "blocked" and kind in KINDS:
         body = f"{body} ({kind})" if body else f"({kind})"
-    if len(body) > BODY_MAX:
-        body = body[:BODY_MAX - 1] + "…"
-    return title, body
+    suffix = f" · {stat}" if stat and state == "done" else ""
+    if len(body) > BODY_MAX - len(suffix):
+        body = body[:BODY_MAX - len(suffix) - 1] + "…"
+    return title, body + suffix
 
 
 def alert_question(term, state):
@@ -840,7 +944,8 @@ def alerts_for(prev_state, line, machine=""):
         if key in sent:
             continue
         sent.add(key)
-        title, body = format_alert(term, state, machine)
+        stat = turn_stat(address, term.get("cwd")) if state == "done" else None
+        title, body = format_alert(term, state, machine, stat)
         alert = {"address": address, "turn": turn, "state": state, "title": title, "body": body}
         question = alert_question(term, state)
         if question:
@@ -1213,7 +1318,11 @@ def run():
                     if not line:
                         continue
                     try:
+                        before = state
                         state, alerts = alerts_for(state, line, host)
+                        for address in started_working(before, state):
+                            cwd = (state.get("terms", {}).get(address) or {}).get("cwd")
+                            threading.Thread(target=record_turn_baseline, args=(address, cwd), daemon=True).start()
                     except Exception as e:
                         log(f"could not process event line: {e}")
                         continue

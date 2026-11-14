@@ -1095,5 +1095,87 @@ class KeepAwakeTests(unittest.TestCase):
         self.assertEqual(notify.working_count(terms), 1)
 
 
+class TurnBaselineTests(Base):
+    def git(self, *args, cwd=None):
+        return subprocess.run(["git", "-C", cwd or self.repo] + list(args), capture_output=True, text=True, check=True).stdout
+
+    def setUp(self):
+        super().setUp()
+        self.repo = os.path.join(self.dir, "repo")
+        os.makedirs(self.repo)
+        self.cfg = os.path.join(self.dir, "cfg", "push.json")
+        self.git("init", "-q")
+        self.git("config", "user.email", "t@t")
+        self.git("config", "user.name", "t")
+        self.write("a.txt", "one\ntwo\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "init")
+
+    def write(self, name, text):
+        with open(os.path.join(self.repo, name), "w") as f:
+            f.write(text)
+
+    def test_baseline_leaves_index_and_worktree_alone(self):
+        self.write("a.txt", "one\nchanged\n")
+        self.write("staged.txt", "s\n")
+        self.git("add", "staged.txt")
+        self.write("new.txt", "n\n")
+        before = self.git("status", "--porcelain")
+        stashes = self.git("stash", "list")
+        sha = notify.record_turn_baseline("w:1.2", self.repo, self.cfg)
+        self.assertTrue(sha)
+        self.assertEqual(self.git("status", "--porcelain"), before)
+        self.assertEqual(self.git("stash", "list"), stashes)
+        self.assertEqual(self.git("rev-parse", "refs/bergr/turns/w_1_2").strip(), sha)
+        with open(os.path.join(os.path.dirname(self.cfg), "turns", "w_1_2.json")) as f:
+            saved = json.load(f)
+        self.assertEqual(saved["sha"], sha)
+        self.assertEqual(saved["untracked"], ["new.txt"])
+        blob = self.git("cat-file", "-p", "refs/bergr/turns-untracked/w_1_2")
+        self.assertEqual(blob.split(), ["new.txt"])
+
+    def test_clean_tree_uses_head_and_latest_wins(self):
+        head = self.git("rev-parse", "HEAD").strip()
+        self.assertEqual(notify.record_turn_baseline("t1", self.repo, self.cfg), head)
+        self.write("a.txt", "x\n")
+        second = notify.record_turn_baseline("t1", self.repo, self.cfg)
+        self.assertNotEqual(second, head)
+        self.assertEqual(self.git("rev-parse", "refs/bergr/turns/t1").strip(), second)
+
+    def test_shortstat_text_and_new_files(self):
+        self.write("new0.txt", "old untracked\n")
+        notify.record_turn_baseline("t1", self.repo, self.cfg)
+        self.assertIsNone(notify.turn_stat("t1", self.repo, self.cfg))
+        self.write("a.txt", "one\nthree\nfour\n")
+        self.write("new1.txt", "n\n")
+        self.assertEqual(notify.turn_stat("t1", self.repo, self.cfg), "2 files, +2 \u22121")
+        _, body = notify.format_alert(term(state="done", msg="Done."), "done", stat="2 files, +2 \u22121")
+        self.assertTrue(body.endswith(" \u00b7 2 files, +2 \u22121"))
+
+    def test_skips_without_repo_or_baseline(self):
+        plain = os.path.join(self.dir, "plain")
+        os.makedirs(plain)
+        self.assertIsNone(notify.record_turn_baseline("t1", plain, self.cfg))
+        self.assertIsNone(notify.record_turn_baseline("t1", None, self.cfg))
+        self.assertIsNone(notify.turn_stat("t1", plain, self.cfg))
+        self.assertIsNone(notify.turn_stat("nobaseline", self.repo, self.cfg))
+        _, body = notify.format_alert(term(state="done"), "done", stat=None)
+        self.assertNotIn("\u00b7", body)
+
+    def test_timeout_returns_none(self):
+        def boom(*a, **k):
+            raise subprocess.TimeoutExpired("git", 1)
+        with mock.patch.object(notify.subprocess, "run", boom):
+            self.assertIsNone(notify.record_turn_baseline("t1", self.repo, self.cfg))
+            self.assertIsNone(notify.turn_stat("t1", self.repo, self.cfg))
+
+    def test_started_working_detects_transitions_only(self):
+        def st(state):
+            return {"last": {"a": (state, 1)}}
+        self.assertEqual(notify.started_working(st("done"), st("working")), ["a"])
+        self.assertEqual(notify.started_working(st("working"), st("working")), [])
+        self.assertEqual(notify.started_working({"last": {}}, st("working")), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -213,7 +213,7 @@ struct ChatView: View {
             }
         }
         .sheet(isPresented: $showingChanges) {
-            ChangesSheet(session: session, folder: terminal?.cwd, items: feed.items, toolOutput: feed.toolOutput)
+            ChangesSheet(session: session, folder: terminal?.cwd, address: terminal?.address, items: feed.items, toolOutput: feed.toolOutput)
         }
         .sheet(isPresented: $showingUsage) {
             UsageSheet(usage: feed.usage, agent: agent, machine: session?.host.name,
