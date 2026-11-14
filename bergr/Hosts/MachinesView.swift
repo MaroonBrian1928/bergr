@@ -16,6 +16,7 @@ struct MachinesView: View {
     @State private var showingSettings = false
     @State private var setupHost: Host?
     @State private var showingMigration = false
+    @State private var showingPairing = false
 
     private var duplicates: [UUID: Host] {
         SameMachine.duplicates(hosts.hosts.map { ($0, sessions.existing($0.id)?.coreName) })
@@ -125,6 +126,9 @@ struct MachinesView: View {
                     if LocalCore.isAvailable && !hosts.hasLocal {
                         Button("Add This Mac", systemImage: "desktopcomputer") { selection = hosts.addLocal().id }
                     }
+                    #if os(iOS)
+                    Button("Scan from Mac", systemImage: "qrcode.viewfinder") { showingPairing = true }
+                    #endif
                     Divider()
                     Button("Connect Linked Machines Directly", systemImage: "arrow.triangle.branch") {
                         showingMigration = true
@@ -136,6 +140,9 @@ struct MachinesView: View {
                 }
             }
         }
+        #if os(iOS)
+        .sheet(isPresented: $showingPairing) { PairingScanView() }
+        #endif
         .sheet(item: $editing) { host in
             HostEditor(host: host, setupSession: sessions.existing(host.id))
         }

@@ -121,6 +121,24 @@ final class HostStore {
         persist()
     }
 
+    /// Adds the machines from a Mac's pairing code, signing in with `keyID`. A machine already
+    /// saved with the same address, port and user is skipped. Returns how many were added.
+    @discardableResult
+    func importPaired(_ paired: [PairingHost], keyID: UUID?) -> Int {
+        func same(_ a: SSHTarget, _ b: SSHTarget) -> Bool {
+            a.host.lowercased() == b.host.lowercased() && a.port == b.port && a.username == b.username
+        }
+        var added = 0
+        for item in paired {
+            let target = SSHTarget(host: item.host, port: item.port, username: item.user)
+            guard !hosts.contains(where: { !$0.isLocal && same($0.target, target) }) else { continue }
+            hosts.append(Host(name: item.name.isEmpty ? item.host : item.name, target: target, keyID: keyID))
+            added += 1
+        }
+        if added > 0 { persist() }
+        return added
+    }
+
     func delete(at offsets: IndexSet) {
         hosts.remove(atOffsets: offsets)
         persist()

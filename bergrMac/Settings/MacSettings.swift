@@ -11,6 +11,7 @@ struct MacSettings: View {
     @State private var creatingKey = false
     @State private var importingKey = false
     @State private var keyToDelete: SSHKeyInfo?
+    @State private var pairing = false
     @AppStorage(QuietAgents.key) private var hideAfter = QuietAgents.defaultSeconds
     @AppStorage(Delivery.notificationsKey) private var notifications = false
     @AppStorage(Appearance.key) private var appearance = Appearance.system
@@ -46,6 +47,7 @@ struct MacSettings: View {
                         .buttonStyle(.plain)
                     }
                     Button("Add Machine…", systemImage: "plus") { editing = Host.new(key: keys.keys.last?.id) }
+                    Button("Pair iPhone…", systemImage: "qrcode") { pairing = true }
                 }
                 // Inline, like a Mac settings pane: the keys themselves, with their actions on the
                 // row and Create / Import buttons that open sheets (no drill-down screen).
@@ -80,6 +82,7 @@ struct MacSettings: View {
             .modifier(SettingsPane())
             .tabItem { Label("Machines & Keys", systemImage: "server.rack") }
             .sheet(isPresented: $creatingKey) { NewKeyView() }
+            .sheet(isPresented: $pairing) { PairPhoneView() }
             .sheet(isPresented: $importingKey) { ImportKeyView() }
             .confirmationDialog("Delete \(keyToDelete?.label ?? "key")?", isPresented: Binding(
                 get: { keyToDelete != nil }, set: { if !$0 { keyToDelete = nil } })) {

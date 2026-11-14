@@ -79,7 +79,7 @@
         "INFOPLIST_FILE": "Config/Info.plist",
         "INFOPLIST_KEY_CFBundleDisplayName": "bergr$(BERGR_NAME_SUFFIX)",
         "INFOPLIST_KEY_ITSAppUsesNonExemptEncryption": "NO",
-        "INFOPLIST_KEY_NSCameraUsageDescription": "Bergr takes a photo or scans a document to attach to a message.",
+        "INFOPLIST_KEY_NSCameraUsageDescription": "Bergr uses the camera to attach a photo or scanned document to a message, and to scan the pairing code your Mac shows.",
         "INFOPLIST_KEY_NSFaceIDUsageDescription": "Face ID unlocks your SSH key when you connect to a machine.",
         "INFOPLIST_KEY_NSMicrophoneUsageDescription": "Bergr listens while you dictate a message to an agent.",
         "INFOPLIST_KEY_NSSpeechRecognitionUsageDescription": "Bergr turns your speech into text for the message you are writing, on this device when it can.",

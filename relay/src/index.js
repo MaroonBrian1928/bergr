@@ -559,6 +559,46 @@ async function activityState(request, env) {
   return err(502, reason);
 }
 
+// ---- Pairing mailbox: the phone leaves its public key (encrypted to the Mac) under a one-time
+// token from the Mac's QR code; the Mac fetches it once. Only a hash of the token is stored, and
+// the token is never logged. One message per token, gone after 5 minutes or the first read.
+
+const PAIR_MAX = 4096;
+const PAIR_TTL_MS = 5 * 60 * 1000;
+const PAIR_TOKEN_RE = /^[A-Za-z0-9_-]{22,64}$/;
+
+async function pairLimited(request, env) {
+  const limiter = env.PAIR_LIMITER;
+  if (!limiter) return false;
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const { success } = await limiter.limit({ key: await sha256Hex(ip) });
+  return !success;
+}
+
+async function pairPut(request, env, token) {
+  const declared = parseInt(request.headers.get("content-length") || "0", 10);
+  if (declared > PAIR_MAX) return err(413, "body too large");
+  if (await pairLimited(request, env)) return err(429, "rate limited");
+  const body = await request.text();
+  if (new TextEncoder().encode(body).length > PAIR_MAX) return err(413, "body too large");
+  if (!body) return err(400, "empty body");
+  const key = `pair:${await sha256Hex(token)}`;
+  if (await env.REGISTRATIONS.get(key)) return err(409, "already sent");
+  await env.REGISTRATIONS.put(key, JSON.stringify({ body, at: Date.now() }), { expirationTtl: PAIR_TTL_MS / 1000 });
+  return json(204);
+}
+
+async function pairTake(request, env, token) {
+  if (await pairLimited(request, env)) return err(429, "rate limited");
+  const key = `pair:${await sha256Hex(token)}`;
+  const raw = await env.REGISTRATIONS.get(key);
+  if (!raw) return err(404, "not found");
+  await env.REGISTRATIONS.delete(key);
+  const { body, at } = JSON.parse(raw);
+  if (Date.now() - at > PAIR_TTL_MS) return err(404, "not found");
+  return new Response(body, { status: 200, headers: { "content-type": "text/plain" } });
+}
+
 export async function handle(request, env) {
   const { pathname } = new URL(request.url);
   const m = request.method;
@@ -569,6 +609,12 @@ export async function handle(request, env) {
     if (pathname === "/v1/activity" && m === "POST") return await activityRegister(request, env);
     if (pathname === "/v1/activity" && m === "DELETE") return await activityUnregister(request, env);
     if (pathname === "/v1/activity/state" && m === "POST") return await activityState(request, env);
+    if (pathname.startsWith("/pair/")) {
+      const token = pathname.slice(6);
+      if (!PAIR_TOKEN_RE.test(token)) return err(404, "not found");
+      if (m === "POST") return await pairPut(request, env, token);
+      if (m === "GET") return await pairTake(request, env, token);
+    }
   } catch (e) {
     console.error("internal error", e && e.name);
     return err(500, "internal error");
