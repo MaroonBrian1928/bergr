@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 19
+VERSION = 20
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 
 
@@ -1075,6 +1075,9 @@ class ActivityPoster:
       while any count is non-zero.
     A post that fails is not recorded; the same change is sent again after 30 s."""
     MIN_GAP, TEXT_GAP, BEAT, RETRY_DELAY = 2, 20, 300, 30
+    # The "I'm alive" beat to the relay, even when every count is zero: the relay tells the phone when
+    # a machine that was working goes silent (see heartbeat).
+    HEARTBEAT = 300
     ZERO = {"needsYou": 0, "working": 0, "done": 0}
 
     def __init__(self):
@@ -1124,6 +1127,35 @@ class ActivityPoster:
         d["last"] = summary
         d["retry_at"] = 0
         self.learn(secret, parse_reply(raw))
+
+    def heartbeat(self, device, terms, host, now):
+        """Every HEARTBEAT seconds (5 min), posts machine id, name, counts and helper version to the
+        relay's /v1/heartbeat, idle or not. A failed beat is tried again after RETRY_DELAY. Returns
+        True when a beat was sent."""
+        d = self._device(device["secret"])
+        if now < d.get("hb_at", 0) + self.HEARTBEAT or now < d.get("hb_retry", 0):
+            return False
+        host_id = device.get("host_id") or host
+        summary = activity_summary(terms, rows=False, host_id=host_id, machine=host,
+                                   hide_after=d.get("hide_after", 86400), now=now)
+        body = {"machine": host_id[:100], "name": host[:100], "needsYou": summary["needsYou"],
+                "working": summary["working"], "done": summary["done"], "version": VERSION}
+        req = urllib.request.Request(device["relay"].rstrip("/") + "/v1/heartbeat",
+                                     data=json.dumps(body).encode("utf-8"), method="POST", headers={
+            "authorization": "Bearer " + device["secret"], "content-type": "application/json",
+            "user-agent": f"bergr-notify/{VERSION}"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f"HTTP {resp.status}")
+                resp.read()
+        except Exception as e:
+            log(f"heartbeat failed: {e}")
+            d["hb_retry"] = now + self.RETRY_DELAY
+            return False
+        d["hb_at"] = now
+        d["hb_retry"] = 0
+        return True
 
     def learn(self, secret, answer):
         """Takes the relay's reply, to a post or to a push alert. Ignored when it has no "active"
@@ -1405,6 +1437,7 @@ def run():
                     for device in cfg.get("devices") or []:
                         if isinstance(device, dict) and device.get("relay") and device.get("secret"):
                             poster.post(device, state.get("terms", {}), host, time.time())
+                            poster.heartbeat(device, state.get("terms", {}), host, time.time())
                     if not alerts:
                         continue
                     for a in alerts:

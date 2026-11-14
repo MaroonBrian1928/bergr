@@ -16,6 +16,10 @@ class_name = "Device"
 tag = "v1"
 new_sqlite_classes = ["Device"]
 
+# Every 5 minutes: tell phones about machines that went quiet while agents were working.
+[triggers]
+crons = ["*/5 * * * *"]
+
 # POST /v1/register: 5 per 60 s per hashed IP. namespace_id is any integer string, unique in the account.
 [[ratelimits]]
 name = "REGISTER_LIMITER"

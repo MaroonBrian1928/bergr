@@ -106,6 +106,9 @@ function bearer(request) {
 
 const MACHINE_STALE_MS = 15 * 60 * 1000;
 const MAX_MACHINES = 20;
+// A machine whose helper beat (every 5 min) with agents working, then fell silent this long.
+const QUIET_MS = 15 * 60 * 1000;
+const HEARD_KEEP_MS = 30 * 86400 * 1000; // heartbeat records of machines gone for a month are dropped
 const ACTIVITY_TTL_MS = 12 * 3600 * 1000;
 const ROW_MAX = 3;
 const KINDS = new Set(["claude", "codex", "antigravity", "shell"]);
@@ -227,10 +230,59 @@ export class Device {
         if (!this.take("push", now)) return { limited: true };
         return { reg: regOut, badge: await badgeOf(), ...laOut };
 
-      case "prefs":
-        // Absent means on (old apps); only an explicit false turns the badge off.
-        await s.put("reg", { ...reg, badge: b.badge !== false });
+      case "prefs": {
+        // Absent means on (old apps); only an explicit false turns the badge off. Same for `errors`
+        // (the phone's "errors" kind), which also covers "went quiet" alerts.
+        const next = { ...reg };
+        if (b.badge !== undefined) next.badge = b.badge !== false;
+        if (b.errors !== undefined) next.errors = b.errors !== false;
+        await s.put("reg", next);
         return { ok: true };
+      }
+
+      case "heartbeat": {
+        // Last-heard record per machine: `hb:<id>`, separate from the Live Activity records (those
+        // exist only while an activity does). Helpers that never beat leave no record, so are never
+        // reported quiet. Hearing from a machine re-arms its quiet alert.
+        const machine = text(b.machine, 100);
+        if (!machine) return { invalid: "invalid machine" };
+        const prev = await s.get("hb:" + machine);
+        const hbs = await s.list({ prefix: "hb:" });
+        if (!prev && hbs.size >= MAX_MACHINES) return { invalid: "too many machines" };
+        const rec = {
+          at: now, name: text(b.name, 100) || machine, needsYou: count(b.needsYou), working: count(b.working),
+          done: count(b.done), version: count(b.version), alerted: false,
+        };
+        const drop = [...hbs].filter(([, v]) => now - v.at > HEARD_KEEP_MS).map(([k]) => k);
+        await s.put("hb:" + machine, rec);
+        if (drop.length) await s.delete(drop);
+        return { ok: true, watch: rec.working > 0 };
+      }
+
+      case "heard": {
+        const out = [];
+        for (const [k, v] of await s.list({ prefix: "hb:" })) {
+          out.push({ id: k.slice(3), name: v.name, at: v.at, working: v.working, version: v.version });
+        }
+        return { machines: out, now };
+      }
+
+      case "quiet": {
+        // Machines that were working at their last beat and haven't been heard for QUIET_MS, once
+        // each (`alerted` until the next beat). `pending` counts those still being watched.
+        const quiet = [];
+        let pending = 0;
+        const puts = {};
+        for (const [k, v] of await s.list({ prefix: "hb:" })) {
+          if (v.working <= 0 || v.alerted) continue;
+          if (now - v.at <= QUIET_MS) { pending++; continue; }
+          quiet.push({ machine: k.slice(3), name: v.name, working: v.working });
+          puts[k] = { ...v, alerted: true };
+        }
+        if (quiet.length) await s.put(puts);
+        // A device that turned errors off gets nothing; the silence still counts as announced.
+        return { reg: regOut, quiet: reg.errors === false ? [] : quiet, pending };
+      }
 
       case "unregister":
         return this.forget();
@@ -513,9 +565,36 @@ async function prefs(request, env) {
   if (!bearer(request)) return err(401, "unauthorized");
   const body = await readJson(request);
   if (body instanceof Response) return body;
-  const a = await authed(request, env, { op: "prefs", badge: body.badge });
+  const a = await authed(request, env, { op: "prefs", badge: body.badge, errors: body.errors });
   if (!a.out) return err(401, "unauthorized");
   return json(200, { ok: true });
+}
+
+async function heartbeat(request, env) {
+  const declared = parseInt(request.headers.get("content-length") || "0", 10);
+  if (declared > MAX_BODY) return err(413, "body too large");
+  if (!bearer(request)) return err(401, "unauthorized");
+  const body = await readJson(request);
+  if (body instanceof Response) return body;
+  const a = await authed(request, env, {
+    op: "heartbeat", machine: body.machine, name: body.name, needsYou: body.needsYou, working: body.working,
+    done: body.done, version: body.version,
+  });
+  const d = a.out;
+  if (!d) return err(401, "unauthorized");
+  if (d.invalid) return err(400, d.invalid);
+  // The cron trigger only visits devices listed here (expires on its own after a day of silence).
+  if (d.watch) await env.REGISTRATIONS.put(`watch:${a.hash}`, "1", { expirationTtl: 86400 });
+  return json(200, { ok: true });
+}
+
+/// GET /v1/machines: when each of this device's machines last sent a heartbeat (ms since epoch),
+/// and the relay's own clock so the phone needn't trust its own.
+async function machinesRead(request, env) {
+  if (!bearer(request)) return err(401, "unauthorized");
+  const a = await authed(request, env, { op: "heard" });
+  if (!a.out) return err(401, "unauthorized");
+  return json(200, { machines: a.out.machines, now: a.out.now });
 }
 
 async function activityUnregister(request, env) {
@@ -632,6 +711,8 @@ export async function handle(request, env) {
     if (pathname === "/v1/register" && m === "POST") return await register(request, env);
     if (pathname === "/v1/register" && m === "DELETE") return await unregister(request, env);
     if (pathname === "/v1/prefs" && m === "POST") return await prefs(request, env);
+    if (pathname === "/v1/heartbeat" && m === "POST") return await heartbeat(request, env);
+    if (pathname === "/v1/machines" && m === "GET") return await machinesRead(request, env);
     if (pathname === "/v1/push" && m === "POST") return await push(request, env);
     if (pathname === "/v1/activity" && m === "POST") return await activityRegister(request, env);
     if (pathname === "/v1/activity" && m === "DELETE") return await activityUnregister(request, env);
@@ -649,4 +730,76 @@ export async function handle(request, env) {
   return err(404, "not found");
 }
 
-export default { fetch: handle };
+// ---- Cron: machines that went quiet while agents were working.
+//
+// Runs every 5 minutes (wrangler.toml). Only devices with a recent working heartbeat are visited
+// (KV `watch:<hash>`), so idle fleets cost nothing. The text is sent in the clear: just the
+// machine's name and a count.
+
+export async function notifyQuiet(env, hash) {
+  const d = await call(env, hash, { op: "quiet" });
+  if (!d) { await env.REGISTRATIONS.delete(`watch:${hash}`); return 0; }
+  if (!d.pending && !d.quiet.length) await env.REGISTRATIONS.delete(`watch:${hash}`);
+  if (!d.quiet.length) return 0;
+  const reg = d.reg;
+  let jwt;
+  try {
+    jwt = await apnsJwt(env, reg.sandbox);
+  } catch (e) {
+    console.error("jwt error", e && e.name);
+  }
+  if (!jwt) return 0;
+  const host = reg.sandbox ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
+  let sent = 0;
+  for (const q of d.quiet) {
+    const body = `${q.name} went quiet while ${q.working} ${q.working === 1 ? "agent was" : "agents were"} working`;
+    const id = `quiet:${q.machine}`.slice(0, 64);
+    try {
+      const res = await fetch(`${host}/3/device/${reg.token}`, {
+        method: "POST",
+        headers: {
+          authorization: `bearer ${jwt}`,
+          "apns-topic": reg.bundle_id,
+          "apns-push-type": "alert",
+          "apns-collapse-id": id,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          aps: { alert: { title: "Bergr", body }, sound: "default", "thread-id": id, "interruption-level": "active" },
+          host: q.machine,
+        }),
+      });
+      if (res.status === 200) { sent++; continue; }
+      const reason = await apnsReason(res);
+      if ((res.status === 400 && reason === "BadDeviceToken") || res.status === 410) {
+        await env.REGISTRATIONS.delete(`reg:${hash}`);
+        await env.REGISTRATIONS.delete(`watch:${hash}`);
+        await send(deviceStub(env, hash), { op: "clear" });
+        return sent;
+      }
+      console.error("apns error", res.status, reason);
+    } catch (e) {
+      console.error("apns fetch failed", e && e.name);
+    }
+  }
+  return sent;
+}
+
+export async function scheduled(env) {
+  let cursor;
+  let sent = 0;
+  do {
+    const page = await env.REGISTRATIONS.list({ prefix: "watch:", cursor });
+    for (const key of page.keys) {
+      try {
+        sent += await notifyQuiet(env, key.name.slice(6));
+      } catch (e) {
+        console.error("quiet check failed", e && e.name);
+      }
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  return sent;
+}
+
+export default { fetch: handle, scheduled: (_event, env, ctx) => ctx.waitUntil(scheduled(env)) };

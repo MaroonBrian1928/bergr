@@ -64,6 +64,7 @@ struct MachineSetupSection: View {
             }
             Section {
                 row(.push, symbol: "bell.badge") { pushAction }
+                if setup.items.contains(.alerts) { row(.alerts, symbol: "antenna.radiowaves.left.and.right") { EmptyView() } }
                 row(.statusLine, symbol: "gauge.with.dots.needle.33percent") { statusLineAction }
             } header: {
                 Text("Bergr")

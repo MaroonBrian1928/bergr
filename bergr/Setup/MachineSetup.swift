@@ -21,7 +21,9 @@ final class MachineSetup {
     var windows: Bool { session.isWindowsHost }
 
     /// The rows that apply to this machine, in order (sleep is not checked on Windows).
-    var items: [SetupItem] { SetupItem.allCases.filter { $0 != .agents && !($0 == .sleep && windows) } }
+    var items: [SetupItem] {
+        SetupItem.allCases.filter { $0 != .agents && !($0 == .sleep && windows) && !($0 == .alerts && PushRegistration.shared.relaySecret == nil) }
+    }
 
     static func repairID(_ agent: AgentCLI) -> String { "agent.\(agent.rawValue)" }
 
@@ -38,6 +40,7 @@ final class MachineSetup {
            NotificationPrefs.load().keepAwake, let version = helperVersion, version >= SetupCheck.keepAwakeHelperVersion {
             states[.sleep] = .ready("Kept awake by Bergr while agents work")
         }
+        states[.alerts] = await alertsState()
         states[.statusLine] = await statusLineState()
     }
 
@@ -51,6 +54,7 @@ final class MachineSetup {
             await PushRegistration.shared.install(on: session)
             actionError = PushRegistration.shared.lastError
             states[.push] = await pushState()
+            states[.alerts] = await alertsState()
         case .statusLine:
             do {
                 _ = try await session.setUpClaudeStatusLine()
@@ -58,7 +62,7 @@ final class MachineSetup {
                 actionError = error.localizedDescription
             }
             states[.statusLine] = await statusLineState()
-        case .core, .git, .python, .sleep, .agents:
+        case .core, .git, .python, .sleep, .agents, .alerts:
             break
         }
         busy = nil
@@ -174,6 +178,16 @@ final class MachineSetup {
         } catch {
             return .failed(error.localizedDescription)
         }
+    }
+
+    /// Whether the relay has heard this machine's helper lately. Only asked while the machine is
+    /// reachable (`check` returns early otherwise), so silence here is the helper's or the relay's.
+    private func alertsState() async -> CheckState {
+        guard let secret = PushRegistration.shared.relaySecret else { return .ready("Push alerts are off") }
+        guard let heard = await PushRegistration.fetchHeard(secret: secret) else {
+            return .ready("Couldn't ask the push relay")
+        }
+        return RelayHeard.alertsState(age: heard.age(of: session.host.id))
     }
 
     private func statusLineState() async -> CheckState {

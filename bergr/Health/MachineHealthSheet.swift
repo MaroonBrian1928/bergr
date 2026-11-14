@@ -10,6 +10,8 @@ struct MachineHealthSheet: View {
     @State private var processes: [MachineProcess]?
     @State private var processError: String?
     @State private var loading = true
+    /// Seconds since the push relay last heard this machine's helper; nil when unknown.
+    @State private var heardAge: TimeInterval?
 
     var body: some View {
         NavigationStack {
@@ -23,6 +25,12 @@ struct MachineHealthSheet: View {
                 } else {
                     Section("Health unavailable") {
                         Text(failure ?? "No reading yet.").foregroundStyle(.secondary)
+                    }
+                }
+                if let heardAge {
+                    Section("Alerts") {
+                        Text(RelayHeard.lastHeardText(heardAge))
+                            .foregroundStyle(heardAge > RelayHeard.staleAfter ? Color.orange : Color.primary)
                     }
                 }
                 Section("Busiest processes") {
@@ -56,6 +64,12 @@ struct MachineHealthSheet: View {
         #if os(macOS)
         .frame(minWidth: 380, minHeight: 360)
         #endif
+        .task {
+            if let secret = PushRegistration.shared.relaySecret,
+               let heard = await PushRegistration.fetchHeard(secret: secret) {
+                heardAge = heard.age(of: source.healthID)
+            }
+        }
         .task {
             do { processes = try await MachineHealthMonitor.shared.topProcesses(source) }
             catch { processError = error.localizedDescription }

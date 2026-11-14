@@ -31,7 +31,11 @@ final class PushRegistration {
     private(set) var alerts = UserDefaults.standard.object(forKey: Delivery.notificationsKey) as? Bool ?? true
     func alertsChanged() {
         if alerts != Delivery.notifications { alerts = Delivery.notifications }
-        if prefs != NotificationPrefs.load() { prefs = NotificationPrefs.load() }
+        if prefs != NotificationPrefs.load() {
+            let errorsChanged = prefs.errors != NotificationPrefs.load().errors
+            prefs = NotificationPrefs.load()
+            if errorsChanged { syncBadgePref() }  // the relay's "went quiet" alerts follow the errors kind
+        }
         focusChanged()
     }
     /// The Focus profile that is on now (Settings > Focus > Focus Filters > Bergr); the helpers get
@@ -170,7 +174,7 @@ final class PushRegistration {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["badge": AppBadge.enabled()])
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["badge": AppBadge.enabled(), "errors": NotificationPrefs.load().errors])
         Task { _ = try? await URLSession.shared.data(for: request) }
     }
 

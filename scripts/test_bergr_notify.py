@@ -691,6 +691,43 @@ class PosterCadenceTests(unittest.TestCase):
         self.assertNotIn("s3cret", self.poster.devices)
 
 
+class HeartbeatTests(unittest.TestCase):
+    DEVICE = {"relay": "https://relay.example", "secret": "s3cret", "host_id": "H"}
+
+    def setUp(self):
+        self.poster = notify.ActivityPoster()
+        self.relay = FakeRelay()
+        patch = mock.patch.object(notify.urllib.request, "urlopen", self.relay)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def beat(self, terms, now):
+        return self.poster.heartbeat(self.DEVICE, terms, "box", now)
+
+    def test_idle_machine_beats_every_five_minutes(self):
+        self.assertTrue(self.beat(fleet(), 1000))
+        self.assertFalse(self.beat(fleet(), 1299))
+        self.assertTrue(self.beat(fleet(), 1300))
+        self.assertEqual(len(self.relay.calls), 2)
+
+    def test_beat_carries_id_name_counts_and_version(self):
+        self.beat(fleet(blocked=1, working=2, done=3), 1000)
+        self.assertEqual(self.relay.calls[0], {"machine": "H", "name": "box", "needsYou": 1, "working": 2,
+                                               "done": 3, "version": notify.VERSION})
+
+    def test_failed_beat_retries_after_30s(self):
+        self.relay.down = True
+        self.assertFalse(self.beat(fleet(working=1), 1000))
+        self.assertFalse(self.beat(fleet(working=1), 1029))
+        self.relay.down = False
+        self.assertTrue(self.beat(fleet(working=1), 1030))
+
+    def test_beat_does_not_disturb_activity_posts(self):
+        self.beat(fleet(working=1), 1000)
+        self.poster.post(self.DEVICE, fleet(), "box", 1000)
+        self.assertEqual(len(self.relay.calls), 1)  # only the beat; zero counts post nothing
+
+
 class PrefsTests(unittest.TestCase):
     """Per-kind switches, muted agents and quiet hours (v13); no prefs behaves as before."""
     DEVICE = {"id": "abcd", "relay": "https://r.example", "secret": "s"}

@@ -2,7 +2,7 @@ import Foundation
 
 /// The rows of a machine's Setup checklist.
 enum SetupItem: String, CaseIterable, Identifiable, Sendable {
-    case core, git, python, sleep, agents, push, statusLine
+    case core, git, python, sleep, agents, push, alerts, statusLine
     var id: String { rawValue }
 
     var title: String {
@@ -13,6 +13,7 @@ enum SetupItem: String, CaseIterable, Identifiable, Sendable {
         case .python: "Python 3"
         case .agents: "Agent CLIs"
         case .push: "Push helper"
+        case .alerts: "Alerts reaching your phone"
         case .statusLine: "Status line"
         }
     }
