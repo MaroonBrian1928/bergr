@@ -16,13 +16,78 @@ struct ApprovalRuleTests {
         let all = try cases()
         let ctx = try #require(all["context"] as? [String: String])
         for c in try #require(all["match"] as? [[String: Any]]) {
-            let rule = ApprovalRule(machine: ctx["machine"]!, cwd: ctx["cwd"]!, agent: ctx["agent"]!,
+            var rule = ApprovalRule(machine: ctx["machine"]!, cwd: ctx["cwd"]!, agent: ctx["agent"]!,
                                     command: c["rule"] as! String, prefix: c["prefix"] as! Bool)
+            if let expires = c["expires"] as? Double { rule.expires = Date(timeIntervalSince1970: expires) }
+            let now = (c["now"] as? Double).map { Date(timeIntervalSince1970: $0) } ?? .now
             let got = ApprovalRuleMatcher.matches(
                 rule, machine: c["machine"] as? String ?? ctx["machine"]!, cwd: c["cwd"] as? String ?? ctx["cwd"]!,
-                agent: c["agent"] as? String ?? ctx["agent"]!, command: c["command"] as! String)
+                agent: c["agent"] as? String ?? ctx["agent"]!, command: c["command"] as! String, now: now)
             #expect(got == (c["expect"] as! Bool), "\(c)")
         }
+    }
+
+    @Test func sharedDangerousCases() throws {
+        let d = try #require(try cases()["dangerous"] as? [String: Any])
+        for t in try #require(d["yes"] as? [String]) { #expect(DangerousCommand.check(t, ask: []) != nil, "\(t)") }
+        for t in try #require(d["no"] as? [String]) { #expect(DangerousCommand.check(t, ask: []) == nil, "\(t)") }
+    }
+
+    @Test func sharedAskCases() throws {
+        for c in try #require(try cases()["ask"] as? [[String: Any]]) {
+            let patterns = c["patterns"] as! [String], text = c["text"] as! String
+            #expect(AskPatterns.matches(text, patterns) == (c["expect"] as! Bool), "\(c)")
+            #expect((DangerousCommand.check(text, ask: patterns) != nil) == (c["expect"] as! Bool), "\(c)")
+        }
+    }
+
+    @Test func askPatternsBlockRulesAndSync() throws {
+        let suite = "ApprovalRuleTests-ask-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        AskPatterns.save(["npm publish"], to: defaults)
+        #expect(AskPatterns.load(defaults) == ["npm publish"])
+        #expect(DangerousCommand.check("npm publish --tag next", ask: AskPatterns.load(defaults)) == AskPatterns.reason)
+        let data = PushRegistration.payload(token: "ab", secret: "s", enabled: true, name: "phone", key: nil,
+                                            host: UUID(), rules: [], askPatterns: ["npm publish"])
+        let device = try #require((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["device"] as? [String: Any])
+        #expect(device["askPatterns"] as? [String] == ["npm publish"])
+        UserDefaults().removePersistentDomain(forName: suite)
+    }
+
+    @Test func noLonePrefixForBroadPrograms() {
+        #expect(ApprovalRuleMatcher.prefixes(of: "git log --oneline") == ["git log --oneline", "git log"])
+        #expect(ApprovalRuleMatcher.prefixes(of: "python3 manage.py test") == ["python3 manage.py test", "python3 manage.py"])
+        #expect(ApprovalRuleMatcher.prefixes(of: "/usr/bin/python3 x") == ["/usr/bin/python3 x"])
+        #expect(ApprovalRuleMatcher.prefixes(of: "swiftlint lint") == ["swiftlint lint", "swiftlint"])
+        #expect(ApprovalRuleMatcher.prefixWarning("swiftlint") == "This allows any `swiftlint` command in this folder")
+        #expect(ApprovalRuleMatcher.prefixWarning("swiftlint lint") == nil)
+    }
+
+    @Test func rulesExpireAndRenew() throws {
+        let defaults = try #require(UserDefaults(suiteName: "ApprovalRuleTests-exp-\(UUID())"))
+        let store = ApprovalRuleStore(defaults: defaults)
+        let scope = ApprovalScope(machine: "M1", machineName: "mac", cwd: "/p", agent: "claude-code")
+        #expect(store.lifetime == .month)
+        #expect(store.add(scope: scope, command: "git", prefix: true) == nil)
+        #expect(store.add(scope: scope, command: "npm", prefix: true) == nil)
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let rule = try #require(store.add(scope: scope, command: "npm test", prefix: false, now: start))
+        #expect(rule.expires == start.addingTimeInterval(30 * 86_400))
+        #expect(rule.payload["expires"] as? Double == start.addingTimeInterval(30 * 86_400).timeIntervalSince1970)
+        let later = start.addingTimeInterval(31 * 86_400)
+        #expect(!ApprovalRuleMatcher.matches(rule, machine: "M1", cwd: "/p", agent: "claude-code", command: "npm test", now: later))
+        let renewed = try #require(store.add(scope: scope, command: "npm test", prefix: false, now: later))
+        #expect(renewed.id == rule.id && !renewed.isExpired(at: later))
+        store.lifetime = .never
+        #expect(ApprovalRuleStore(defaults: defaults).lifetime == .never)
+        #expect(store.renew(rule.id)?.expires == nil)
+        store.lifetime = .day
+        let day = try #require(store.add(scope: scope, command: "ls", prefix: false, now: start))
+        #expect(day.expires == start.addingTimeInterval(86_400))
+        // Rules saved before expiry existed decode as never expiring.
+        let old = #"[{"id":"\#(UUID().uuidString)","machine":"M1","cwd":"/p","agent":"a","command":"ls","prefix":false,"created":0}]"#
+        defaults.set(Data(old.utf8), forKey: ApprovalRuleStore.key)
+        #expect(ApprovalRuleStore.load(defaults).first?.expires == nil)
     }
 
     @Test func sharedPromptCases() throws {
@@ -34,7 +99,7 @@ struct ApprovalRuleTests {
     }
 
     @Test func prefixesOfferShorterWordRuns() {
-        #expect(ApprovalRuleMatcher.prefixes(of: "npm test -- --watch") == ["npm test -- --watch", "npm test --", "npm test", "npm"])
+        #expect(ApprovalRuleMatcher.prefixes(of: "npm test -- --watch") == ["npm test -- --watch", "npm test --", "npm test"])
         #expect(ApprovalRuleMatcher.prefixes(of: "npm test | sh").isEmpty)
         #expect(ApprovalRuleMatcher.prefixes(of: "rm -rf x").isEmpty)
     }

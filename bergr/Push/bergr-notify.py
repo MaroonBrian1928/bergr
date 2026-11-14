@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 18
+VERSION = 19
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 
 
@@ -57,17 +57,34 @@ DANGEROUS_RULES = [
     ("recursive force delete (rm -rf)",
      r"\brm\b(?=[^;&|\n]*\s(?:-[a-z]*r|--recursive))(?=[^;&|\n]*\s(?:-[a-z]*f|--force))"),
     ("force push (git push --force)",
-     r"\bgit\s+push\b[^;&|\n]*\s(?:--force(?:-with-lease)?\b|-[a-z]*f[a-z]*\b)"),
+     r"\bgit\s+push\b[^;&|\n]*\s(?:--force(?:-with-lease)?\b|-[a-z]*f[a-z]*\b|\+[^\s+])"),
     ("hard reset (git reset --hard)", r"\bgit\s+reset\b[^;&|\n]*--hard\b"),
-    ("git clean -f deletes untracked files", r"\bgit\s+clean\b[^;&|\n]*\s-[a-z]*f"),
+    ("git clean -f deletes untracked files", r"\bgit\s+clean\b[^;&|\n]*\s(?:-[a-z]*f|--force\b)"),
+    ("discards uncommitted changes (git checkout .)", r"\bgit\s+checkout\b[^;&|\n]*\s(?:--\s+)?\.(?=[\s;&|)]|$)"),
+    ("discards uncommitted changes (git restore)",
+     r"\bgit\s+restore\b(?:(?![^;&|\n]*\s--staged\b)|(?=[^;&|\n]*\s--worktree\b))"),
+    ("deletes a branch (git branch -D)", r"\bgit\s+branch\b[^;&|\n]*(?-i:\s-[a-zA-Z]*D)"),
+    ("deletes files (find -delete)", r"\bfind\b[^;&|\n]*\s(?:-delete\b|-exec(?:dir)?\s+rm\b)"),
     ("runs as root (sudo)", r"\bsudo\s"),
     ("formats a disk (mkfs)", r"\bmkfs(?:\.\w+)?\b"),
     ("raw disk write (dd if=)", r"\bdd\s+(?:\S+\s+)*?if="),
+    ("raw disk write (dd of=/dev/)", r"\bdd\b[^;&|\n]*\bof=/dev/(?!null\b|stdout\b|stderr\b)"),
     ("drops or empties a database (DROP / TRUNCATE)", r"\bdrop\s+(?:table|database)\b|\btruncate\b"),
+    ("deletes database rows (DELETE FROM)", r"\bdelete\s+from\b"),
     ("opens permissions to everyone (chmod -R 777)",
      r"\bchmod\b(?=[^;&|\n]*\s(?:-[a-z]*r|--recursive))[^;&|\n]*\b777\b"),
-    ("writes straight to a disk (> /dev/sd)", r">\s*/dev/sd"),
-    ("destructive migration (reset / rollback / drop)", r"\bmigrate\b[^;&|\n]*\b(?:reset|rollback|drop)\b"),
+    ("changes owners recursively (chown -R)", r"\bchown\b[^;&|\n]*\s(?:-[a-z]*r[a-z]*|--recursive)\b"),
+    ("writes straight to a disk (> /dev/sd)", r">\s*/dev/(?:sd|nvme|disk|hd|mmcblk)"),
+    ("destructive migration (reset / rollback / drop)",
+     r"\bmigrate\b[^;&|\n]*\b(?:reset|rollback|drop)\b"),
+    ("destroys infrastructure (terraform destroy)", r"\b(?:terraform|tofu)\b[^;&|\n]*\s-?destroy\b"),
+    ("deletes cluster resources (kubectl delete)", r"\bkubectl\b[^;&|\n]*\sdelete\b"),
+    ("deletes containers or data (docker prune / rm -f)",
+     r"\bdocker\s+(?:system\s+prune|volume\s+(?:rm|prune)\b|(?:container\s+)?rm\b[^;&|\n]*\s(?:-[a-z]*f[a-z]*|--force)\b)"),
+    ("runs a script from the internet (curl | sh)",
+     r"\b(?:curl|wget)\b[^;&\n]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|python[0-9.]*)\b|\b(?:sh|bash|zsh)\s+<\(\s*(?:curl|wget)\b"),
+    ("shuts down the machine (shutdown / reboot)",
+     r"(?:^|[;&|(\n:]|\bsudo|\bsystemctl|\bdoas)\s*(?:shutdown|reboot|halt|poweroff)\b"),
 ]
 _DANGEROUS = [(reason, re.compile(pattern, re.I)) for reason, pattern in DANGEROUS_RULES]
 
@@ -153,10 +170,17 @@ def command_eligible(command):
             and dangerous_reason(command) is None)
 
 
-def rule_matches(rule, machine, cwd, agent, command):
-    """Exact command, or the rule's prefix followed by the end or a space; same machine, folder, agent."""
+def rule_matches(rule, machine, cwd, agent, command, now=None):
+    """Exact command, or the rule's prefix followed by the end or a space; same machine, folder, agent.
+    A rule with "expires" (seconds since 1970, v18 on) stops matching at that moment."""
     if not isinstance(rule, dict):
         return False
+    expires = rule.get("expires")
+    if expires is not None:
+        if not isinstance(expires, (int, float)) or isinstance(expires, bool):
+            return False
+        if (time.time() if now is None else now) >= expires:
+            return False
     r_cmd, r_machine, r_cwd, r_agent = (rule.get(k) for k in ("command", "machine", "cwd", "agent"))
     if not all(isinstance(v, str) for v in (r_machine, r_cwd, r_agent)) or not r_machine or not r_cwd:
         return False
@@ -231,6 +255,30 @@ def device_rules(cfg):
     return out
 
 
+def _glob_regex(pattern):
+    return re.compile("".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in pattern), re.I)
+
+
+def ask_match(text, patterns):
+    """Whether `text` contains one of the user's "always ask" patterns (v18 on): plain text or a simple
+    glob (* any run, ? one character), case-insensitive, anywhere in the text. Mirrors AskPatterns.swift."""
+    if not isinstance(text, str) or not isinstance(patterns, list):
+        return False
+    for p in patterns:
+        if isinstance(p, str) and p.strip() and _glob_regex(p.strip()).search(text):
+            return True
+    return False
+
+
+def device_ask_patterns(cfg):
+    """Every "always ask" pattern any device registered: one phone's caution holds for the machine."""
+    out = []
+    for d in cfg.get("devices") or []:
+        if isinstance(d, dict) and isinstance(d.get("askPatterns"), list):
+            out += [p for p in d["askPatterns"] if isinstance(p, str)]
+    return out
+
+
 def _hc_json(args, runner):
     out = runner(["hc"] + args + ["--json"])
     value = json.loads(out) if out else None
@@ -273,6 +321,8 @@ def auto_answer(cfg, address, runner=_hc_run):
         fg = term.get("foreground") if isinstance(term.get("foreground"), dict) else {}
         cwd = _text(fg.get("cwd")) or _text(term.get("cwd"))
         agent = _text(status.get("app"))
+        if ask_match(command, device_ask_patterns(cfg)):
+            return None
         rule = next((r for machine, r in rules if rule_matches(r, machine, cwd, agent, command)), None)
         if rule is None:
             return None
@@ -822,6 +872,15 @@ def alert_question(term, state):
     return {"title": title[:200], "options": ["Yes", "No"], "keys": True}
 
 
+def alert_answers(cfg, alert):
+    """The alert's answer buttons, unless its question matches an "always ask" pattern."""
+    q = alert.get("q")
+    if q and ask_match(_text(q.get("title")) + "\n" + _text(alert.get("title")) + "\n" + _text(alert.get("body")),
+                       device_ask_patterns(cfg)):
+        return None
+    return q
+
+
 def apns_payload(title, body, address, host, state=None):
     payload = {
         "aps": {
@@ -1360,7 +1419,7 @@ def run():
                             continue
                         log(f"alert for {a['address']}: {a['title']}")
                         send_alert(cfg, a["title"], a["body"], a["address"], host, jwt_cache,
-                                   on_reply=poster.learn, state=a["state"], q=a.get("q"))
+                                   on_reply=poster.learn, state=a["state"], q=alert_answers(cfg, a))
             finally:
                 if proc.poll() is None:
                     proc.kill()

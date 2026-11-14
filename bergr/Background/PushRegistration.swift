@@ -222,7 +222,7 @@ final class PushRegistration {
     private func observe() {
         let current = withObservationTracking {
             _ = focus
-            return (enabled, deviceToken, alerts, prefs, ApprovalRuleStore.shared.rules, (sessions?.ids ?? []).compactMap { id in
+            return (enabled, deviceToken, alerts, prefs, (ApprovalRuleStore.shared.rules, ApprovalRuleStore.shared.askPatterns), (sessions?.ids ?? []).compactMap { id in
                 sessions?.existing(id).map { ($0, $0.state == .connected && $0.canRunCommands) }
             })
         } onChange: { [weak self] in
@@ -231,20 +231,20 @@ final class PushRegistration {
         guard let token = current.1 else { return }
         let alerts = current.2
         let prefs = current.3
-        let rules = current.4
+        let (rules, askPatterns) = current.4
         let focus = self.focus
         for (session, ready) in current.5 where ready {
             let id = session.host.id
             let prefs = prefs.effective(host: id, focus: focus)
             let identity = ObjectIdentifier(session)
-            let state = "\(token)|\(current.0)|\(alerts)|\(TimeZone.current.identifier)|\(prefs.fingerprint(host: id))|\(Self.rulesFingerprint(rules, host: id))"
+            let state = "\(token)|\(current.0)|\(alerts)|\(TimeZone.current.identifier)|\(prefs.fingerprint(host: id))|\(Self.rulesFingerprint(rules, host: id))|\(askPatterns)"
             if let last = written[id], last.session == identity, last.state == state { continue }
             // Removing needs no secret (the payload only uses the device id), so it still works
             // after the relay secret was forgotten.
             guard let secret = relaySecret ?? (current.0 ? nil : "") else { continue }
             written[id] = (identity, state)
             let command = Self.command(token: token, secret: secret, enabled: current.0, alerts: alerts, host: id, prefs: prefs,
-                                       rules: rules)
+                                       rules: rules, askPatterns: askPatterns)
             let enabled = current.0
             Task { @MainActor [weak self] in
                 if enabled, let reason = await Self.probe(session) {
@@ -475,7 +475,7 @@ final class PushRegistration {
     nonisolated static func payload(token: String, secret: String, enabled: Bool, alerts: Bool = true,
                                     relay: URL = relayURL, name: String, key: Data? = PushAlertKey.current(),
                                     host: UUID? = nil, prefs: NotificationPrefs? = nil,
-                                    rules: [ApprovalRule]? = nil) -> Data {
+                                    rules: [ApprovalRule]? = nil, askPatterns: [String]? = nil) -> Data {
         var device: [String: Any] = ["id": deviceID(token: token), "relay": relay.absoluteString,
                                      "secret": secret, "name": name]
         // Bergr's id for this machine, sent back with each alert so a tap opens this machine.
@@ -487,15 +487,17 @@ final class PushRegistration {
         if let prefs { device["prefs"] = prefs.payload(host: host) }
         // "Always allow" rules for this machine (v15 on); older helpers ignore the field.
         if let rules { device["rules"] = ApprovalRuleStore.payload(rules, host: host) }
+        // "Always ask" patterns (v18 on): never auto-answered, no Yes on the alert.
+        if let askPatterns { device["askPatterns"] = askPatterns }
         let object: [String: Any] = ["op": enabled ? "add" : "remove", "device": device]
         return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
     }
 
     /// Script and payload both travel base64-encoded, so no shell quoting can break them.
     static func command(token: String, secret: String, enabled: Bool, alerts: Bool = true, host: UUID? = nil,
-                        prefs: NotificationPrefs? = nil, rules: [ApprovalRule]? = nil) -> String {
+                        prefs: NotificationPrefs? = nil, rules: [ApprovalRule]? = nil, askPatterns: [String]? = nil) -> String {
         command(payload: payload(token: token, secret: secret, enabled: enabled, alerts: alerts,
-                                 name: DeviceName.current, host: host, prefs: prefs, rules: rules))
+                                 name: DeviceName.current, host: host, prefs: prefs, rules: rules, askPatterns: askPatterns))
     }
 
     nonisolated static func rulesFingerprint(_ rules: [ApprovalRule], host: UUID) -> String {

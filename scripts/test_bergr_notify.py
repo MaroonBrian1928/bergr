@@ -847,9 +847,37 @@ class ApprovalRuleTests(unittest.TestCase):
         for c in CASES["match"]:
             rule = {"machine": ctx["machine"], "cwd": ctx["cwd"], "agent": ctx["agent"],
                     "command": c["rule"], "prefix": c["prefix"]}
+            if "expires" in c:
+                rule["expires"] = c["expires"]
             got = notify.rule_matches(rule, c.get("machine", ctx["machine"]), c.get("cwd", ctx["cwd"]),
-                                      c.get("agent", ctx["agent"]), c["command"])
+                                      c.get("agent", ctx["agent"]), c["command"], now=c.get("now"))
             self.assertEqual(got, c["expect"], c)
+
+    def test_shared_dangerous_cases(self):
+        for t in CASES["dangerous"]["yes"]:
+            self.assertIsNotNone(notify.dangerous_reason(t), t)
+        for t in CASES["dangerous"]["no"]:
+            self.assertIsNone(notify.dangerous_reason(t), t)
+
+    def test_shared_ask_cases(self):
+        for c in CASES["ask"]:
+            self.assertEqual(notify.ask_match(c["text"], c["patterns"]), c["expect"], c)
+
+    def test_expired_or_malformed_expiry_never_matches(self):
+        rule = {"machine": "M1", "cwd": "/a", "agent": "claude-code", "command": "ls", "prefix": False}
+        self.assertTrue(notify.rule_matches(dict(rule, expires=notify.time.time() + 60), "M1", "/a", "claude-code", "ls"))
+        self.assertFalse(notify.rule_matches(dict(rule, expires=notify.time.time() - 1), "M1", "/a", "claude-code", "ls"))
+        self.assertFalse(notify.rule_matches(dict(rule, expires="soon"), "M1", "/a", "claude-code", "ls"))
+
+    def test_ask_pattern_blocks_auto_answer_and_alert_buttons(self):
+        cfg = self._cfg()
+        cfg["devices"].append({"id": "e", "host_id": "M1", "askPatterns": ["npm t*t"]})
+        calls = []
+        self.assertIsNone(notify.auto_answer(cfg, "t1", self._spy(self._runner([PROMPT]), calls)))
+        self.assertNotIn("keys", [a[1] for a in calls])
+        q = {"title": "Bash: npm test", "options": ["Yes", "No"], "keys": True}
+        self.assertIsNone(notify.alert_answers(cfg, {"q": q, "title": "t", "body": "b"}))
+        self.assertEqual(notify.alert_answers(self._cfg(), {"q": q, "title": "t", "body": "b"}), q)
 
     def test_shared_prompt_cases(self):
         for c in CASES["prompt"]:
@@ -915,7 +943,7 @@ class ApprovalRuleTests(unittest.TestCase):
             self.assertEqual(entries[0]["cwd"], "/home/u/app")
 
     def test_version_bumped_for_rules(self):
-        self.assertGreaterEqual(notify.VERSION, 15)
+        self.assertGreaterEqual(notify.VERSION, 18)
 
 
 class QuietCatchUpTests(unittest.TestCase):

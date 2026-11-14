@@ -633,9 +633,12 @@ struct AlwaysAllowBanner: View {
             .foregroundStyle(palette.text)
             Menu {
                 ForEach(ApprovalRuleMatcher.prefixes(of: offer.command), id: \.self) { prefix in
-                    Button("Commands starting with \(prefix)") {
+                    Button {
                         ApprovalRuleStore.shared.add(scope: offer.scope, command: prefix, prefix: true)
                         AlwaysAllowOffers.shared.dismiss()
+                    } label: {
+                        Text("Commands starting with \(prefix)")
+                        if let warning = ApprovalRuleMatcher.prefixWarning(prefix) { Text(LocalizedStringKey(warning)) }
                     }
                 }
             } label: {

@@ -15,10 +15,43 @@ nonisolated struct ApprovalRule: Codable, Equatable, Identifiable, Hashable, Sen
     /// Also covers the command followed by a space and more arguments.
     var prefix: Bool
     var created = Date()
+    /// When the rule stops applying; nil never (and rules made before expiry existed).
+    var expires: Date? = nil
+
+    func isExpired(at now: Date = .now) -> Bool {
+        expires.map { now >= $0 } ?? false
+    }
 
     /// What the helper gets in push.json.
     var payload: [String: Any] {
-        ["id": id.uuidString, "machine": machine, "cwd": cwd, "agent": agent, "command": command, "prefix": prefix]
+        var out: [String: Any] = ["id": id.uuidString, "machine": machine, "cwd": cwd, "agent": agent,
+                                  "command": command, "prefix": prefix]
+        if let expires { out["expires"] = expires.timeIntervalSince1970 }
+        return out
+    }
+}
+
+/// How long a new "always allow" rule lasts (Settings → Approvals).
+nonisolated enum RuleLifetime: Int, CaseIterable, Identifiable, Sendable {
+    case day = 1, week = 7, month = 30, never = 0
+    static let key = "bergr.approvalRuleLifetime"
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .day: "1 day"
+        case .week: "7 days"
+        case .month: "30 days"
+        case .never: "Never"
+        }
+    }
+
+    func expiry(from now: Date = .now) -> Date? {
+        self == .never ? nil : now.addingTimeInterval(TimeInterval(rawValue) * 86_400)
+    }
+
+    static func current(_ defaults: UserDefaults = .standard) -> RuleLifetime {
+        defaults.object(forKey: key) == nil ? .month : RuleLifetime(rawValue: defaults.integer(forKey: key)) ?? .month
     }
 }
 
@@ -43,20 +76,42 @@ nonisolated enum ApprovalRuleMatcher {
 
     /// Exact command, or the rule's prefix followed by the end or a space. Never a command with
     /// shell metacharacters, never a dangerous one, never another machine, folder or agent.
-    static func matches(_ rule: ApprovalRule, machine: String, cwd: String, agent: String, command: String) -> Bool {
-        guard rule.machine == machine, rule.cwd == cwd, rule.agent == agent,
+    /// An expired rule never matches.
+    static func matches(_ rule: ApprovalRule, machine: String, cwd: String, agent: String, command: String,
+                        now: Date = .now) -> Bool {
+        guard rule.machine == machine, rule.cwd == cwd, rule.agent == agent, !rule.isExpired(at: now),
               !rule.machine.isEmpty, !rule.cwd.isEmpty, isEligible(rule.command), isEligible(command)
         else { return false }
         if command == rule.command { return true }
         return rule.prefix && command.hasPrefix(rule.command + " ")
     }
 
+    /// Programs that can run anything: a one-word prefix of these would allow every command.
+    static let broadPrograms: Set<String> = [
+        "npm", "npx", "yarn", "pnpm", "bun", "node", "python", "python3", "pip", "uv", "ruby", "bundle",
+        "go", "cargo", "make", "git", "sh", "bash", "zsh", "docker", "kubectl",
+    ]
+
     /// The prefixes a user can pick for a command: the command itself, then shorter word runs
-    /// ("npm test -- --watch" → "npm test -- --watch", "npm test --", "npm test", "npm").
+    /// ("npm test -- --watch" → "npm test -- --watch", "npm test --", "npm test"). Never a lone
+    /// interpreter, package manager or VCS ("npm", "git", "python").
     static func prefixes(of command: String) -> [String] {
         let words = command.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
         guard isEligible(command), !words.contains(where: \.isEmpty) else { return [] }
         return (1...words.count).reversed().map { words.prefix($0).joined(separator: " ") }
+            .filter { !isBroadProgram($0) }
+    }
+
+    /// One word naming a program in `broadPrograms` (also as a path, e.g. /usr/bin/python3).
+    static func isBroadProgram(_ prefix: String) -> Bool {
+        guard !prefix.contains(" ") else { return false }
+        let name = prefix.split(separator: "/").last.map(String.init) ?? prefix
+        return broadPrograms.contains(name.lowercased())
+    }
+
+    /// A warning for a prefix this short: nil for two words or more.
+    static func prefixWarning(_ prefix: String) -> String? {
+        prefix.split(separator: " ").count < 2 ? "This allows any `\(prefix)` command in this folder" : nil
     }
 
     private static let borders: Set<Character> = Set("│┃║╭╮╰╯┌┐└┘─━═┆┊╎|")
@@ -144,6 +199,7 @@ final class ApprovalRuleStore {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         rules = Self.load(defaults)
+        lifetime = RuleLifetime.current(defaults)
     }
 
     nonisolated static func load(_ defaults: UserDefaults = .standard) -> [ApprovalRule] {
@@ -151,17 +207,53 @@ final class ApprovalRuleStore {
         return (try? JSONDecoder().decode([ApprovalRule].self, from: data)) ?? []
     }
 
+    /// How long new rules last.
+    var lifetime: RuleLifetime {
+        didSet { defaults.set(lifetime.rawValue, forKey: RuleLifetime.key) }
+    }
+
+    /// A one-word prefix of an interpreter, package manager or VCS is refused. An existing expired
+    /// rule for the same thing is renewed.
     @discardableResult
-    func add(scope: ApprovalScope, command: String, prefix: Bool) -> ApprovalRule? {
-        guard ApprovalRuleMatcher.isEligible(command), !scope.machine.isEmpty, !scope.cwd.isEmpty else { return nil }
+    func add(scope: ApprovalScope, command: String, prefix: Bool, now: Date = .now) -> ApprovalRule? {
+        guard ApprovalRuleMatcher.isEligible(command), !scope.machine.isEmpty, !scope.cwd.isEmpty,
+              !(prefix && ApprovalRuleMatcher.isBroadProgram(command)) else { return nil }
         if let same = rules.first(where: {
             $0.machine == scope.machine && $0.cwd == scope.cwd && $0.agent == scope.agent
                 && $0.command == command && $0.prefix == prefix
-        }) { return same }
-        let rule = ApprovalRule(machine: scope.machine, cwd: scope.cwd, agent: scope.agent, command: command, prefix: prefix)
+        }) {
+            return same.isExpired(at: now) ? renew(same.id, now: now) : same
+        }
+        var rule = ApprovalRule(machine: scope.machine, cwd: scope.cwd, agent: scope.agent, command: command, prefix: prefix)
+        rule.created = now
+        rule.expires = lifetime.expiry(from: now)
         rules.append(rule)
         save()
         return rule
+    }
+
+    /// The user's "always ask" patterns (see `AskPatterns`), kept where the extensions read them.
+    private(set) var askPatterns: [String] = AskPatterns.load()
+
+    func addAskPattern(_ pattern: String) {
+        let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !p.isEmpty, !askPatterns.contains(p) else { return }
+        askPatterns.append(p)
+        AskPatterns.save(askPatterns)
+    }
+
+    func removeAskPattern(_ pattern: String) {
+        askPatterns.removeAll { $0 == pattern }
+        AskPatterns.save(askPatterns)
+    }
+
+    /// Starts the rule's lifetime again from now.
+    @discardableResult
+    func renew(_ id: UUID, now: Date = .now) -> ApprovalRule? {
+        guard let i = rules.firstIndex(where: { $0.id == id }) else { return nil }
+        rules[i].expires = lifetime.expiry(from: now)
+        save()
+        return rules[i]
     }
 
     func remove(_ id: UUID) {
