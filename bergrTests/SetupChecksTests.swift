@@ -79,6 +79,14 @@ struct SetupNewChecksTests {
         #expect(SetupCheck.sleepState(.staysAwake) == .ready("Stays awake on power"))
     }
 
+    @Test func sleepRowSaysKeptAwakeWhenHelperSupportsIt() {
+        let kept = CheckState.ready("Kept awake by Bergr while agents work")
+        #expect(SetupCheck.sleepState(.sleeps(minutes: 15), keepAwake: true, helperVersion: 17) == kept)
+        if case .warning = SetupCheck.sleepState(.sleeps(minutes: 15), keepAwake: false, helperVersion: 17) {} else { Issue.record("pref off") }
+        if case .warning = SetupCheck.sleepState(.sleeps(minutes: 15), keepAwake: true, helperVersion: 16) {} else { Issue.record("old helper") }
+        if case .warning = SetupCheck.sleepState(.sleeps(minutes: nil), keepAwake: true, helperVersion: nil) {} else { Issue.record("unknown helper") }
+    }
+
     // MARK: core version
 
     @Test func versionComparison() {

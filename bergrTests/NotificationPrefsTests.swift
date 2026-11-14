@@ -16,6 +16,21 @@ struct NotificationPrefsTests {
         }
     }
 
+    @Test func keepAwakeDefaultsOnAndRoundTrips() throws {
+        #expect(NotificationPrefs().keepAwake)
+        #expect(NotificationPrefs().payload(host: nil)["keepAwake"] as? Bool == true)
+        let suite = UserDefaults(suiteName: "keepawake-\(UUID().uuidString)")!
+        var p = NotificationPrefs()
+        p.keepAwake = false
+        p.save(suite)
+        #expect(!NotificationPrefs.load(suite).keepAwake)
+        #expect(NotificationPrefs.load(suite).payload(host: nil)["keepAwake"] as? Bool == false)
+        // Prefs saved before the setting existed decode with it on.
+        suite.set(Data(#"{"needsYou":false,"quietEnabled":true}"#.utf8), forKey: NotificationPrefs.storageKey)
+        let old = NotificationPrefs.load(suite)
+        #expect(old.keepAwake && !old.needsYou && old.quietEnabled)
+    }
+
     @Test func kindSwitches() {
         var p = NotificationPrefs()
         p.finished = false

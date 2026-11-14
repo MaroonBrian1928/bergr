@@ -24,7 +24,13 @@ struct NotificationPrefsSection: View {
                 DatePicker("To", selection: time(\.quietEnd), displayedComponents: .hourAndMinute)
             }
         } footer: {
-            Text("During quiet hours only \"Needs you\" notifies. Finished and error alerts are dropped.")
+            Text("During quiet hours only \"Needs you\" notifies. Finished and error alerts are held back, and a summary arrives when quiet hours end.")
+        }
+
+        Section {
+            Toggle("Keep machines awake while agents work", isOn: edit(\.keepAwake))
+        } footer: {
+            Text("The helper on each machine stops it sleeping while an agent is working, and lets go two minutes after the last one stops.")
         }
 
         if !prefs.muted.isEmpty {

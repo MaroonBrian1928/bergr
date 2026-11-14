@@ -918,5 +918,182 @@ class ApprovalRuleTests(unittest.TestCase):
         self.assertGreaterEqual(notify.VERSION, 15)
 
 
+class QuietCatchUpTests(unittest.TestCase):
+    NOON = 1704110400  # 2024-01-01 12:00 UTC
+    NIGHT = NOON + 12 * 3600
+    QUIET = {"quiet": {"start": 22 * 60, "end": 7 * 60}, "tz_offset": 0}
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "quiet-drops.json")
+        self.dev = {"id": "abcd", "relay": "https://r.example", "secret": "s", "name": "Phone", "prefs": self.QUIET}
+
+    def tearDown(self):
+        notify._drop_path = None
+        self.dir.cleanup()
+
+    def drop(self, state, address="t1", title="x"):
+        notify.record_quiet_drop(self.path, self.dev, state, address, title)
+
+    def test_verdict_quiet_only_for_quiet_hours(self):
+        self.assertEqual(notify.prefs_verdict(self.QUIET, "done", "t1", self.NIGHT), "quiet")
+        self.assertEqual(notify.prefs_verdict(self.QUIET, "blocked", "t1", self.NIGHT), "send")
+        self.assertEqual(notify.prefs_verdict(self.QUIET, "done", "t1", self.NOON), "send")
+        off = dict(self.QUIET, kinds={"finished": False})
+        self.assertEqual(notify.prefs_verdict(off, "done", "t1", self.NIGHT), "drop")
+        self.assertEqual(notify.prefs_verdict(dict(self.QUIET, muted=["t1"]), "done", "t1", self.NIGHT), "drop")
+
+    def test_send_alert_records_quiet_drops_per_kind(self):
+        notify._drop_path = self.path
+        cfg = {"mode": "apns", "devices": [self.dev]}
+        with mock.patch.object(notify.time, "time", return_value=self.NIGHT), \
+             mock.patch.object(notify, "send_relay") as relay:
+            for st, addr, title in (("done", "t1", "a"), ("done", "t2", "b"), ("error", "t1", "c"),
+                                    ("error", "health", "h: Battery low"), ("error", "health", "h: Disk almost full")):
+                notify.send_alert(cfg, title, "", addr, "h", notify.JwtCache(), state=st)
+            relay.assert_not_called()
+        self.assertEqual(notify._load_drops(self.path)["s"],
+                         {"finished": 2, "error": 1, "battery": 1, "disk": 1})
+
+    def test_disabled_kind_not_recorded(self):
+        notify._drop_path = self.path
+        dev = dict(self.dev, prefs=dict(self.QUIET, kinds={"finished": False}))
+        with mock.patch.object(notify.time, "time", return_value=self.NIGHT):
+            notify.send_alert({"devices": [dev]}, "a", "", "t1", "h", notify.JwtCache(), state="done")
+        self.assertEqual(notify._load_drops(self.path), {})
+
+    def flush(self, cfg, now):
+        sent = []
+        notify.flush_quiet_drops(cfg, "pop-os", None, self.path, now=now,
+                                 sender=lambda c, title, body, *a, **k: sent.append((c["devices"][0]["secret"], title)))
+        return sent
+
+    def test_summary_sent_once_when_window_ends(self):
+        for _ in range(3):
+            self.drop("done")
+        self.drop("error")
+        self.drop("error", "health", "h: Battery low")
+        cfg = {"devices": [self.dev]}
+        self.assertEqual(self.flush(cfg, self.NOON),
+                         [("s", "While you were away: 3 finished, 1 error on pop-os, low battery")])
+        self.assertEqual(self.flush(cfg, self.NOON), [])
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_nothing_sent_while_still_quiet_or_when_empty(self):
+        self.drop("done")
+        cfg = {"devices": [self.dev]}
+        self.assertEqual(self.flush(cfg, self.NIGHT), [])
+        self.assertIn("s", notify._load_drops(self.path))  # still counting
+        os.remove(self.path)
+        self.assertEqual(self.flush(cfg, self.NOON), [])
+
+    def test_kind_switched_off_midwindow_not_counted(self):
+        self.drop("done")
+        dev = dict(self.dev, prefs={"kinds": {"finished": False}})
+        self.assertEqual(self.flush({"devices": [dev]}, self.NOON), [])
+        self.assertFalse(os.path.exists(self.path))
+        self.drop("done")
+        self.drop("error")
+        sent = self.flush({"devices": [dev]}, self.NOON)
+        self.assertEqual(sent[0][1], "While you were away: 1 error on pop-os")
+
+    def test_removed_device_just_cleared(self):
+        self.drop("done")
+        self.assertEqual(self.flush({"devices": []}, self.NOON), [])
+        self.assertFalse(os.path.exists(self.path))
+
+
+class FakeChild:
+    def __init__(self):
+        self.alive, self.killed = True, False
+
+    def poll(self):
+        return None if self.alive else 0
+
+    def kill(self):
+        self.alive, self.killed = False, True
+
+    def wait(self, timeout=None):
+        return 0
+
+
+class KeepAwakeTests(unittest.TestCase):
+    def make(self, platform="darwin"):
+        self.t, self.spawned = [1000.0], []
+
+        def spawn(cmd):
+            self.spawned.append(cmd)
+            return FakeChild()
+        return notify.KeepAwake(spawn=spawn, clock=lambda: self.t[0], pid=42, platform=platform)
+
+    def test_commands(self):
+        self.assertEqual(notify.keep_awake_command(42, "darwin"), ["caffeinate", "-i", "-w", "42"])
+        self.assertEqual(notify.keep_awake_command(42, "linux")[:2], ["systemd-inhibit", "--what=idle:sleep"])
+        self.assertIsNone(notify.keep_awake_command(42, "win32"))
+
+    def test_starts_once_and_releases_after_two_minutes(self):
+        k = self.make()
+        k.update(1)
+        k.update(2)
+        self.assertEqual(len(self.spawned), 1)
+        child = k.child
+        k.update(0)
+        self.t[0] += 119
+        k.update(0)
+        self.assertFalse(child.killed)
+        self.t[0] += 2
+        k.update(0)
+        self.assertTrue(child.killed)
+        self.assertIsNone(k.child)
+
+    def test_work_resuming_resets_the_grace(self):
+        k = self.make()
+        k.update(1)
+        k.update(0)
+        self.t[0] += 100
+        k.update(1)
+        k.update(0)
+        self.t[0] += 100
+        k.update(0)
+        self.assertTrue(k.held())
+        self.assertEqual(len(self.spawned), 1)
+
+    def test_respawns_if_child_died(self):
+        k = self.make()
+        k.update(1)
+        k.child.alive = False
+        k.update(1)
+        self.assertEqual(len(self.spawned), 2)
+
+    def test_pref_off_releases_and_blocks(self):
+        k = self.make()
+        k.update(1)
+        child = k.child
+        k.update(1, enabled=False)
+        self.assertTrue(child.killed)
+        k.update(1, enabled=False)
+        self.assertEqual(len(self.spawned), 1)
+
+    def test_windows_spawns_nothing(self):
+        k = self.make("win32")
+        k.update(1)
+        self.assertEqual(self.spawned, [])
+
+    def test_release_kills_own_child_on_exit(self):
+        k = self.make()
+        k.update(1)
+        child = k.child
+        k.release()
+        self.assertTrue(child.killed)
+
+    def test_wanted_and_working_count(self):
+        self.assertTrue(notify.keep_awake_wanted({}))
+        self.assertTrue(notify.keep_awake_wanted({"devices": [{"prefs": {}}]}))
+        self.assertFalse(notify.keep_awake_wanted({"devices": [{"prefs": {"keepAwake": False}}]}))
+        self.assertTrue(notify.keep_awake_wanted({"devices": [{"prefs": {"keepAwake": False}}, {}]}))
+        terms = {"a": {"status": {"state": "working"}}, "b": {"status": {"state": "done"}}, "c": {}}
+        self.assertEqual(notify.working_count(terms), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

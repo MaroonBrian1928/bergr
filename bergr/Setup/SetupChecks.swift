@@ -214,13 +214,19 @@ extension SetupCheck {
         return .unknown
     }
 
-    static func sleepState(_ finding: SleepFinding) -> CheckState {
+    /// First helper version that holds the machine awake while agents work.
+    static let keepAwakeHelperVersion = 17
+
+    static func sleepState(_ finding: SleepFinding, keepAwake: Bool = false, helperVersion: Int? = nil) -> CheckState {
+        if case .sleeps = finding, keepAwake, let helperVersion, helperVersion >= keepAwakeHelperVersion {
+            return .ready("Kept awake by Bergr while agents work")
+        }
         switch finding {
-        case .staysAwake: .ready("Stays awake on power")
-        case .unknown: .ready("Couldn't tell. Check the machine's power settings.")
+        case .staysAwake: return .ready("Stays awake on power")
+        case .unknown: return .ready("Couldn't tell. Check the machine's power settings.")
         case .sleeps(let minutes):
-            .warning(minutes.map { "Sleeps after \($0) min on power, and Bergr can't reach it then." }
-                     ?? "Can suspend, and Bergr can't reach it then.")
+            return .warning(minutes.map { "Sleeps after \($0) min on power, and Bergr can't reach it then." }
+                            ?? "Can suspend, and Bergr can't reach it then.")
         }
     }
 

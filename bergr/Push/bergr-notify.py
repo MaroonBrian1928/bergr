@@ -11,6 +11,7 @@ separate sandbox and production keys under apns.sandbox / apns.production) and "
 
 Usage: bergr-notify.py [--test | --version]   (--test sends one test alert to every device and exits)
 """
+import atexit
 import base64
 import datetime
 import hashlib
@@ -28,7 +29,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 16
+VERSION = 17
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 
 
@@ -90,28 +91,44 @@ def _local_minute(quiet_tz, tz_offset, now):
     return t.hour * 60 + t.minute
 
 
+def _in_quiet(prefs, now=None):
+    """Whether the phone's quiet hours are on and cover `now`."""
+    quiet = prefs.get("quiet") if isinstance(prefs, dict) else None
+    if not isinstance(quiet, dict):
+        return False
+    start, end = quiet.get("start"), quiet.get("end")
+    ints = all(isinstance(v, int) and not isinstance(v, bool) for v in (start, end))
+    if not ints or start == end:
+        return False
+    minute = _local_minute(prefs.get("tz"), prefs.get("tz_offset"), time.time() if now is None else now)
+    return (start <= minute < end) if start < end else (minute >= start or minute < end)
+
+
+def _kind_on(prefs, state):
+    kinds = prefs.get("kinds") if isinstance(prefs, dict) else None
+    return not (isinstance(kinds, dict) and kinds.get(PREF_KIND[state], True) is False)
+
+
+def prefs_verdict(prefs, state, address, now=None):
+    """"send", "drop" (switch off or muted) or "quiet" (dropped only because of quiet hours, so
+    it is worth a catch-up summary)."""
+    if not isinstance(prefs, dict) or state not in PREF_KIND:
+        return "send"
+    if not _kind_on(prefs, state):
+        return "drop"
+    muted = prefs.get("muted")
+    if isinstance(muted, list) and address in muted:
+        return "drop"
+    if state != "blocked" and _in_quiet(prefs, now):
+        return "quiet"
+    return "send"
+
+
 def prefs_allow(prefs, state, address, now=None):
     """Whether a phone with these prefs wants an alert in `state` for `address`. Kind switch off,
     agent muted, or quiet hours (only blocked gets through) drop it. A state outside ALERT_STATES
     (a test alert) always passes."""
-    if not isinstance(prefs, dict) or state not in PREF_KIND:
-        return True
-    kinds = prefs.get("kinds")
-    if isinstance(kinds, dict) and kinds.get(PREF_KIND[state], True) is False:
-        return False
-    muted = prefs.get("muted")
-    if isinstance(muted, list) and address in muted:
-        return False
-    quiet = prefs.get("quiet")
-    if isinstance(quiet, dict) and state != "blocked":
-        start, end = quiet.get("start"), quiet.get("end")
-        ints = all(isinstance(v, int) and not isinstance(v, bool) for v in (start, end))
-        if ints and start != end:
-            minute = _local_minute(prefs.get("tz"), prefs.get("tz_offset"),
-                                   time.time() if now is None else now)
-            if (start <= minute < end) if start < end else (minute >= start or minute < end):
-                return False
-    return True
+    return prefs_verdict(prefs, state, address, now) == "send"
 
 
 def dangerous_reason(text):
@@ -408,6 +425,185 @@ def check_health(cfg, host, jwt_cache, state_path, disk=None, battery=None, send
         log(f"health alert: {title}")
         (sender or send_alert)(cfg, f"{host}: {title}", body, "health", host, jwt_cache, state="error")
     return alerts
+
+
+# Quiet-hours catch-up (v17): alerts dropped only because of quiet hours are counted per device in
+# quiet-drops.json (beside push.json); once that device's quiet hours are over, ONE summary push
+# goes out and its counts are cleared. Checked at most once a minute from the events loop.
+QUIET_INTERVAL = 60
+_drop_path = None  # set by run(); None records nothing
+
+
+def quiet_drops_path(config_path=None):
+    return os.path.join(os.path.dirname(config_path or default_config_path()), "quiet-drops.json")
+
+
+def device_key(device):
+    return str(device.get("secret") or device.get("token") or device.get("id") or device.get("name") or "device")
+
+
+def _drop_category(state, address, title):
+    if state == "done":
+        return "finished"
+    if address == "health":
+        low = (title or "").lower()
+        if "battery" in low:
+            return "battery"
+        if "disk" in low:
+            return "disk"
+    return "error"
+
+
+def _load_drops(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_drops(path, data):
+    try:
+        if data:
+            with open(path, "w") as f:
+                json.dump(data, f)
+        elif os.path.exists(path):
+            os.remove(path)
+    except OSError as e:
+        log(f"could not save quiet-hours state: {e}")
+
+
+def record_quiet_drop(path, device, state, address, title):
+    cat = _drop_category(state, address, title)
+    data = _load_drops(path)
+    entry = data.get(device_key(device))
+    entry = entry if isinstance(entry, dict) else {}
+    entry[cat] = int(entry.get(cat, 0)) + 1
+    data[device_key(device)] = entry
+    _save_drops(path, data)
+
+
+def quiet_summary(counts, host, prefs=None):
+    """"While you were away: 3 finished, 1 error on pop-os, low battery", or None when nothing counts.
+    Kinds the device has since switched off are left out."""
+    parts = []
+    n = counts.get("finished", 0)
+    if n and (prefs is None or _kind_on(prefs, "done")):
+        parts.append(f"{n} finished")
+    n = counts.get("error", 0)
+    if n and (prefs is None or _kind_on(prefs, "error")):
+        parts.append(f"{n} error" + ("" if n == 1 else "s"))
+    text = ", ".join(parts)
+    if parts:
+        text += f" on {host}"
+    extra = [label for key, label in (("battery", "low battery"), ("disk", "low disk"))
+             if counts.get(key, 0) and (prefs is None or _kind_on(prefs, "error"))]
+    if extra:
+        if text:
+            text += ", " + ", ".join(extra)
+        else:
+            text = ", ".join(extra) + f" on {host}"
+    return f"While you were away: {text}" if text else None
+
+
+def flush_quiet_drops(cfg, host, jwt_cache, path, now=None, sender=None):
+    """Sends the summary to each device whose quiet hours have ended, then forgets its counts.
+    A device that is gone, or whose counts are all for kinds now off, is just cleared. Returns the
+    (device key, summary) pairs sent."""
+    data = _load_drops(path)
+    if not data:
+        return []
+    devices = {device_key(d): d for d in cfg.get("devices") or [] if isinstance(d, dict)}
+    sent, changed = [], False
+    for key in list(data):
+        device = devices.get(key)
+        if device is not None and _in_quiet(device.get("prefs"), now):
+            continue  # still inside the window: keep counting
+        changed = True
+        counts = data.pop(key)
+        text = quiet_summary(counts if isinstance(counts, dict) else {}, host,
+                             device.get("prefs") if device else None)
+        if device is None or not text:
+            continue
+        log(f"quiet hours over for {device.get('name', 'device')}: {text}")
+        one = dict(cfg, devices=[device])
+        (sender or send_alert)(one, text, "Quiet hours ended", "summary", host, jwt_cache)
+        sent.append((key, text))
+    if changed:
+        _save_drops(path, data)
+    return sent
+
+
+# Keep the machine awake while agents work (v17): a child process holds an idle-sleep inhibitor
+# while any terminal is "working", and is released 2 minutes after the last one stops. Windows: skipped.
+KEEP_AWAKE_GRACE = 120
+
+
+def keep_awake_command(pid, platform=None):
+    platform = platform or sys.platform
+    if platform == "darwin":
+        return ["caffeinate", "-i", "-w", str(pid)]
+    if platform.startswith("linux"):
+        return ["systemd-inhibit", "--what=idle:sleep", "--why=Bergr agents working", "sleep", "infinity"]
+    return None
+
+
+def keep_awake_wanted(cfg):
+    """The keepAwake pref (default true): off only when every registered phone turned it off."""
+    devices = [d for d in (cfg or {}).get("devices") or [] if isinstance(d, dict)]
+    prefs = [d.get("prefs") for d in devices]
+    return not devices or any(not (isinstance(p, dict) and p.get("keepAwake") is False) for p in prefs)
+
+
+def working_count(terms):
+    return sum(1 for t in terms.values()
+               if isinstance(t.get("status"), dict) and t["status"].get("state") == "working")
+
+
+class KeepAwake:
+    def __init__(self, spawn=None, clock=time.time, pid=None, platform=None):
+        self.spawn = spawn or (lambda cmd: subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        self.clock = clock
+        self.pid = os.getpid() if pid is None else pid
+        self.platform = platform
+        self.child = None
+        self.idle_since = None
+
+    def held(self):
+        return self.child is not None and self.child.poll() is None
+
+    def update(self, working, enabled=True):
+        now = self.clock()
+        if not enabled:
+            self.release()
+        elif working:
+            self.idle_since = None
+            if not self.held():
+                self.child = None
+                cmd = keep_awake_command(self.pid, self.platform)
+                if cmd:
+                    try:
+                        self.child = self.spawn(cmd)
+                    except OSError as e:
+                        log(f"cannot keep the machine awake: {e}")
+        elif self.held():
+            if self.idle_since is None:
+                self.idle_since = now
+            elif now - self.idle_since >= KEEP_AWAKE_GRACE:
+                self.release()
+        else:
+            self.child = None
+
+    def release(self):
+        child, self.child, self.idle_since = self.child, None, None
+        if child is not None and child.poll() is None:
+            try:
+                child.kill()
+                child.wait(timeout=5)
+            except Exception:
+                pass
 
 
 def log(msg):
@@ -952,8 +1148,14 @@ def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None, state=
     devices = [d for d in cfg.get("devices") or [] if isinstance(d, dict)]
     # Devices registered through a relay carry its address and a secret; the relay holds the key.
     # A device with "alerts": false wants only the Live Activity kept current, not notifications.
+    def wanted(d):
+        verdict = prefs_verdict(d.get("prefs"), state, address)
+        if verdict == "quiet" and _drop_path and d.get("alerts", True) is not False:
+            record_quiet_drop(_drop_path, d, state, address, title)
+        return verdict == "send"
+
     for device in [d for d in devices if d.get("relay") and d.get("secret") and d.get("alerts", True) is not False
-                   and prefs_allow(d.get("prefs"), state, address)]:
+                   and wanted(d)]:
         try:
             # The app's own id for this machine when it gave one, so a tap opens the right one.
             reply = send_relay(device, title, body, address, device.get("host_id") or host, state, q)
@@ -966,7 +1168,7 @@ def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None, state=
     if mode == "apns":
         now = int(time.time())
         for device in cfg.get("devices") or []:
-            if isinstance(device, dict) and not prefs_allow(device.get("prefs"), state, address):
+            if isinstance(device, dict) and not wanted(device):
                 continue
             try:
                 send_apns(cfg, device, title, body, address, host, jwt_cache, now, state)
@@ -993,6 +1195,11 @@ def run():
     poster = ActivityPoster()
     health_at = 0.0
     health_path = health_state_path()
+    global _drop_path
+    _drop_path = quiet_drops_path()
+    quiet_at = 0.0
+    awake = KeepAwake()
+    atexit.register(awake.release)
     while True:
         try:
             proc = subprocess.Popen(["hc", "events", "--json"], stdout=subprocess.PIPE,
@@ -1019,6 +1226,13 @@ def run():
                             check_health(cfg, host, jwt_cache, health_path, disk_reading(), battery_reading())
                         except Exception as e:
                             log(f"health check failed: {e}")
+                    awake.update(working_count(state.get("terms", {})), keep_awake_wanted(cfg))
+                    if time.time() - quiet_at >= QUIET_INTERVAL:
+                        quiet_at = time.time()
+                        try:
+                            flush_quiet_drops(cfg, host, jwt_cache, _drop_path)
+                        except Exception as e:
+                            log(f"quiet-hours summary failed: {e}")
                     # Every line (a change, or the 15 s heartbeat): the Live Activity may be due.
                     for device in cfg.get("devices") or []:
                         if isinstance(device, dict) and device.get("relay") and device.get("secret"):

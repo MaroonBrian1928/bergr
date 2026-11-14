@@ -13,6 +13,23 @@ struct NotificationPrefs: Codable, Equatable, Sendable {
     /// Minutes after midnight, in the phone's time zone. The window may cross midnight.
     var quietStart = 22 * 60
     var quietEnd = 7 * 60
+    /// Ask each machine's helper to keep it awake while agents work (helper v17 on).
+    var keepAwake = true
+
+    init() {}
+
+    /// Tolerant: prefs saved by an older build lack newer keys and keep their defaults.
+    nonisolated init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        needsYou = try c.decodeIfPresent(Bool.self, forKey: .needsYou) ?? true
+        finished = try c.decodeIfPresent(Bool.self, forKey: .finished) ?? true
+        errors = try c.decodeIfPresent(Bool.self, forKey: .errors) ?? true
+        muted = try c.decodeIfPresent([String: String].self, forKey: .muted) ?? [:]
+        quietEnabled = try c.decodeIfPresent(Bool.self, forKey: .quietEnabled) ?? false
+        quietStart = try c.decodeIfPresent(Int.self, forKey: .quietStart) ?? 22 * 60
+        quietEnd = try c.decodeIfPresent(Int.self, forKey: .quietEnd) ?? 7 * 60
+        keepAwake = try c.decodeIfPresent(Bool.self, forKey: .keepAwake) ?? true
+    }
 
     static let storageKey = "bergr.notifications.prefs"
 
@@ -81,6 +98,7 @@ struct NotificationPrefs: Codable, Equatable, Sendable {
             }.sorted(),
             "tz": zone.identifier,
             "tz_offset": zone.secondsFromGMT(for: now) / 60,
+            "keepAwake": keepAwake,
         ]
         if quietEnabled { object["quiet"] = ["start": quietStart, "end": quietEnd] }
         return object

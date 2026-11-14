@@ -12,6 +12,7 @@ final class MachineSetup {
     let repair = SetupRepair()
     /// The machine's OS, once a check has seen it.
     private(set) var hostOS: SetupCheck.HostOS?
+    private var helperVersion: Int?
 
     init(session: HostSession) {
         self.session = session
@@ -33,6 +34,10 @@ final class MachineSetup {
         if !windows { states[.sleep] = await sleepState() }
         for agent in AgentCLI.allCases { agents[agent] = await agentState(agent) }
         states[.push] = await pushState()
+        if !windows, case .warning = states[.sleep],
+           NotificationPrefs.load().keepAwake, let version = helperVersion, version >= SetupCheck.keepAwakeHelperVersion {
+            states[.sleep] = .ready("Kept awake by Bergr while agents work")
+        }
         states[.statusLine] = await statusLineState()
     }
 
@@ -161,6 +166,7 @@ final class MachineSetup {
             let output = try await run(PushRegistration.installerCommand(installer: source, op: "status"))
             guard let status = SetupCheck.parseHelper(output) else { return .failed("no answer from the machine") }
             guard status.installed else { return .missing("Not installed. Push alerts need it.") }
+            helperVersion = status.version
             if let version = status.version, let bundled = PushRegistration.bundledVersion, version < bundled {
                 return .outdated("helper \(version), update to \(bundled) available")
             }
