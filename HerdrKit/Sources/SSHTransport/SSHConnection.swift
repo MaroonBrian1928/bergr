@@ -154,6 +154,22 @@ public final class SSHConnection: @unchecked Sendable {
         return try await ExecPipe.open(command: command, on: client)
     }
 
+    /// Makes a port on this device that reaches `localhost:<remotePort>` on the machine. Bytes go
+    /// over this connection (`direct-tcpip`), or over an `ssh -N -L` process for system SSH.
+    public func forwardLocalPort(to remotePort: Int) async throws -> PortForward {
+        guard (1...65535).contains(remotePort) else { throw ChannelError.badInterfaceAddressFamily }
+        #if os(macOS)
+        if let systemClient { return try await systemClient.forward(remotePort: remotePort) }
+        #endif
+        guard let client else { throw ChannelError.ioOnClosedChannel }
+        return try await LocalForwarder.start {
+            try await client.createDirectTCPIPChannel(using: .init(
+                targetHost: "localhost", targetPort: remotePort,
+                originatorAddress: try SocketAddress(ipAddress: "127.0.0.1", port: 0))
+            ) { $0.eventLoop.makeSucceededVoidFuture() }
+        }
+    }
+
     public func close() async {
         #if os(macOS)
         systemClient?.close()

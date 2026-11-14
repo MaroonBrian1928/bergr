@@ -11,6 +11,7 @@ struct TerminalScreenView: View {
     var pane: PaneChrome?
     @State private var model: TerminalScreenModel
     @State private var showingInfo = false
+    @State private var previewing: PreviewItem?
     @State private var finding = false
     @AppStorage(TerminalFont.sizeKey) private var fontSize = TerminalFont.defaultSize
     @AppStorage(TerminalFont.storageKey) private var fontFamily = TerminalFont.jetBrainsMono
@@ -169,6 +170,11 @@ struct TerminalScreenView: View {
         .navigationSubtitle(pane == nil ? subtitle(terminal) : "")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $addingMachine) { HostEditor(host: $0) }
+        // A localhost link in the terminal previews the page through the SSH connection.
+        .onReceive(NotificationCenter.default.publisher(for: .openLocalPreview, object: model)) { note in
+            if let address = note.userInfo?["address"] as? LocalWebAddress { previewing = PreviewItem(address: address) }
+        }
+        .sheet(item: $previewing) { LocalPreviewSheet(address: $0.address, session: session) }
         // The title bar sits on the terminal's background: match its brightness, not the app's.
         .toolbarColorScheme(chat ? colorScheme : theme.dark ? .dark : .light, for: .navigationBar)
         .onChange(of: theme, initial: true) { _, theme in model.theme = theme }

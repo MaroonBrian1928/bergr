@@ -44,6 +44,9 @@ struct MarkdownInline: Hashable, ExpressibleByStringLiteral {
             var piece = AttributedString(parsed[run.range])
             if run.link == nil, run.inlinePresentationIntent?.contains(.code) != true {
                 // File paths in plain text open the file viewer (see FilePathDetector).
+                // Pages on the agent's machine (localhost:3000) open the preview; first, so a
+                // "host:port" isn't taken for a file and line.
+                LocalLinks.link(&piece)
                 FilePathDetector.link(&piece)
             }
             if run.inlinePresentationIntent?.contains(.code) == true {

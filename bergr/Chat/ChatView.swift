@@ -29,6 +29,7 @@ struct ChatView: View {
     @State private var showingUsage = false
     @State private var showingChanges = false
     @State private var openedFile: FileRef?
+    @State private var previewing: PreviewItem?
     @State private var lifecycle = AgentLifecycle()
     @State private var choosingMode = false
     @State private var selecting: SelectableMessage?
@@ -223,6 +224,11 @@ struct ChatView: View {
         #endif
         // File paths in messages and tool rows open the file viewer.
         .environment(\.openURL, OpenURLAction { url in
+            // Pages on the agent's machine open in the preview, through the SSH connection.
+            if let local = LocalWebAddress(url: url), session?.host.isDemo != true {
+                previewing = PreviewItem(address: local)
+                return .handled
+            }
             guard let ref = FileRef(url: url) else { return .systemAction }
             openedFile = ref
             return .handled
@@ -232,6 +238,7 @@ struct ChatView: View {
                 draft += (draft.isEmpty || draft.hasSuffix(" ") ? "" : " ") + path + " "
             }
         }
+        .sheet(item: $previewing) { LocalPreviewSheet(address: $0.address, session: session) }
         // Images open from here, not from their rows (see `showImage`).
         .environment(\.showImage, imageOpener.action($viewing))
         .platformCover(item: $viewing) { ImageViewer(image: $0.image) }

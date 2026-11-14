@@ -35,7 +35,7 @@ public enum LinkDetector {
     }
 
     /// Drops sentence punctuation and unbalanced closing brackets after a URL.
-    private static func trimmed(_ url: String) -> String {
+    static func trimmed(_ url: String) -> String {
         var url = url
         while let last = url.last {
             if ".,;:!?".contains(last) {
@@ -49,5 +49,62 @@ public enum LinkDetector {
             }
         }
         return url
+    }
+}
+
+/// A web page on the agent's machine (`http://localhost:3000/path`). The app previews it through
+/// the SSH connection instead of opening the browser, where localhost is the wrong machine.
+public struct LocalWebAddress: Hashable, Sendable {
+    public var scheme: String
+    public var port: Int
+    /// Path, query and fragment, percent-encoded, starting with "/" (or empty).
+    public var path: String
+
+    private static let hosts: Set<String> = ["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"]
+
+    public init?(url: URL) {
+        guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = url.host(percentEncoded: false)?.lowercased(), Self.hosts.contains(host),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        let port = url.port ?? (scheme == "https" ? 443 : 80)
+        guard (1...65535).contains(port) else { return nil }
+        self.scheme = scheme
+        self.port = port
+        var path = components.percentEncodedPath
+        if let query = components.percentEncodedQuery { path += "?" + query }
+        if let fragment = components.percentEncodedFragment { path += "#" + fragment }
+        self.path = path
+    }
+
+    /// As the agent would write it: `localhost:3000/path`.
+    public var display: String { "localhost:\(port)\(path == "/" ? "" : path)" }
+
+    /// The original address, on localhost.
+    public var url: URL { URL(string: "\(scheme)://localhost:\(port)\(path)")! }
+
+    /// The same page through a forward to `localPort` on this device.
+    public func forwarded(to localPort: Int) -> URL {
+        URL(string: "\(scheme)://127.0.0.1:\(localPort)\(path)")!
+    }
+
+    private static let pattern = try! NSRegularExpression(
+        pattern: #"(?:https?://)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):\d{1,5}(?:[/?#][^\s<>"'`]*)?"#,
+        options: [.caseInsensitive])
+
+    /// Local addresses written in plain text, with or without `http://` (a port is required).
+    public static func matches(in text: String) -> [(range: Range<String.Index>, address: LocalWebAddress)] {
+        guard text.contains(":") else { return [] }
+        return pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+            guard let range = Range(match.range, in: text) else { return nil }
+            // "user@localhost:22", "app.localhost:3000" and "xlocalhost:1" are not local web addresses.
+            if range.lowerBound > text.startIndex {
+                let before = text[text.index(before: range.lowerBound)]
+                if before.isLetter || before.isNumber || "@.-_/:".contains(before) { return nil }
+            }
+            let raw = LinkDetector.trimmed(String(text[range]))
+            let full = raw.contains("://") ? raw : "http://" + raw
+            guard let url = URL(string: full), let address = LocalWebAddress(url: url) else { return nil }
+            return (range.lowerBound..<text.index(range.lowerBound, offsetBy: raw.count), address)
+        }
     }
 }

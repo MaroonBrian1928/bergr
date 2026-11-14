@@ -27,6 +27,88 @@ final class SystemSSH: @unchecked Sendable {
                 "-p", String(target.port), "-l", target.username, "--", target.host, command]
     }
 
+    /// `ssh -N -L`: the same options as a command, forwarding instead of running one.
+    static func forwardArguments(target: SSHTarget, localPort: Int, remotePort: Int) throws -> [String] {
+        var arguments = try arguments(target: target, command: "")
+        arguments.removeLast()
+        arguments[0] = "-N"
+        let options = ["-o", "ExitOnForwardFailure=yes", "-L", "127.0.0.1:\(localPort):localhost:\(remotePort)"]
+        arguments.insert(contentsOf: options, at: 1)
+        return arguments
+    }
+
+    /// Starts `ssh -N -L` on a free local port and waits until it listens.
+    func forward(remotePort: Int) async throws -> PortForward {
+        let localPort = try Self.freeLocalPort()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = try Self.forwardArguments(target: target, localPort: localPort, remotePort: remotePort)
+        let errors = Pipe()
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = errors
+        let id = UUID()
+        try lock.withLock {
+            guard !closed else { throw ChannelError.ioOnClosedChannel }
+            try process.run()
+            processes[id] = process
+        }
+        let forward = PortForward(localPort: localPort) { [weak self] in
+            if process.isRunning { process.terminate() }
+            _ = self?.lock.withLock { self?.processes.removeValue(forKey: id) }
+        }
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline {
+            if !process.isRunning {
+                forward.close()
+                let message = String(decoding: errors.fileHandleForReading.availableData, as: UTF8.self)
+                throw SSHTransportError.commandFailed(
+                    exitCode: Int(process.terminationStatus),
+                    stderr: message.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            if Self.canConnect(port: localPort) { return forward }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        forward.close()
+        throw SSHTransportError.commandFailed(exitCode: 255, stderr: "SSH did not open the port forward in time.")
+    }
+
+    /// A port nothing listens on now (the kernel picks it).
+    static func freeLocalPort() throws -> Int {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw ChannelError.ioOnClosedChannel }
+        defer { Darwin.close(fd) }
+        var address = loopback(port: 0)
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bound == 0 else { throw ChannelError.ioOnClosedChannel }
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
+        }
+        return Int(UInt16(bigEndian: address.sin_port))
+    }
+
+    static func canConnect(port: Int) -> Bool {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { Darwin.close(fd) }
+        var address = loopback(port: port)
+        return withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        } == 0
+    }
+
+    private static func loopback(port: Int) -> sockaddr_in {
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(port).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        return address
+    }
+
     func openExec(_ command: String) throws -> ExecPipe {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")

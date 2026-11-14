@@ -19,6 +19,18 @@ import Testing
     }
 }
 
+@Test func systemSSHForwardUsesTheSameOptionsWithoutACommand() throws {
+    let args = try SystemSSH.forwardArguments(
+        target: SSHTarget(host: "example.test", username: "tester"), localPort: 61000, remotePort: 3000)
+    #expect(args.first == "-N")
+    #expect(!args.contains("-T"))
+    #expect(args.contains("BatchMode=yes"))
+    #expect(args.contains("ExitOnForwardFailure=yes"))
+    #expect(args.contains("127.0.0.1:61000:localhost:3000"))
+    #expect(Array(args.suffix(2)) == ["--", "example.test"])
+    #expect(try SystemSSH.freeLocalPort() > 0)
+}
+
 @Test func closedSystemSSHDoesNotLaunchCommands() async {
     let ssh = SSHConnection.system(to: SSHTarget(host: "unused", username: "me"))
     await ssh.close()

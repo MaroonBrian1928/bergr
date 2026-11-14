@@ -264,6 +264,15 @@ final class HostSession {
         return try await ssh.openExec(command)
     }
 
+    /// A port on this device that reaches `port` on the machine, through its SSH connection. Nil when
+    /// the machine is this Mac: its localhost is already the right one.
+    func forwardPort(_ port: Int) async throws -> PortForward? {
+        guard state == .connected else { throw SessionError.connectionLost }
+        if attempt?.connection?.isLocal == true { return nil }
+        guard let ssh = attempt?.connection?.ssh else { throw SessionError.connectionLost }
+        return try await ssh.forwardLocalPort(to: port)
+    }
+
     var homeFolder: String? {
         for terminal in terminals {
             let parts = terminal.cwd.split(separator: "/")

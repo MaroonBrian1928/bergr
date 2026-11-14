@@ -915,7 +915,12 @@ extension TerminalCanvasView: UIEditMenuInteractionDelegate {
         if let url = menuLink {
             menuLink = nil
             var actions: [UIMenuElement] = []
-            if ["http", "https"].contains(url.scheme?.lowercased()) {
+            if let local = LocalWebAddress(url: url), let model {
+                // The agent's machine serves it: Safari here can't reach that localhost.
+                actions.append(UIAction(title: "Preview Page", image: UIImage(systemName: "eye")) { _ in
+                    NotificationCenter.default.post(name: .openLocalPreview, object: model, userInfo: ["address": local])
+                })
+            } else if ["http", "https"].contains(url.scheme?.lowercased()) {
                 actions.append(UIAction(title: "Open Link", image: UIImage(systemName: "safari")) { _ in
                     UIApplication.shared.open(url)
                 })
