@@ -137,11 +137,11 @@ nonisolated enum AgentChoice: String, AppEnum, Sendable {
     ]
 }
 
-/// "Send to agent": queued for the app, which opens the agent's chat with the text in its reply
-/// draft (the existing reply path sends it).
+/// "Send to agent": the app connects to the agent's machine and sends the text as a reply, unless
+/// the agent is waiting on a question: then the text is kept as a draft and the chat opens.
 nonisolated struct SendToAgentIntent: AppIntent {
     static let title: LocalizedStringResource = "Send to agent"
-    static let description = IntentDescription("Opens an agent's chat in Bergr with the message ready to send.")
+    static let description = IntentDescription("Sends a message to an agent in Bergr.")
     static let openAppWhenRun = true
 
     @Parameter(title: "Agent", requestValueDialog: "Which agent?")
@@ -150,11 +150,40 @@ nonisolated struct SendToAgentIntent: AppIntent {
     @Parameter(title: "Message", requestValueDialog: "What should it say?")
     var message: String
 
-    func perform() async throws -> some IntentResult {
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return .result() }
-        IntentQueue.enqueue(.message(host: agent.host, address: agent.address, text: text))
-        return .result()
+        guard !text.isEmpty else { return .result(dialog: "There was nothing to send") }
+        let outcome: IntentSendOutcome
+        if await AgentIntentBridge.ready(), let host = UUID(uuidString: agent.host), let send = AgentIntentBridge.send {
+            outcome = await send(host, agent.address, text)
+        } else {
+            // The app never came up: the old path, the text waits in the chat's draft.
+            IntentQueue.enqueue(.message(host: agent.host, address: agent.address, text: text))
+            outcome = .unreachable
+        }
+        return .result(dialog: IntentDialog(stringLiteral: AgentVoice.sentDialog(outcome, agent: agent.title)))
+    }
+}
+
+/// "Read the latest": the agent's last message, shortened, as the intent's spoken answer.
+nonisolated struct ReadLatestIntent: AppIntent {
+    static let title: LocalizedStringResource = "Read the latest from an agent"
+    static let description = IntentDescription("Reads out the last thing an agent in Bergr said.")
+    static let openAppWhenRun = true
+
+    @Parameter(title: "Agent", requestValueDialog: "Which agent?")
+    var agent: AgentEntity
+
+    @MainActor
+    func perform() async throws -> some ReturnsValue<String> & ProvidesDialog {
+        var message: String?
+        if await AgentIntentBridge.ready(), let host = UUID(uuidString: agent.host),
+           let latest = AgentIntentBridge.latestMessage {
+            message = await latest(host, agent.address)
+        }
+        let text = await AgentVoice.readLatest(agent: agent.title, message: message, writer: OnDeviceText.shared)
+        return .result(value: text, dialog: IntentDialog(stringLiteral: text))
     }
 }
 

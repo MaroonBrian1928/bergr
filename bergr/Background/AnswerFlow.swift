@@ -231,13 +231,25 @@ struct AnswerFlow {
     /// Connects for a typed reply; nil means replies just open the chat.
     var replyScreen: ((ReplyNotificationRequest) async -> Screen?)? = nil
 
-    /// A typed reply from an alert's Reply action: typed into the agent's prompt and sent, once.
-    func reply(_ request: ReplyNotificationRequest) async {
+    /// What a typed reply ended up doing.
+    enum ReplyOutcome: Equatable {
+        /// Typed into the agent's prompt and sent.
+        case sent
+        /// The agent is waiting on a question or menu: the text is in the chat's draft and the chat is open.
+        case savedAsDraft
+        /// Couldn't connect, or nothing to send: the chat is open.
+        case openedChat
+    }
+
+    /// A typed reply from an alert's Reply action (or "Send to agent"): typed into the agent's
+    /// prompt and sent, once.
+    @discardableResult
+    func reply(_ request: ReplyNotificationRequest) async -> ReplyOutcome {
         let text = request.text.split(whereSeparator: \.isNewline).joined(separator: " ")
             .trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty, let screen = await replyScreen?(request) else {
             openChat(request.host, request.address)
-            return
+            return .openedChat
         }
         // Typing into a permission or choice prompt would answer it (Enter picks the highlighted
         // option, a digit picks one): then the text waits in the chat's draft instead.
@@ -246,10 +258,11 @@ struct AnswerFlow {
             let key = "\(request.host.uuidString)|\(request.address)"
             ReplyDrafts.restore([text], for: key, in: draftDefaults)
             openChat(request.host, request.address)
-            return
+            return .savedAsDraft
         }
         await screen.send([.text(text), .enter])
         await screen.close()
+        return .sent
     }
 
     /// Where a reply that couldn't be typed is kept (tests use their own).
@@ -276,12 +289,11 @@ struct AnswerFlow {
         await screen.close()
     }
 
-    /// The real thing: starts the machine's session if needed (unlocking its key, which may ask for
-    /// Face ID: the app is in the foreground), waits up to `timeout` for it to be connected, then
-    /// attaches to the terminal and reads its screen.
-    static func live(
+    /// Starts the machine's session if needed and waits up to `timeout` for it to be connected and
+    /// to list the terminal.
+    static func connected(
         sessions: SessionStore, hosts: HostStore, keys: KeyLibrary, timeout: Duration = .seconds(15)
-    ) -> (UUID, String) async -> Screen? {
+    ) -> (UUID, String) async -> (HostSession, Terminal)? {
         { hostID, address in
             guard let host = hosts.hosts.first(where: { $0.id == hostID }) else { return nil }
             let session = sessions.session(for: host)
@@ -291,7 +303,21 @@ struct AnswerFlow {
                 if session.state == .connected, session.terminal(address) != nil { break }
                 try? await Task.sleep(for: .milliseconds(200))
             }
-            guard session.state == .connected, let terminal = session.terminal(address), terminal.isLive,
+            guard session.state == .connected, let terminal = session.terminal(address), terminal.isLive
+            else { return nil }
+            return (session, terminal)
+        }
+    }
+
+    /// The real thing: starts the machine's session if needed (unlocking its key, which may ask for
+    /// Face ID: the app is in the foreground), waits up to `timeout` for it to be connected, then
+    /// attaches to the terminal and reads its screen.
+    static func live(
+        sessions: SessionStore, hosts: HostStore, keys: KeyLibrary, timeout: Duration = .seconds(15)
+    ) -> (UUID, String) async -> Screen? {
+        let connect = connected(sessions: sessions, hosts: hosts, keys: keys, timeout: timeout)
+        return { hostID, address in
+            guard let (session, terminal) = await connect(hostID, address),
                   let capture = try? await ScreenCapture.open(session: session, terminal: terminal, observe: false)
             else { return nil }
             let lines = await capture.settledLines()

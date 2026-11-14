@@ -171,10 +171,12 @@ struct RootView: View {
                 PushRegistration.shared.run(sessions: sessions)
                 // Notification buttons answer through these sessions, connecting on demand.
                 let connect = AnswerFlow.live(sessions: sessions, hosts: hosts, keys: keys)
-                AnswerNotifications.shared.configure(AnswerFlow(
+                let flow = AnswerFlow(
                     screen: { await connect($0.host, $0.address) },
                     openChat: { router.pending = ($0, $1) },
-                    replyScreen: { await connect($0.host, $0.address) }))
+                    replyScreen: { await connect($0.host, $0.address) })
+                AnswerNotifications.shared.configure(flow)
+                AgentIntentHandlers.install(sessions: sessions, hosts: hosts, keys: keys, flow: flow)
             }
             // Wi-Fi ↔ cellular, a VPN: lines may be dead without knowing; check them at once.
             NetworkWatcher.shared.start { [sessions, keys] in sessions.probeAll(keys: keys) }
@@ -262,8 +264,9 @@ extension RootView {
     }
 
     /// Routes what App Intents queued (see `IntentQueue`): opens the agent's chat, with the text in
-    /// its reply draft for the existing reply path to send (an already open chat picks the draft
-    /// change up, see `ReplyDrafts.changed`); or opens New Session prefilled.
+    /// its reply draft (an already open chat picks the draft change up, see `ReplyDrafts.changed`);
+    /// or opens New Session prefilled. "Send to agent" normally sends through `AgentIntentHandlers`
+    /// and only lands here when the app couldn't take it.
     private func handleIntents() {
         for item in IntentQueue.take() {
             switch item {

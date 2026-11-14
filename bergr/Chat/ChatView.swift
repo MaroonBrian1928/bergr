@@ -1142,7 +1142,10 @@ struct ChatView: View {
                         MarkdownView(blocks: blocks, palette: palette)
                     }
                 }
-                .contextMenu { copyButton(text) }
+                .contextMenu {
+                    copyButton(text)
+                    Button("Read Aloud", systemImage: "speaker.wave.2") { SpeechReader.shared.toggle(text) }
+                }
             case .plan(let steps):
                 PlanCard(steps: steps, palette: palette)
             case .image(let data, let fromUser):

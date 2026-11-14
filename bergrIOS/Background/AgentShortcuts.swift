@@ -23,9 +23,20 @@ nonisolated struct AgentShortcuts: AppShortcutsProvider {
             systemImageName: "exclamationmark.bubble")
         AppShortcut(
             intent: SendToAgentIntent(),
-            phrases: ["Send to an agent in \(.applicationName)", "Message an agent in \(.applicationName)"],
+            phrases: [
+                "Tell \(\.$agent) in \(.applicationName)",
+                "Send to an agent in \(.applicationName)", "Message an agent in \(.applicationName)",
+            ],
             shortTitle: "Send to agent",
             systemImageName: "paperplane")
+        AppShortcut(
+            intent: ReadLatestIntent(),
+            phrases: [
+                "What did \(\.$agent) say in \(.applicationName)",
+                "Read the latest from \(\.$agent) in \(.applicationName)",
+            ],
+            shortTitle: "Read latest",
+            systemImageName: "speaker.wave.2")
         AppShortcut(
             intent: StartSessionIntent(),
             phrases: ["Start a session in \(.applicationName)", "Start an agent in \(.applicationName)"],
