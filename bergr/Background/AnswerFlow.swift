@@ -254,7 +254,8 @@ struct AnswerFlow {
         }
         // Typing into a permission or choice prompt would answer it (Enter picks the highlighted
         // option, a digit picks one): then the text waits in the chat's draft instead.
-        guard Self.acceptsFreeText(status: screen.status, lines: screen.lines) else {
+        guard Self.acceptsFreeText(status: screen.status, lines: screen.lines),
+              !Self.isCodexQuestion(status: screen.status, alertQuestion: request.question) else {
             await screen.close()
             let key = "\(request.host.uuidString)|\(request.address)"
             ReplyDrafts.restore([text], for: key, in: draftDefaults)
@@ -268,6 +269,14 @@ struct AnswerFlow {
 
     /// Where a reply that couldn't be typed is kept (tests use their own).
     var draftDefaults: UserDefaults = .standard
+
+    /// A reply to a Codex question: typing it would queue a new instruction instead of answering
+    /// (Codex's questions are answered from their own composer), so it goes to the chat, where
+    /// sending answers the open question.
+    static func isCodexQuestion(status: TerminalStatus?, alertQuestion: String?) -> Bool {
+        guard status?.app?.lowercased().contains("codex") == true else { return false }
+        return alertQuestion != nil || status?.kind == "question"
+    }
 
     /// Whether the agent is waiting for free text: not blocked on a prompt, and no menu on screen.
     static func acceptsFreeText(status: TerminalStatus?, lines: [String]?) -> Bool {

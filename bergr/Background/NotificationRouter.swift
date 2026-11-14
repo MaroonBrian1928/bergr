@@ -47,7 +47,8 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
             // question isn't the same any more.
             if let request = AnswerCategory.replyRequest(
                 actionIdentifier: response.actionIdentifier,
-                text: (response as? UNTextInputNotificationResponse)?.userText, target: target),
+                text: (response as? UNTextInputNotificationResponse)?.userText, target: target,
+                question: AnswerCategory.question(in: info)?.title),
                let handler = AnswerNotificationBridge.replyHandler {
                 handler(request)
                 return

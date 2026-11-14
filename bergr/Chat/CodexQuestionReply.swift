@@ -3,6 +3,24 @@ import Foundation
 /// Select the asynchronous question's composer before sending. An ordinary chat send can
 /// queue a new instruction instead of answering the question Codex asked.
 @MainActor enum CodexQuestionReply {
+    /// The newest async Codex question still open: not answered in the transcript and not picked
+    /// or being sent from the app. `items` are the chat's items as (id, title) for questions.
+    static func open(items: [(String, String)?], info: (String) -> (async: Bool, answered: Bool)?,
+                     picked: (String) -> Bool) -> (id: String, title: String)? {
+        for item in items.reversed() {
+            guard let (id, title) = item, let i = info(id), i.async else { continue }
+            if i.answered || picked(id) { continue }
+            return (id, title)
+        }
+        return nil
+    }
+
+    /// Whether a reply from the reply box should answer the open question: plain text only (no
+    /// images, shell `!` or `/` commands), unless the user chose to send it as a new message.
+    static func answersQuestion(text: String, hasImages: Bool, sendAsNew: Bool) -> Bool {
+        !sendAsNew && !hasImages && !text.isEmpty && !text.hasPrefix("!") && !text.hasPrefix("/")
+    }
+
     static func selected(title: String, lines: [String]) -> Bool {
         func normalized(_ text: String) -> String {
             text.split(whereSeparator: \.isWhitespace).joined(separator: " ")

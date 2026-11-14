@@ -75,6 +75,8 @@ struct ChatView: View {
     @State private var seenMessages = 0
     /// Options picked on Claude's question cards, until the conversation records the answers.
     @State private var questionPicks: [String: String] = [:]
+    /// The next send goes out as a new message even while Codex has a question open.
+    @State private var sendAsNewMessage = false
     @State private var questionSending: Set<String> = []
     /// The search field at the top shows while searching; closing it clears the search.
     @State private var searching = false
@@ -761,7 +763,9 @@ struct ChatView: View {
                 }
             }
             if !replyChips.isEmpty {
-                ReplyChips(chips: replyChips, draft: $draft, palette: palette)
+                ReplyChips(chips: replyChips, draft: $draft, palette: palette, answer: openCodexQuestion.map { open in
+                    { chip in answerCodexQuestion(chip, title: open.title, id: open.id) }
+                })
                     .transition(.opacity)
             }
             inputBar
@@ -888,6 +892,16 @@ struct ChatView: View {
                 }
             }
         }
+    }
+
+    /// Codex's newest unanswered async question, which a reply should answer (a plain message
+    /// would be queued as a new instruction instead).
+    private var openCodexQuestion: (id: String, title: String)? {
+        CodexQuestionReply.open(items: feed.items.map { item in
+            if case .question(let title, _) = item.kind { return (item.id, title) }
+            return nil
+        }, info: { id in feed.questionInfo[id].map { ($0.codexAsync, $0.answer != nil) } },
+           picked: { questionPicks[$0] != nil || questionSending.contains($0) })
     }
 
     private func answerCodexQuestion(_ answer: String, title: String, id: String) {
@@ -1335,6 +1349,23 @@ struct ChatView: View {
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
                     .accessibilityHint("Starts with an exclamation mark, so it runs as a shell command")
             }
+            if let open = openCodexQuestion, !shellMode {
+                HStack(spacing: 8) {
+                    Label(sendAsNewMessage ? "Sends as a new message" : "Answers: \(open.title)",
+                          systemImage: sendAsNewMessage ? "text.bubble" : "arrowshape.turn.up.left")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.accent)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Button(sendAsNewMessage ? "Answer instead" : "New message instead") { sendAsNewMessage.toggle() }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(palette.secondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .accessibilityIdentifier("codex-question-target")
+            }
             AttachmentStrip(attachments: $attachments, palette: palette)
                 .padding(.horizontal, 12)
                 .padding(.top, attachments.isEmpty ? 0 : 10)
@@ -1530,6 +1561,14 @@ struct ChatView: View {
         }
         let images = attachments
         guard (!text.isEmpty || !images.isEmpty), canType else { return }
+        if CodexQuestionReply.answersQuestion(text: text, hasImages: !images.isEmpty, sendAsNew: sendAsNewMessage),
+           let open = openCodexQuestion {
+            draft = ""
+            sendError = nil
+            answerCodexQuestion(text, title: open.title, id: open.id)
+            return
+        }
+        sendAsNewMessage = false
         // Replying takes the terminal over, like typing in it does.
         if model.watching { model.setWatching(false) }
         draft = ""
@@ -2003,6 +2042,8 @@ private struct ReplyChips: View {
     let chips: [String]
     @Binding var draft: String
     let palette: ChatPalette
+    /// Set while Codex has a question open: a chip answers it instead of filling the draft.
+    var answer: ((String) -> Void)? = nil
 
     @State private var picks = 0
 
@@ -2011,7 +2052,7 @@ private struct ReplyChips: View {
             HStack(spacing: 8) {
                 ForEach(chips, id: \.self) { chip in
                     Button {
-                        draft = chip
+                        if let answer { answer(chip) } else { draft = chip }
                         picks += 1
                     } label: {
                         Text(chip)

@@ -26,6 +26,8 @@ nonisolated struct ReplyNotificationRequest: Equatable, Sendable {
     var host: UUID
     var address: String
     var text: String
+    /// The alert asked a question (a Codex question is answered from the chat, not typed).
+    var question: String? = nil
 }
 
 /// Notification categories that give an alert answer buttons. Categories are fixed when the app
@@ -236,11 +238,11 @@ nonisolated enum RemoteAnswer {
 extension AnswerCategory {
     /// A Reply action's response, once the notification's target is known.
     static func replyRequest(
-        actionIdentifier: String, text: String?, target: (host: UUID, address: String)
+        actionIdentifier: String, text: String?, target: (host: UUID, address: String), question: String? = nil
     ) -> ReplyNotificationRequest? {
         let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard actionIdentifier == replyAction, !trimmed.isEmpty else { return nil }
-        return ReplyNotificationRequest(host: target.host, address: target.address, text: trimmed)
+        return ReplyNotificationRequest(host: target.host, address: target.address, text: trimmed, question: question)
     }
 }
 
