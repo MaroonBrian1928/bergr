@@ -3,7 +3,8 @@ import Foundation
 /// One answer Bergr sent to a permission prompt.
 nonisolated struct ApprovalEntry: Codable, Equatable, Identifiable, Sendable {
     /// `.rule`: answered by the machine's helper from an "always allow" rule, not by a person.
-    enum Source: String, Codable, Sendable { case card, notification, intent, rule }
+    /// `.notificationRemote`: a notification button answered by the helper through the relay.
+    enum Source: String, Codable, Sendable { case card, notification, intent, rule, notificationRemote = "notification-remote" }
 
     var id = UUID()
     var date: Date

@@ -88,6 +88,80 @@ nonisolated enum PushAlertKey {
         var body: String
         /// The question of a blocked agent, when the helper knows it (answer buttons).
         var q: AnswerQuestion?
+        /// The answerID (helpers after version 19): the buttons answer through the relay.
+        var a: String? = nil
+    }
+
+    // MARK: Answer envelope
+
+    /// An answer sent from a notification button to the machine's helper through the relay.
+    /// Format (base64): 0x03 ‖ nonce (16) ‖ ciphertext ‖ tag (32). enc = HMAC-SHA256(key,
+    /// "bergr-answer-enc"), mac = HMAC-SHA256(key, "bergr-answer-mac"); keystream as for alerts;
+    /// ad = machine ‖ 0x00 ‖ answerID; tag = HMAC-SHA256(mac, 0x03 ‖ nonce ‖ uint32be(len(ad)) ‖ ad ‖
+    /// ciphertext). Plaintext: JSON {"choice", "id", "machine"} with sorted keys. Mirrors
+    /// seal_answer/open_answer in bergr-notify (shared vector: bergrTests/answer-envelope-vector.json).
+    enum AnswerChoice: Equatable, Sendable {
+        case yes, no
+        case option(Int)
+
+        var json: Any {
+            switch self {
+            case .yes: "yes"
+            case .no: "no"
+            case .option(let index): index
+            }
+        }
+    }
+
+    static func sealAnswer(_ choice: AnswerChoice, machine: String, answerID: String, key: Data,
+                           nonce: Data? = nil) -> Data? {
+        guard key.count == 64,
+              let plain = try? JSONSerialization.data(
+                withJSONObject: ["choice": choice.json, "id": answerID, "machine": machine],
+                options: [.sortedKeys, .withoutEscapingSlashes]) else { return nil }
+        var nonce = nonce ?? Data(count: 16)
+        guard nonce.count == 16 else { return nil }
+        if nonce == Data(count: 16) {
+            guard nonce.withUnsafeMutableBytes({ SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) })
+                    == errSecSuccess else { return nil }
+        }
+        let (enc, mac) = answerKeys(key)
+        let cipher = xor(plain, keystream: enc, nonce: nonce)
+        return Data([3]) + nonce + cipher + answerTag(mac, nonce: nonce, machine: machine, answerID: answerID, cipher: cipher)
+    }
+
+    /// Opens an answer envelope bound to this machine and answerID (for tests and symmetry).
+    static func openAnswer(_ blob: Data, machine: String, answerID: String, key: Data) -> AnswerChoice? {
+        guard key.count == 64, blob.count >= 1 + 16 + 32, blob.first == 3 else { return nil }
+        let (enc, mac) = answerKeys(key)
+        let nonce = Data(blob.dropFirst().prefix(16)), cipher = Data(blob.dropFirst(17).dropLast(32))
+        let tag = Data(blob.suffix(32))
+        // isValidAuthenticationCode compares in constant time.
+        guard HMAC<SHA256>.isValidAuthenticationCode(
+            tag, authenticating: answerSigned(nonce: nonce, machine: machine, answerID: answerID, cipher: cipher),
+            using: mac),
+            let object = try? JSONSerialization.jsonObject(with: xor(cipher, keystream: enc, nonce: nonce)) as? [String: Any],
+            object["id"] as? String == answerID, object["machine"] as? String == machine else { return nil }
+        if let word = object["choice"] as? String { return word == "yes" ? .yes : word == "no" ? .no : nil }
+        if let index = object["choice"] as? Int { return .option(index) }
+        return nil
+    }
+
+    private static func answerKeys(_ key: Data) -> (enc: SymmetricKey, mac: SymmetricKey) {
+        let root = SymmetricKey(data: key)
+        let enc = HMAC<SHA256>.authenticationCode(for: Data("bergr-answer-enc".utf8), using: root)
+        let mac = HMAC<SHA256>.authenticationCode(for: Data("bergr-answer-mac".utf8), using: root)
+        return (SymmetricKey(data: Data(enc)), SymmetricKey(data: Data(mac)))
+    }
+
+    private static func answerSigned(nonce: Data, machine: String, answerID: String, cipher: Data) -> Data {
+        let ad = Data(machine.utf8) + Data([0]) + Data(answerID.utf8)
+        return Data([3]) + nonce + withUnsafeBytes(of: UInt32(ad.count).bigEndian) { Data($0) } + ad + cipher
+    }
+
+    private static func answerTag(_ mac: SymmetricKey, nonce: Data, machine: String, answerID: String, cipher: Data) -> Data {
+        Data(HMAC<SHA256>.authenticationCode(
+            for: answerSigned(nonce: nonce, machine: machine, answerID: answerID, cipher: cipher), using: mac))
     }
 
     /// Decrypts an `e` blob; nil if it was changed, made with another key, or isn't one.

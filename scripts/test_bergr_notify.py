@@ -460,7 +460,7 @@ class RelayTests(unittest.TestCase):
     def test_relay_sends_host_id(self):
         hosts = []
         orig = notify.send_relay
-        notify.send_relay = lambda d, t, b, a, h, s=None, q=None: hosts.append(h)
+        notify.send_relay = lambda d, t, b, a, h, s=None, q=None, ans=None: hosts.append(h)
         try:
             notify.send_alert({"devices": [dict(self.DEVICE, host_id="UUID-1")]}, "t", "b", "t1", "pop", notify.JwtCache())
         finally:
@@ -1240,6 +1240,146 @@ class TurnBaselineTests(Base):
         self.assertEqual(notify.started_working(st("done"), st("working")), ["a"])
         self.assertEqual(notify.started_working(st("working"), st("working")), [])
         self.assertEqual(notify.started_working({"last": {}}, st("working")), [])
+
+
+
+# ---- Remote answers (answering from a notification through the relay)
+
+VECTOR = json.load(open(os.path.join(HERE, "..", "bergrTests", "answer-envelope-vector.json"), encoding="utf-8"))
+MENU = "\n".join(["Bash command", "", "  npm test", "", "Do you want to proceed?", "❯ 1. Yes",
+                  "  2. Yes, and don't ask again", "  3. No, and tell Claude what to do differently",
+                  "", "Esc to cancel"])
+
+
+class FakeHC:
+    def __init__(self, term, text):
+        self.term, self.text, self.pressed, self.reads = term, text, [], 0
+
+    def __call__(self, args):
+        if args[1] == "get":
+            return json.dumps(self.term)
+        if args[1] == "read":
+            self.reads += 1
+            return json.dumps({"text": self.text})
+        if args[1] == "keys":
+            self.pressed.append(args[3:])
+            return ""
+        raise AssertionError(args)
+
+
+class RemoteAnswerTests(unittest.TestCase):
+    KEY = bytes(range(64))
+    MACHINE = "UUID-1"
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "remote-answers.json")
+        self.term = term(msg="Bash: npm test")
+        self.aid = notify.record_pending_answer(self.path, "t1", 5, "Bash: npm test", now=1000)
+
+    def item(self, choice="yes", aid=None, machine=None, key=None):
+        aid = aid or self.aid
+        return {"id": aid, "e": notify.seal_answer(key or self.KEY, machine or self.MACHINE, aid, choice)}
+
+    def run_answer(self, item, hc=None, cfg=None, now=1100):
+        hc = hc or FakeHC(self.term, MENU)
+        return notify.remote_answer(cfg or {}, self.MACHINE, self.KEY, item, self.path, hc, now), hc
+
+    def test_shared_vector_opens_and_seals_identically(self):
+        key, nonce = bytes(range(64)), base64.b64decode(VECTOR["nonce"])  # see "keyBytes"
+        for c in VECTOR["cases"]:
+            self.assertEqual(notify.open_answer(key, VECTOR["machine"], VECTOR["id"], c["e"]), c["choice"])
+            self.assertEqual(notify.seal_answer(key, VECTOR["machine"], VECTOR["id"], c["choice"], nonce), c["e"])
+
+    def test_tampered_wrong_machine_wrong_id_wrong_key_rejected(self):
+        e = self.item()["e"]
+        blob = bytearray(base64.b64decode(e))
+        blob[20] ^= 1
+        bad = base64.b64encode(bytes(blob)).decode()
+        for args in [(self.KEY, self.MACHINE, self.aid, bad), (self.KEY, "UUID-2", self.aid, e),
+                     (self.KEY, self.MACHINE, "f" * 32, e), (bytes(64), self.MACHINE, self.aid, e)]:
+            with self.assertRaises(ValueError):
+                notify.open_answer(*args)
+        (out, _, _, _), hc = self.run_answer({"id": self.aid, "e": bad})
+        self.assertEqual(out, "ignored")
+        self.assertEqual(hc.pressed, [])
+
+    def test_answers_yes_once(self):
+        (out, label, rec, _), hc = self.run_answer(self.item("yes"))
+        self.assertEqual((out, label), ("answered", "Yes"))
+        self.assertEqual(hc.pressed, [["enter"]])
+        (again, reason, _, _), hc2 = self.run_answer(self.item("yes"))
+        self.assertEqual((again, reason), ("ignored", "already used"))
+        self.assertEqual(hc2.pressed, [])
+
+    def test_no_moves_to_no_option(self):
+        (out, label, _, _), hc = self.run_answer(self.item("no"))
+        self.assertEqual(out, "answered")
+        self.assertTrue(label.startswith("No"))
+        self.assertEqual(hc.pressed, [["down", "down", "enter"]])
+
+    def test_expired_refused(self):
+        (out, _, _, _), hc = self.run_answer(self.item(), now=1000 + notify.REMOTE_TTL + 1)
+        self.assertEqual(out, "refused")
+        self.assertEqual(hc.pressed, [])
+
+    def test_unknown_id_ignored(self):
+        (out, _, _, _), _ = self.run_answer(self.item(aid="a" * 32))
+        self.assertEqual(out, "ignored")
+
+    def test_turn_changed_refused(self):
+        (out, _, _, _), hc = self.run_answer(self.item(), hc=FakeHC(term(msg="Bash: npm test", turn=6), MENU))
+        self.assertEqual(out, "refused")
+        self.assertEqual(hc.pressed, [])
+
+    def test_question_changed_refused(self):
+        (out, _, _, _), hc = self.run_answer(self.item(), hc=FakeHC(term(msg="Bash: npm run build"), MENU))
+        self.assertEqual(out, "refused")
+        self.assertEqual(hc.pressed, [])
+
+    def test_dangerous_on_screen_refused(self):
+        screen = MENU.replace("npm test", "rm -rf /")
+        (out, _, _, _), hc = self.run_answer(self.item(), hc=FakeHC(self.term, screen))
+        self.assertEqual(out, "refused")
+        self.assertEqual(hc.pressed, [])
+
+    def test_ask_pattern_refused(self):
+        cfg = {"devices": [{"askPatterns": ["npm *"]}]}
+        (out, _, _, _), hc = self.run_answer(self.item(), cfg=cfg)
+        self.assertEqual(out, "refused")
+        self.assertEqual(hc.pressed, [])
+
+    def test_unknown_prompt_refused(self):
+        (out, _, _, _), hc = self.run_answer(self.item(), hc=FakeHC(self.term, "just some text"))
+        self.assertEqual(out, "refused")
+        self.assertEqual(hc.pressed, [])
+
+    def test_y_n_prompt(self):
+        self.assertEqual(notify.answer_keys(["Overwrite file? (y/n)"], "no"), (["n"], "No"))
+        self.assertIsNone(notify.answer_keys(["Overwrite file?"], "yes"))
+
+    def test_poll_logs_and_confirms(self):
+        sent, logp = [], os.path.join(self.dir, "auto.json")
+        dev = {"relay": "https://r", "secret": "s", "key": base64.b64encode(self.KEY).decode(), "host_id": self.MACHINE}
+        hc = FakeHC(self.term, MENU)
+        notify.poll_answers({"devices": [dev]}, self.path, "pop-os", lambda *a: sent.append(a),
+                            fetch=lambda d, m: [self.item()], runner=hc, log_path=logp, now=1100)
+        self.assertEqual(sent[0][0], "Answered Yes on pop-os")
+        entry = json.load(open(logp))[0]
+        self.assertEqual((entry["source"], entry["answer"]), ("notification-remote", "Yes"))
+
+    def test_poll_refusal_pushes_open_bergr(self):
+        sent = []
+        dev = {"relay": "https://r", "secret": "s", "key": base64.b64encode(self.KEY).decode(), "host_id": self.MACHINE}
+        notify.poll_answers({"devices": [dev]}, self.path, "pop-os", lambda *a: sent.append(a),
+                            fetch=lambda d, m: [self.item()], runner=FakeHC(term(turn=9), MENU),
+                            log_path=os.path.join(self.dir, "a.json"), now=1100)
+        self.assertEqual(sent[0][0], "Couldn't answer — open Bergr")
+
+    def test_alert_carries_answer_id(self):
+        blob = notify.encrypt_alert(self.KEY, "t", "b", q={"title": "x", "options": ["Yes", "No"], "keys": True},
+                                    a=self.aid)
+        self.assertEqual(notify.decrypt_alert(self.KEY, base64.b64decode(blob))["a"], self.aid)
 
 
 if __name__ == "__main__":

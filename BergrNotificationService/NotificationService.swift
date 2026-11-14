@@ -28,12 +28,16 @@ final class NotificationService: UNNotificationServiceExtension {
             // A question with 2 to 4 options gets answer buttons (the app registers the category);
             // the body says what each number answers.
             // No buttons (done, a dangerous command, a question): a text Reply; health alerts: neither.
-            let category = AnswerCategory.pushCategory(
-                question: alert.q, address: request.content.userInfo["address"] as? String)
+            // With an answerID the buttons answer through the relay without opening the app.
+            let address = request.content.userInfo["address"] as? String
+            let category = AnswerCategory.pushCategory(question: alert.q, address: address, answerID: alert.a)
             content.categoryIdentifier = category
-            if let q = alert.q, category == AnswerCategory.identifier(for: q) {
+            if let q = alert.q, AnswerCategory.isAnswerCategory(category) {
                 content.body = [alert.body, AnswerCategory.summary(q)].filter { !$0.isEmpty }.joined(separator: "\n")
-                content.userInfo.merge(AnswerCategory.userInfo(q)) { _, new in new }
+                content.userInfo.merge(AnswerCategory.userInfo(q, answerID: alert.a)) { _, new in new }
+                if let id = alert.a, let machine = request.content.userInfo["host"] as? String, let address {
+                    RemoteAnswer.recordLatest(machine: machine, address: address, answerID: id)
+                }
             }
         }
         handler = nil  // delivered: iOS running out of time afterwards mustn't deliver it again

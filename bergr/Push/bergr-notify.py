@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 20
+VERSION = 21
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 
 
@@ -367,6 +367,308 @@ def record_auto_answer(path, command, rule, term, now=None):
 
 def auto_log_path(config_path=None):
     return os.path.join(os.path.dirname(config_path or default_config_path()), "auto-approvals.json")
+
+
+# ---- Answering from a notification without opening the app (needs next version after 19).
+#
+# An alert with answer buttons carries an answerID ("a", random 128 bits). The helper keeps what it
+# may answer (address, turn, question hash) in remote-answers.json for 10 minutes. The phone posts
+# {machine, id, e} to the relay's mailbox; e is sealed with the device's alert key (see seal_answer)
+# and binds the machine id and the answerID as associated data. The helper fetches, opens, checks
+# that the same question is still on screen and only then presses keys, once.
+REMOTE_TTL = 600
+ANSWER_POLL = 3
+ANSWER_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+REMOTE_SOURCE = "notification-remote"
+
+
+def remote_answers_path(config_path=None):
+    return os.path.join(os.path.dirname(config_path or default_config_path()), "remote-answers.json")
+
+
+def question_hash(title):
+    return hashlib.sha256(_text(title).encode("utf-8")).hexdigest()
+
+
+def _load_pending(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_pending(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+
+
+def record_pending_answer(path, address, turn, title, now=None, answer_id=None):
+    """Remembers a new answerID for (address, turn, question); returns it. Expired ones are dropped."""
+    now = time.time() if now is None else now
+    aid = answer_id or os.urandom(16).hex()
+    data = {k: v for k, v in _load_pending(path).items()
+            if isinstance(v, dict) and isinstance(v.get("expires"), (int, float)) and v["expires"] > now}
+    data[aid] = {"address": address, "turn": turn, "qhash": question_hash(title), "title": _text(title)[:200],
+                 "expires": now + REMOTE_TTL, "used": False}
+    _save_pending(path, data)
+    return aid
+
+
+def has_pending(path, now=None):
+    now = time.time() if now is None else now
+    return any(isinstance(v, dict) and not v.get("used") and (v.get("expires") or 0) > now
+               for v in _load_pending(path).values())
+
+
+def _answer_keys(key_bytes):
+    return _hmac(key_bytes, b"bergr-answer-enc"), _hmac(key_bytes, b"bergr-answer-mac")
+
+
+def _answer_ad(machine, answer_id):
+    return machine.encode("utf-8") + b"\x00" + answer_id.encode("utf-8")
+
+
+def _answer_tag(mac, nonce, ad, cipher):
+    return _hmac(mac, b"\x03" + nonce + len(ad).to_bytes(4, "big") + ad + cipher)
+
+
+def seal_answer(key_bytes, machine, answer_id, choice, nonce=None):
+    """The phone's answer envelope (Shared/PushAlertKey.swift sealAnswer), base64: 0x03 || nonce (16) ||
+    ciphertext || tag (32). Keys from the 64-byte alert key: enc = HMAC-SHA256(key, "bergr-answer-enc"),
+    mac = HMAC-SHA256(key, "bergr-answer-mac"); keystream as for alerts; ad = machine || 0x00 || answerID;
+    tag = HMAC-SHA256(mac, 0x03 || nonce || uint32be(len(ad)) || ad || ciphertext). Plaintext: JSON
+    {"choice", "id", "machine"}. Here for tests and the shared test vector."""
+    if len(key_bytes) != 64:
+        raise ValueError("alert key must be 64 bytes")
+    nonce = os.urandom(16) if nonce is None else bytes(nonce)
+    enc, mac = _answer_keys(key_bytes)
+    plain = json.dumps({"choice": choice, "id": answer_id, "machine": machine},
+                       separators=(",", ":"), sort_keys=True).encode("utf-8")
+    cipher = bytes(x ^ y for x, y in zip(plain, _keystream(enc, nonce, len(plain))))
+    ad = _answer_ad(machine, answer_id)
+    return base64.b64encode(b"\x03" + nonce + cipher + _answer_tag(mac, nonce, ad, cipher)).decode("ascii")
+
+
+def open_answer(key_bytes, machine, answer_id, e):
+    """The choice ("yes", "no" or an option index) in an answer envelope sealed for this machine and
+    answerID; raises ValueError when it was changed, made with another key, or bound to anything else."""
+    if len(key_bytes) != 64 or not isinstance(e, str) or len(e) > 2000:
+        raise ValueError("bad envelope")
+    blob = base64.b64decode(e, validate=True)
+    if len(blob) < 1 + 16 + 32 or blob[0] != 3:
+        raise ValueError("bad envelope")
+    nonce, cipher, tag = blob[1:17], blob[17:-32], blob[-32:]
+    enc, mac = _answer_keys(key_bytes)
+    if not hmac.compare_digest(_answer_tag(mac, nonce, _answer_ad(machine, answer_id), cipher), tag):
+        raise ValueError("bad tag")
+    plain = json.loads(bytes(x ^ y for x, y in zip(cipher, _keystream(enc, nonce, len(cipher)))))
+    if not isinstance(plain, dict) or plain.get("id") != answer_id or plain.get("machine") != machine:
+        raise ValueError("bound to something else")
+    choice = plain.get("choice")
+    if choice in ("yes", "no") or (isinstance(choice, int) and not isinstance(choice, bool) and 0 <= choice < 9):
+        return choice
+    raise ValueError("bad choice")
+
+
+def prompt_menu(lines):
+    """The numbered menu at the bottom of the screen: [(number, label, selected)], numbered from 1 with
+    exactly one selected; None when it isn't exactly that."""
+    lines = [_clean(l) for l in lines]
+    while lines and (lines[-1] == "" or lines[-1].startswith("Esc to cancel")):
+        lines.pop()
+    menu = []
+    while lines and _option(lines[-1]):
+        menu.insert(0, _option(lines.pop()))
+    if len(menu) < 2 or any(o[0] != i + 1 for i, o in enumerate(menu)) or sum(1 for o in menu if o[2]) != 1:
+        return None
+    return menu
+
+
+_YN = re.compile(r"[\(\[]\s*y\s*/\s*n\s*[\)\]]", re.I)
+
+
+def answer_keys(lines, choice):
+    """(keys to press, label) for `choice` on this screen, or None when the prompt isn't one it knows."""
+    menu = prompt_menu(lines)
+    if menu:
+        if choice in ("yes", "no"):
+            target = next((i for i, o in enumerate(menu) if o[1].lower().startswith(choice)), None)
+        else:
+            target = choice if choice < len(menu) else None
+        if target is None:
+            return None
+        at = next(i for i, o in enumerate(menu) if o[2])
+        steps = ["down"] * (target - at) if target >= at else ["up"] * (at - target)
+        return steps + ["enter"], menu[target][1]
+    last = next((_clean(l) for l in reversed(lines) if _clean(l)), "")
+    if choice in ("yes", "no") and _YN.search(last):
+        return [choice[0]], choice.capitalize()
+    return None
+
+
+def _check_screen(cfg, address, rec, choice, runner):
+    """(keys, label, term, screen text) when the same question is still asked; else (None, reason, ...)."""
+    term = _hc_json(["get", address], runner)
+    if not term:
+        return None, "the terminal is gone", None, None
+    status = term.get("status") if isinstance(term.get("status"), dict) else {}
+    if status.get("state") != "blocked":
+        return None, "the agent isn't waiting any more", term, None
+    if term.get("turn") != rec.get("turn"):
+        return None, "the agent moved on", term, None
+    title = _text(status.get("msg")) or _text(status.get("title"))
+    if dangerous_reason(_text(status.get("msg")) + "\n" + _text(status.get("title"))):
+        return None, "it's a dangerous command", term, None
+    q = alert_question(term, "blocked")
+    if not q or question_hash(q["title"]) != rec.get("qhash"):
+        return None, "the question changed", term, None
+    screen = _hc_json(["read", address], runner)
+    text = screen.get("text") if isinstance(screen, dict) else None
+    if not isinstance(text, str):
+        return None, "couldn't read the screen", term, None
+    if dangerous_reason(text):
+        return None, "it's a dangerous command", term, text
+    if ask_match(title + "\n" + text, device_ask_patterns(cfg)):
+        return None, "it matches an always-ask pattern", term, text
+    found = answer_keys(text.split("\n"), choice)
+    if not found:
+        return None, "couldn't read the prompt", term, text
+    return found[0], found[1], term, text
+
+
+def remote_answer(cfg, machine, key_bytes, item, path, runner=_hc_run, now=None):
+    """Handles one answer from the relay. Returns ("answered", label, rec, term), ("refused", reason, rec,
+    term) or ("ignored", reason, None, None): ignored ones (forged, unknown, replayed) get no push."""
+    now = time.time() if now is None else now
+    aid = item.get("id") if isinstance(item, dict) else None
+    if not isinstance(aid, str) or not ANSWER_ID_RE.match(aid):
+        return "ignored", "bad id", None, None
+    try:
+        choice = open_answer(key_bytes, machine, aid, item.get("e"))
+    except (ValueError, TypeError) as e:
+        return "ignored", f"envelope rejected ({e})", None, None
+    data = _load_pending(path)
+    rec = data.get(aid)
+    if not isinstance(rec, dict):
+        return "ignored", "unknown answer id", None, None
+    if rec.get("used"):
+        return "ignored", "already used", None, None
+    rec["used"] = True  # single use, whatever happens next
+    data[aid] = rec
+    _save_pending(path, data)
+    if not isinstance(rec.get("expires"), (int, float)) or rec["expires"] <= now:
+        return "refused", "the answer came too late", rec, None
+    address = rec.get("address")
+    if not isinstance(address, str) or not address or "/" in address:
+        return "refused", "not a local terminal", rec, None
+    try:
+        keys, label, term, text = _check_screen(cfg, address, rec, choice, runner)
+        if keys is None:
+            return "refused", label, rec, term
+        # Once more just before pressing: still exactly the same screen.
+        keys2, _, _, text2 = _check_screen(cfg, address, rec, choice, runner)
+        if keys2 != keys or text2 != text:
+            return "refused", "the screen changed", rec, term
+        runner(["hc", "keys", address] + keys)
+        return "answered", label, rec, term
+    except Exception as e:
+        log(f"remote answer failed for {address}: {e}")
+        return "refused", "couldn't check the terminal", rec, None
+
+
+def record_remote_answer(path, question, answer, machine, term, now=None):
+    """Logs a remote answer in auto-approvals.json (the app's approvals log), source notification-remote."""
+    import uuid
+    try:
+        with open(path) as f:
+            entries = json.load(f)
+        if not isinstance(entries, list):
+            entries = []
+    except (OSError, ValueError):
+        entries = []
+    term = term if isinstance(term, dict) else {}
+    status = term.get("status") if isinstance(term.get("status"), dict) else {}
+    fg = term.get("foreground") if isinstance(term.get("foreground"), dict) else {}
+    entries.append({"id": str(uuid.uuid4()).upper(), "at": time.time() if now is None else now, "command": question,
+                    "answer": answer, "source": REMOTE_SOURCE, "machine": machine,
+                    "cwd": _text(fg.get("cwd")) or _text(term.get("cwd")) or None,
+                    "agent": _text(status.get("app")), "address": term.get("address")})
+    entries = entries[-AUTO_LOG_LIMIT:]
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(entries, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        log(f"could not save the approvals log: {e}")
+    return entries
+
+
+def fetch_answers(device, machine):
+    """Takes this machine's waiting answers from the relay mailbox (it deletes them as it hands them out)."""
+    url = device["relay"].rstrip("/") + "/v1/answers?machine=" + urllib.parse.quote(machine, safe="")
+    req = urllib.request.Request(url, method="GET", headers={
+        "authorization": "Bearer " + device["secret"], "user-agent": f"bergr-notify/{VERSION}"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        answers = parse_reply(resp.read()).get("answers")
+    return [a for a in answers if isinstance(a, dict)] if isinstance(answers, list) else []
+
+
+def poll_answers(cfg, path, host, sender, fetch=fetch_answers, runner=_hc_run, log_path=None, now=None):
+    """Fetches and handles every device's answers once. sender(title, body, address, state) pushes."""
+    for device in cfg.get("devices") or []:
+        if not (isinstance(device, dict) and device.get("relay") and device.get("secret") and device.get("key")):
+            continue
+        machine = device.get("host_id") or host
+        try:
+            key = base64.b64decode(device["key"], validate=True)
+            items = fetch(device, machine)
+        except Exception as e:
+            log(f"could not fetch answers: {e}")
+            continue
+        for item in items:
+            outcome, detail, rec, term = remote_answer(cfg, machine, key, item, path, runner, now)
+            if outcome == "ignored":
+                log(f"ignored a remote answer: {detail}")
+                continue
+            address = rec.get("address") or ""
+            if outcome == "answered":
+                log(f"answered {detail!r} for {address} from a notification")
+                record_remote_answer(log_path or auto_log_path(), rec.get("title") or "", detail, machine, term)
+                sender(f"Answered {detail} on {host}", rec.get("title") or "", address, "done")
+            else:
+                log(f"refused a remote answer for {address}: {detail}")
+                sender("Couldn't answer — open Bergr", detail[:1].upper() + detail[1:] + ".", address, "blocked")
+
+
+class AnswerPoller(threading.Thread):
+    """Asks the relay for answers every few seconds, only while an answerID is waiting."""
+
+    def __init__(self, watcher, path, host, jwt_cache):
+        super().__init__(daemon=True)
+        self.watcher, self.path, self.host, self.jwt_cache = watcher, path, host, jwt_cache
+
+    def run(self):
+        while True:
+            time.sleep(ANSWER_POLL)
+            try:
+                if not has_pending(self.path):
+                    continue
+                cfg = ConfigWatcher(self.watcher.path).get()
+                if cfg is None:
+                    continue
+                poll_answers(cfg, self.path, self.host, lambda t, b, a, s: send_alert(
+                    cfg, t, b, a, self.host, self.jwt_cache, state=s))
+            except Exception as e:
+                log(f"answer poll failed: {e}")
 
 
 def last_sentences(text, count=2):
@@ -1269,7 +1571,7 @@ def _keystream(enc, nonce, length):
     return b"".join(_hmac(enc, nonce + i.to_bytes(4, "big")) for i in range((length + 31) // 32))
 
 
-def encrypt_alert(key_bytes, title, body, nonce=None, q=None):
+def encrypt_alert(key_bytes, title, body, nonce=None, q=None, a=None):
     """Base64 blob the phone's Notification Service Extension decrypts (see Shared/PushAlertKey.swift).
     Version 2, standard library only: 0x02 || nonce (16) || ciphertext || tag (32). With the 64-byte
     alert key: enc = HMAC-SHA256(key, "bergr-enc"), mac = HMAC-SHA256(key, "bergr-mac"); keystream
@@ -1283,6 +1585,8 @@ def encrypt_alert(key_bytes, title, body, nonce=None, q=None):
     content = {"title": title, "body": body}
     if q:
         content["q"] = q  # {"title", "options" (up to 4), "keys"}: the phone's answer buttons
+    if a:
+        content["a"] = a  # the answerID: the buttons answer through the relay, without opening the app
     plain = json.dumps(content, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     enc, mac = _hmac(key_bytes, b"bergr-enc"), _hmac(key_bytes, b"bergr-mac")
     cipher = bytes(a ^ b for a, b in zip(plain, _keystream(enc, nonce, len(plain))))
@@ -1302,7 +1606,7 @@ def decrypt_alert(key_bytes, blob):
     return json.loads(bytes(a ^ b for a, b in zip(cipher, stream)))
 
 
-def relay_request(device, title, body, address, host, state=None, q=None):
+def relay_request(device, title, body, address, host, state=None, q=None, a=None):
     """(url, headers, body bytes) for a push through the relay."""
     url = device["relay"].rstrip("/") + "/v1/push"
     payload = {"title": title[:100], "body": body[:400], "address": address[:64], "host": host[:100]}
@@ -1310,7 +1614,7 @@ def relay_request(device, title, body, address, host, state=None, q=None):
         # Never send the text in the clear when the phone has a key; fall back to a generic alert.
         try:
             key = base64.b64decode(device["key"], validate=True)
-            payload = {"e": encrypt_alert(key, title[:100], body[:400], q=q),"address": address[:64], "host": host[:100]}
+            payload = {"e": encrypt_alert(key, title[:100], body[:400], q=q, a=a if q else None), "address": address[:64], "host": host[:100]}
         except Exception as e:
             log(f"alert encryption failed ({type(e).__name__}); sending without text")
             payload = {"title": "Bergr", "body": "An agent needs you", "address": address[:64], "host": host[:100]}
@@ -1322,9 +1626,9 @@ def relay_request(device, title, body, address, host, state=None, q=None):
     return url, headers, json.dumps(payload).encode("utf-8")
 
 
-def send_relay(device, title, body, address, host, state=None, q=None):
+def send_relay(device, title, body, address, host, state=None, q=None, a=None):
     """Sends one push through the device's relay. Returns the relay's reply (see ActivityPoster.learn)."""
-    url, headers, data = relay_request(device, title, body, address, host, state, q)
+    url, headers, data = relay_request(device, title, body, address, host, state, q, a)
     req = urllib.request.Request(url, data=data, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -1335,7 +1639,7 @@ def send_relay(device, title, body, address, host, state=None, q=None):
         raise RuntimeError(f"relay HTTP {e.code}: {e.read()[:200].decode('utf-8', 'replace')}")
 
 
-def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None, state=None, q=None):
+def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None, state=None, q=None, a=None):
     """Sends one alert to every device (through its relay, or straight to APNs with a key on this
     machine) or to the ntfy topic. Returns the successful sends. on_reply(secret, reply) gets each
     relay's reply."""
@@ -1354,7 +1658,7 @@ def send_alert(cfg, title, body, address, host, jwt_cache, on_reply=None, state=
                    and wanted(d)]:
         try:
             # The app's own id for this machine when it gave one, so a tap opens the right one.
-            reply = send_relay(device, title, body, address, device.get("host_id") or host, state, q)
+            reply = send_relay(device, title, body, address, device.get("host_id") or host, state, q, a)
             sent += 1
             if on_reply and isinstance(reply, dict):
                 on_reply(device["secret"], reply)
@@ -1396,6 +1700,8 @@ def run():
     quiet_at = 0.0
     awake = KeepAwake()
     atexit.register(awake.release)
+    answers_path = remote_answers_path()
+    AnswerPoller(watcher, answers_path, host, jwt_cache).start()
     while True:
         try:
             proc = subprocess.Popen(["hc", "events", "--json"], stdout=subprocess.PIPE,
@@ -1451,8 +1757,17 @@ def run():
                                        jwt_cache, on_reply=poster.learn, state="done")
                             continue
                         log(f"alert for {a['address']}: {a['title']}")
+                        q = alert_answers(cfg, a)
+                        # Answer buttons answer through the relay: the helper remembers what this
+                        # answerID may answer (this address, turn and question) for 10 minutes.
+                        answer_id = None
+                        if q and q.get("keys") is True:
+                            try:
+                                answer_id = record_pending_answer(answers_path, a["address"], a["turn"], q["title"])
+                            except Exception as e:
+                                log(f"could not save the answer id: {e}")
                         send_alert(cfg, a["title"], a["body"], a["address"], host, jwt_cache,
-                                   on_reply=poster.learn, state=a["state"], q=alert_answers(cfg, a))
+                                   on_reply=poster.learn, state=a["state"], q=q, a=answer_id)
             finally:
                 if proc.poll() is None:
                     proc.kill()

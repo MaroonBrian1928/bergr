@@ -408,6 +408,7 @@ final class PushRegistration {
         let installed = status["installed"] as? Bool ?? false
         let version = status["version"] as? Int
         helperVersion[id] = installed ? version : nil
+        RemoteAnswer.setHelperVersion(installed ? version : nil, for: id)
         if installed, let version, version >= bundled {
             helperState[id] = .current
             return
@@ -437,6 +438,7 @@ final class PushRegistration {
             lastError = nil
             helperState[id] = .current
             helperVersion[id] = Self.bundledVersion
+            RemoteAnswer.setHelperVersion(Self.bundledVersion, for: id)
             let updated = before == .outdated
             // A real alert from the machine, through the whole chain, proves it works.
             let sent = await Self.output("python3 -I ~/.local/bin/bergr-notify --test 2>&1", on: session)

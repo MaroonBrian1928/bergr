@@ -28,7 +28,11 @@ final class LiveActivityController {
         guard retained == nil else { return }
         let controller = LiveActivityController(sessions: sessions)
         retained = controller
-        AnswerIntentBridge.handler = { [weak controller] request in await controller?.answer(request) }
+        AnswerIntentBridge.handler = { [weak controller] request in
+            // Through the relay when an alert for this terminal left an answerID; else over SSH.
+            if await RemoteAnswer.sendIntent(request) { return }
+            await controller?.answer(request)
+        }
         controller.start()
     }
 

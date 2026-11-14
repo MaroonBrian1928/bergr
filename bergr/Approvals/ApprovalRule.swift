@@ -287,7 +287,8 @@ nonisolated enum AutoApprovalImport {
                   let command = item["command"] as? String, let at = item["at"] as? Double else { return nil }
             return ApprovalEntry(
                 id: id, date: Date(timeIntervalSince1970: at), machine: machine, agent: item["agent"] as? String ?? "",
-                question: command, answer: "Yes", source: .rule, dangerous: false,
+                question: command, answer: item["answer"] as? String ?? "Yes",
+                source: (item["source"] as? String).flatMap(ApprovalEntry.Source.init(rawValue:)) ?? .rule, dangerous: false,
                 command: command, cwd: item["cwd"] as? String, hostID: item["machine"] as? String)
         }
     }

@@ -1,6 +1,7 @@
 import Foundation
 import HerdrKit
 import TerminalCore
+import UserNotifications
 
 /// The question on a terminal's screen and the answers to offer for it. Pure: the Live Activity
 /// content and the tap's re-check both come from here, so they agree on what "the same prompt" is.
@@ -334,17 +335,89 @@ struct AnswerFlow {
     }
 }
 
+/// Posts a sealed answer to the relay's mailbox (POST /v1/answer); true when the relay took it.
+struct RemoteAnswerSender {
+    var relay: URL
+    var secret: () -> String?
+    var key: () -> Data?
+    var post: (URLRequest) async -> Int?
+
+    func send(machine: String, answerID: String, choice: PushAlertKey.AnswerChoice) async -> Bool {
+        guard let secret = secret(), let key = key(),
+              let body = RemoteAnswer.body(machine: machine, answerID: answerID, choice: choice, key: key) else { return false }
+        var request = URLRequest(url: relay.appending(path: "v1/answer"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
+        request.httpBody = body
+        return await post(request) == 204
+    }
+
+    static var live: RemoteAnswerSender {
+        RemoteAnswerSender(
+            relay: (UserDefaults.standard.dictionary(forKey: "bergr.push.secret")?["relay"] as? String)
+                .flatMap(URL.init(string:)) ?? PushRegistration.relayURL,
+            secret: { UserDefaults.standard.dictionary(forKey: "bergr.push.secret")?["secret"] as? String },
+            key: { PushAlertKey.stored() },
+            post: { request in
+                (try? await URLSession.shared.data(for: request)).flatMap { ($0.1 as? HTTPURLResponse)?.statusCode }
+            })
+    }
+}
+
+/// Where a notification button's answer goes: through the relay to the helper when the alert has an
+/// answerID and the helper is new enough, else (or when the post fails) the old path that opens the app.
+@MainActor
+struct RemoteAnswerRoute {
+    enum Outcome: Equatable { case relayed, foreground }
+
+    var helperVersion: (UUID) -> Int?
+    var send: (_ machine: String, _ answerID: String, _ choice: PushAlertKey.AnswerChoice) async -> Bool
+    var foreground: (AnswerNotificationRequest) -> Void
+    /// Told when the relay post failed, so the user knows to open Bergr.
+    var failed: (AnswerNotificationRequest) -> Void = { _ in }
+
+    @discardableResult
+    func run(_ request: AnswerNotificationRequest) async -> Outcome {
+        guard RemoteAnswer.usesRelay(request, helperVersion: helperVersion(request.host)),
+              let id = request.answerID, let machine = request.machine,
+              let choice = RemoteAnswer.choice(question: request.question, index: request.index) else {
+            foreground(request)
+            return .foreground
+        }
+        if await send(machine, id, choice) { return .relayed }
+        failed(request)
+        foreground(request)
+        return .foreground
+    }
+
+    static let live = RemoteAnswerRoute(
+        helperVersion: { RemoteAnswer.helperVersion($0) },
+        send: { await RemoteAnswerSender.live.send(machine: $0, answerID: $1, choice: $2) },
+        foreground: { AnswerNotifications.shared.handleForeground($0) },
+        failed: { request in
+            let content = UNMutableNotificationContent()
+            content.title = "Couldn't send the answer"
+            content.body = "Open Bergr to answer."
+            content.userInfo = ["host": request.host.uuidString, "address": request.address]
+            UNUserNotificationCenter.current().add(
+                UNNotificationRequest(identifier: "bergr.answer.failed.\(request.address)", content: content, trigger: nil))
+        })
+}
+
 /// Receives the notification buttons' answers. They can arrive before the root view has set the
 /// flow up (a tap that launched the app), so they wait for it.
 @MainActor
 final class AnswerNotifications {
     static let shared = AnswerNotifications()
+    var route: RemoteAnswerRoute = .live
     private var flow: AnswerFlow?
     private var queued: [AnswerNotificationRequest] = []
     private var queuedReplies: [ReplyNotificationRequest] = []
 
     static func install() {
-        AnswerNotificationBridge.handler = { shared.handle($0) }
+        AnswerNotificationBridge.handler = { await shared.handle($0) }
         AnswerNotificationBridge.replyHandler = { shared.handleReply($0) }
     }
 
@@ -363,8 +436,52 @@ final class AnswerNotifications {
         Task { await flow.reply(request) }
     }
 
-    private func handle(_ request: AnswerNotificationRequest) {
+    private func handle(_ request: AnswerNotificationRequest) async {
+        let route = route
+        await route.run(request)
+    }
+
+    /// The old path: connect over SSH (the app is opened for it), check the screen, press.
+    func handleForeground(_ request: AnswerNotificationRequest) {
         guard let flow else { return queued.append(request) }
         Task { await flow.run(request) }
     }
 }
+
+#if os(iOS)
+/// Live Activity / Watch buttons (AnswerPromptIntent) through the relay.
+extension RemoteAnswer {
+    /// Only Yes or No (the y / n key, or a numbered choice's label starting with it); nil keeps SSH.
+    nonisolated static func intentChoice(_ request: AnswerRequest) -> PushAlertKey.AnswerChoice? {
+        switch request.key {
+        case "y": return .yes
+        case "n": return .no
+        case "": break
+        default: return nil
+        }
+        let label = request.label.lowercased()
+        if label.hasPrefix("yes") { return .yes }
+        if label.hasPrefix("no") { return .no }
+        return nil
+    }
+
+    /// The latest answerID an alert for this terminal left (10 minutes), unless the helper is known
+    /// to be older. The helper re-checks turn, question and screen, so a stale one only gets refused.
+    nonisolated static func intentAnswer(
+        _ request: AnswerRequest, helperVersion: Int?, latest: (String, String) -> String?
+    ) -> (id: String, choice: PushAlertKey.AnswerChoice)? {
+        guard let choice = intentChoice(request), helperVersion.map({ $0 >= minHelperVersion }) ?? true,
+              let id = latest(request.host, request.address) else { return nil }
+        return (id, choice)
+    }
+
+    /// Sends a Live Activity / Watch answer through the relay; false keeps the SSH path.
+    @MainActor
+    static func sendIntent(_ request: AnswerRequest, sender: RemoteAnswerSender = .live) async -> Bool {
+        let version = UUID(uuidString: request.host).flatMap { helperVersion($0) }
+        guard let (id, choice) = intentAnswer(request, helperVersion: version, latest: { latest(machine: $0, address: $1) })
+        else { return false }
+        return await sender.send(machine: request.host, answerID: id, choice: choice)
+    }
+}
+#endif

@@ -24,6 +24,20 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse
     ) async {
         let info = response.notification.request.content.userInfo
+        // An answer button: awaited here, so a background action (answered through the relay)
+        // finishes before iOS suspends the app again.
+        let answer: (AnswerNotificationRequest, (AnswerNotificationRequest) async -> Void)? = await MainActor.run {
+            guard let target = Self.target(info) ?? PushRegistration.shared.target(info),
+                  target.address != AnswerCategory.healthAddress,
+                  let request = AnswerCategory.request(
+                    actionIdentifier: response.actionIdentifier, info: info, target: target),
+                  let handler = AnswerNotificationBridge.handler else { return nil }
+            return (request, handler)
+        }
+        if let (request, handler) = answer {
+            await handler(request)
+            return
+        }
         await MainActor.run {
             // Local alerts carry Bergr's host id; pushes name the machine by hostname.
             guard let target = Self.target(info) ?? PushRegistration.shared.target(info) else { return }
@@ -35,12 +49,6 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
                 actionIdentifier: response.actionIdentifier,
                 text: (response as? UNTextInputNotificationResponse)?.userText, target: target),
                let handler = AnswerNotificationBridge.replyHandler {
-                handler(request)
-                return
-            }
-            if let request = AnswerCategory.request(
-                actionIdentifier: response.actionIdentifier, info: info, target: target),
-               let handler = AnswerNotificationBridge.handler {
                 handler(request)
                 return
             }

@@ -618,3 +618,57 @@ test("pref missing (old app) means badge on", async () => {
   await doPush(env, secret);
   assert.equal(badgeOf(calls[0]), 5);
 });
+
+// ---- Answer mailbox
+
+const AID = "0123456789abcdef0123456789abcdef";
+const answer = (secret, body, extra = {}) =>
+  req("/v1/answer", "POST", body, { authorization: `Bearer ${secret}`, ...extra });
+const take = (secret, machine = "M1") =>
+  req(`/v1/answers?machine=${encodeURIComponent(machine)}`, "GET", undefined, { authorization: `Bearer ${secret}` });
+
+test("answer mailbox: post, then the helper takes it once (delete on read)", async () => {
+  const { env } = await makeEnv();
+  const { secret } = await (await reg(env)).json();
+  assert.equal((await handle(answer(secret, { machine: "M1", id: AID, e: "AwAAAA==" }), env)).status, 204);
+  assert.deepEqual(await (await handle(take(secret, "M2"), env)).json(), { answers: [] });
+  assert.deepEqual(await (await handle(take(secret), env)).json(), { answers: [{ id: AID, e: "AwAAAA==" }] });
+  assert.deepEqual(await (await handle(take(secret), env)).json(), { answers: [] });
+  assert.equal(calls.length, 0);
+});
+
+test("answer mailbox needs the device secret", async () => {
+  const { env } = await makeEnv();
+  await reg(env);
+  assert.equal((await handle(answer("nope", { machine: "M1", id: AID, e: "AwAAAA==" }), env)).status, 401);
+  assert.equal((await handle(req("/v1/answer", "POST", { machine: "M1", id: AID, e: "AwAAAA==" }), env)).status, 401);
+  assert.equal((await handle(take("nope"), env)).status, 401);
+});
+
+test("answer mailbox rejects oversize, bad id, bad e, bad machine", async () => {
+  const { env } = await makeEnv();
+  const { secret } = await (await reg(env)).json();
+  const bad = [
+    { machine: "M1", id: AID, e: "A".repeat(1100) },
+    { machine: "M1", id: "xyz", e: "AwAAAA==" },
+    { machine: "M1", id: AID, e: "not base64!" },
+    { machine: "", id: AID, e: "AwAAAA==" },
+  ];
+  for (const b of bad) assert.equal((await handle(answer(secret, b), env)).status, 400);
+  assert.equal((await handle(answer(secret, { machine: "M1", id: AID, e: "A".repeat(2100) }), env)).status, 413);
+});
+
+test("answers expire after 10 minutes", async () => {
+  const { env } = await makeEnv();
+  const { secret } = await (await reg(env)).json();
+  const realNow = Date.now;
+  try {
+    const t0 = realNow();
+    Date.now = () => t0;
+    await handle(answer(secret, { machine: "M1", id: AID, e: "AwAAAA==" }), env);
+    Date.now = () => t0 + 10 * 60 * 1000 + 1;
+    assert.deepEqual(await (await handle(take(secret), env)).json(), { answers: [] });
+  } finally {
+    Date.now = realNow;
+  }
+});

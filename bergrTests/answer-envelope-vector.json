@@ -1,0 +1,16 @@
+{
+  "keyBytes": "0..<64 (the key is the bytes 0, 1, 2 ... 63)",
+  "nonce": "ZGVmZ2hpamtsbW5vcHFycw==",
+  "machine": "3F2504E0-4F89-11D3-9A0C-0305E82C3301",
+  "id": "00112233445566778899aabbccddeeff",
+  "cases": [
+    {
+      "choice": "yes",
+      "e": "A2RlZmdoaWprbG1ub3BxcnPwZI7bCma/imTZYTsqbI6lmmGTUEI8osEX8CBZUxsVxLbDhdHPVtCh0jra0DphkVGDFw+L7xEPSKrolZ4emsGxcjWorPvFxOsHgw8MPOZDHKXKvKIVcUOTV26jhAiB2jcGhQtaRnr34r7wly7XQ3n6BWAAuGb6r/hEllQDsYhWtBD+hoWQ6v60Tw=="
+    },
+    {
+      "choice": 1,
+      "e": "A2RlZmdoaWprbG1ub3BxcnPwZI7bCma/imTZcm5tdsirgirHQkkvoMMV8iZfVR0XxrTBi9/BWIn4iWHY0jxnl1eBFUjCqxpMB+DsmphUyY3nFj2/r4mywfYHgAcYJZFKYbvWtKcWH1fiVB278QODrEENh3lLCHWSsy24QgpdLuJcdOI+Fp37VE4LPAIGCVjG2tTaY5OQ"
+    }
+  ]
+}

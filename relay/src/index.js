@@ -113,7 +113,11 @@ const ACTIVITY_TTL_MS = 12 * 3600 * 1000;
 const ROW_MAX = 3;
 const KINDS = new Set(["claude", "codex", "antigravity", "shell"]);
 // Token buckets: capacity per hour, refilled continuously. Urgent state posts have their own.
-const BUCKETS = { push: PUSH_LIMIT_PER_HOUR, state: 720, urgent: 60 };
+const BUCKETS = { push: PUSH_LIMIT_PER_HOUR, state: 720, urgent: 60, answer: 120 };
+// Answer mailbox: answers from the phone's notification buttons, sealed with the device's alert key
+// (the relay never sees the choice), waiting for the machine's helper. Keys `a:<machine id>`.
+export const ANSWER_TTL_MS = 10 * 60 * 1000;
+const ANSWERS_PER_MACHINE = 16;
 
 const count = (v) => (Number.isInteger(v) && v >= 0 && v < 10000 ? v : 0);
 const text = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
@@ -317,6 +321,22 @@ export class Device {
         await s.put(puts);
         if (drop.length) await s.delete(drop.map((k) => "m:" + k));
         return { ok: true, mode };
+      }
+
+      case "answerPut": {
+        if (!this.take("answer", now)) return { limited: true };
+        const key = "a:" + b.machine;
+        const list = ((await s.get(key)) || []).filter((x) => now - x.at <= ANSWER_TTL_MS && x.id !== b.id);
+        list.push({ id: b.id, e: b.e, at: now });
+        await s.put(key, list.slice(-ANSWERS_PER_MACHINE));
+        return { ok: true };
+      }
+
+      case "answerTake": {
+        const key = "a:" + b.machine;
+        const list = (await s.get(key)) || [];
+        if (list.length) await s.delete(key); // delete on read
+        return { answers: list.filter((x) => now - x.at <= ANSWER_TTL_MS).map(({ id, e }) => ({ id, e })) };
       }
 
       case "clearActivity":
@@ -664,6 +684,44 @@ async function activityState(request, env) {
   return err(502, reason);
 }
 
+// ---- Answer mailbox: POST /v1/answer from the phone, GET /v1/answers?machine= from the helper.
+// Both use the device's bearer secret (the helper holds the same one). Only an opaque envelope is kept.
+
+const ANSWER_MAX = 2048;
+const ANSWER_ID_RE = /^[0-9a-f]{32}$/;
+const ANSWER_E_MAX = 1024;
+
+function machineId(v) {
+  return typeof v === "string" && v.length > 0 && v.length <= 100 ? v : null;
+}
+
+async function answerPut(request, env) {
+  const declared = parseInt(request.headers.get("content-length") || "0", 10);
+  if (declared > ANSWER_MAX) return err(413, "body too large");
+  if (!bearer(request)) return err(401, "unauthorized");
+  const body = await readJson(request, ANSWER_MAX);
+  if (body instanceof Response) return body;
+  const machine = machineId(body.machine);
+  if (!machine) return err(400, "invalid machine");
+  if (typeof body.id !== "string" || !ANSWER_ID_RE.test(body.id)) return err(400, "invalid id");
+  if (typeof body.e !== "string" || !body.e || body.e.length > ANSWER_E_MAX || !E_RE.test(body.e)) {
+    return err(400, "invalid e");
+  }
+  const a = await authed(request, env, { op: "answerPut", machine, id: body.id, e: body.e });
+  if (!a.out) return err(401, "unauthorized");
+  if (a.out.limited) return err(429, "rate limited");
+  return json(204);
+}
+
+async function answerTake(request, env) {
+  if (!bearer(request)) return err(401, "unauthorized");
+  const machine = machineId(new URL(request.url).searchParams.get("machine"));
+  if (!machine) return err(400, "invalid machine");
+  const a = await authed(request, env, { op: "answerTake", machine });
+  if (!a.out) return err(401, "unauthorized");
+  return json(200, { answers: a.out.answers || [] });
+}
+
 // ---- Pairing mailbox: the phone leaves its public key (encrypted to the Mac) under a one-time
 // token from the Mac's QR code; the Mac fetches it once. Only a hash of the token is stored, and
 // the token is never logged. One message per token, gone after 5 minutes or the first read.
@@ -717,6 +775,8 @@ export async function handle(request, env) {
     if (pathname === "/v1/activity" && m === "POST") return await activityRegister(request, env);
     if (pathname === "/v1/activity" && m === "DELETE") return await activityUnregister(request, env);
     if (pathname === "/v1/activity/state" && m === "POST") return await activityState(request, env);
+    if (pathname === "/v1/answer" && m === "POST") return await answerPut(request, env);
+    if (pathname === "/v1/answers" && m === "GET") return await answerTake(request, env);
     if (pathname.startsWith("/pair/")) {
       const token = pathname.slice(6);
       if (!PAIR_TOKEN_RE.test(token)) return err(404, "not found");
