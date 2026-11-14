@@ -2,7 +2,7 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
-/// A "+" button: Photo Library or Paste Image.
+/// A "+" button: Photo Library, Take Photo, Scan Document or Paste Image.
 struct AttachButton: View {
     @Binding var attachments: [ChatAttachment]
     let palette: ChatPalette
@@ -10,6 +10,8 @@ struct AttachButton: View {
 
     @State private var picking = false
     @State private var picked: [PhotosPickerItem] = []
+    @State private var shooting = false
+    @State private var scanning = false
 
     init(attachments: Binding<[ChatAttachment]>, palette: ChatPalette, enabled: Bool) {
         _attachments = attachments
@@ -23,6 +25,14 @@ struct AttachButton: View {
         Menu {
             Button { picking = true } label: { Label("Photo Library", systemImage: "photo.on.rectangle") }
                 .disabled(room <= 0)
+            if CameraAvailability.canTakePhoto {
+                Button { shooting = true } label: { Label("Take Photo", systemImage: "camera") }
+                    .disabled(room <= 0)
+            }
+            if CameraAvailability.canScan {
+                Button { scanning = true } label: { Label("Scan Document", systemImage: "doc.viewfinder") }
+                    .disabled(room <= 0)
+            }
             Button(action: paste) { Label("Paste Image", systemImage: "doc.on.clipboard") }
                 .disabled(room <= 0 || !UIPasteboard.general.hasImages)
         } label: {
@@ -37,11 +47,29 @@ struct AttachButton: View {
         .disabled(!enabled)
         .accessibilityLabel("Attach image")
         .photosPicker(isPresented: $picking, selection: $picked, maxSelectionCount: max(1, room), matching: .images)
+        .fullScreenCover(isPresented: $shooting) {
+            CameraPicker(
+                onImage: { image in shooting = false; add([image]) },
+                onCancel: { shooting = false }
+            )
+            .ignoresSafeArea()
+        }
+        .fullScreenCover(isPresented: $scanning) {
+            DocumentScanner(
+                onScan: { images in scanning = false; add(images) },
+                onCancel: { scanning = false }
+            )
+            .ignoresSafeArea()
+        }
         .onChange(of: picked) { _, items in
             guard !items.isEmpty else { return }
             picked = []
             Task { await load(items) }
         }
+    }
+
+    private func add(_ images: [UIImage]) {
+        attachments.append(contentsOf: ChatAttachment.make(fromCaptured: images, existing: attachments.count))
     }
 
     private func paste() {
