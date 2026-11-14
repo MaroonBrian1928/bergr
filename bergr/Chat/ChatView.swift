@@ -707,6 +707,7 @@ struct ChatView: View {
         VStack(spacing: 8) {
             CommandSuggestions(commands: feed.commands, draft: $draft, palette: palette)
                 .padding(.horizontal, 12)
+            CompactChip(draft: $draft, palette: palette, fraction: feed.usage?.fraction, state: state, agent: agent)
             if agent == .claude, let newer = feed.newerAgent, newer != dismissedUpdate {
                 UpdateBanner(running: feed.agentVersion, installed: newer, needs: feed.modelsNeedingUpdate, palette: palette,
                              canUpdate: canType && state != "working") {

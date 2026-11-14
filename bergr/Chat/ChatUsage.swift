@@ -35,6 +35,22 @@ extension ChatFeed.Usage {
     }
 }
 
+/// When a nearly full context is worth a warning: at 90% and above, re-armed once it falls below
+/// 70% (after a compaction). The chat's `/compact` chip and the notification share these numbers.
+enum ContextWarning {
+    static let threshold = 0.9
+    static let rearm = 0.7
+
+    /// The agents with a `/compact` command (Claude Code, Codex).
+    static func supportsCompact(_ agent: ChatAgent) -> Bool { agent == .claude || agent == .codex }
+
+    /// The chip shows at the threshold, while the agent isn't working or waiting on an answer.
+    static func suggestsCompact(fraction: Double?, state: String?, agent: ChatAgent) -> Bool {
+        guard let fraction, fraction >= threshold, supportsCompact(agent) else { return false }
+        return state != "working" && state != "blocked"
+    }
+}
+
 /// How full the context is, as a small ring for the title bar.
 struct UsageRing: View {
     let fraction: Double

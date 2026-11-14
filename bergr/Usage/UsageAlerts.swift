@@ -100,6 +100,49 @@ final class UsageAlertTracker {
     }
 }
 
+/// A context window that crossed 90%: the notification's text and where it came from.
+struct ContextAlert: Equatable {
+    /// The reading's id, "<host id>/<terminal address>".
+    let id: String
+    let body: String
+}
+
+/// Alerts once per crossing of 90% context for each agent session, re-armed below 70%
+/// (after a compaction). Held in memory: a relaunch at a high context alerts again once.
+@MainActor
+final class ContextAlertTracker {
+    private var armed: [String: Bool] = [:]
+
+    func alerts(for readings: [UsageReading]) -> [ContextAlert] {
+        var alerts: [ContextAlert] = []
+        var seen = Set<String>()
+        for reading in readings {
+            seen.insert(reading.id)
+            guard let fraction = reading.usage?.fraction else { continue }
+            let isArmed = armed[reading.id] ?? true
+            if fraction >= ContextWarning.threshold {
+                guard isArmed else { continue }
+                armed[reading.id] = false
+                alerts.append(ContextAlert(id: reading.id, body: Self.body(reading: reading, fraction: fraction)))
+            } else if fraction < ContextWarning.rearm {
+                armed[reading.id] = true
+            }
+        }
+        armed = armed.filter { seen.contains($0.key) }
+        return alerts
+    }
+
+    static func body(reading: UsageReading, fraction: Double) -> String {
+        "\(reading.agent.displayName) on \(reading.machine) is at \(Int((fraction * 100).rounded()))% context"
+    }
+
+    /// The host and terminal address out of a reading id.
+    static func parts(of id: String) -> (host: UUID, address: String)? {
+        guard let slash = id.firstIndex(of: "/"), let host = UUID(uuidString: String(id[..<slash])) else { return nil }
+        return (host, String(id[id.index(after: slash)...]))
+    }
+}
+
 /// Posts the alerts as local notifications, when Settings → Notifications is on.
 @MainActor
 enum UsageNotifications {
@@ -116,16 +159,44 @@ enum UsageNotifications {
     }
 }
 
+extension UsageNotifications {
+    /// A context warning is an "Errors"-kind notification: the same switch, muted agents and quiet hours.
+    static func post(_ alerts: [ContextAlert]) {
+        guard UserDefaults.standard.bool(forKey: Delivery.notificationsKey) else { return }
+        let prefs = NotificationPrefs.load()
+        for alert in alerts {
+            guard let (host, address) = ContextAlertTracker.parts(of: alert.id),
+                  prefs.allows(kind: .error, host: host, address: address,
+                               minute: NotificationPrefs.minute(of: Date())) else { continue }
+            let content = UNMutableNotificationContent()
+            content.title = "Context"
+            content.body = alert.body
+            content.sound = .default
+            content.threadIdentifier = host.uuidString
+            content.userInfo = ["host": host.uuidString, "address": address]
+            UNUserNotificationCenter.current().add(
+                UNNotificationRequest(identifier: "context-\(alert.id)-\(Int(Date().timeIntervalSince1970))",
+                                      content: content, trigger: nil))
+        }
+    }
+}
+
 /// Watches the readings and posts a notification when a plan window crosses the threshold.
 /// Attach it once at the app's root, so the alerts come whichever screen is open.
 struct UsageAlertsModifier: ViewModifier {
     let readings: [UsageReading]
     @State private var tracker = UsageAlertTracker()
+    @State private var contextTracker = ContextAlertTracker()
 
     func body(content: Content) -> some View {
         content
-            .onAppear { UsageNotifications.post(tracker.alerts(for: readings)) }
-            .onChange(of: readings) { _, new in UsageNotifications.post(tracker.alerts(for: new)) }
+            .onAppear { check(readings) }
+            .onChange(of: readings) { _, new in check(new) }
+    }
+
+    private func check(_ readings: [UsageReading]) {
+        UsageNotifications.post(tracker.alerts(for: readings))
+        UsageNotifications.post(contextTracker.alerts(for: readings))
     }
 }
 

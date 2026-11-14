@@ -42,6 +42,36 @@ enum CommandMatcher {
     }
 }
 
+/// A `/compact` chip above the reply bar when the context is nearly full and the agent is idle.
+/// Tapping it fills the draft, like the command cards.
+struct CompactChip: View {
+    let draft: Binding<String>
+    let palette: ChatPalette
+    let fraction: Double?
+    let state: String?
+    let agent: ChatAgent
+
+    var body: some View {
+        if ContextWarning.suggestsCompact(fraction: fraction, state: state, agent: agent) {
+            Button {
+                draft.wrappedValue = "/compact"
+            } label: {
+                Label("/compact · context \(Int(((fraction ?? 0) * 100).rounded()))% full",
+                      systemImage: "arrow.down.right.and.arrow.up.left")
+                    .font(.footnote.weight(.medium).monospaced())
+                    .foregroundStyle(palette.text)
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 34)
+                    .glassEffect(.regular, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(.horizontal, 12)
+            .accessibilityHint("Fills in /compact to free up context")
+        }
+    }
+}
+
 /// A card of matching commands above the reply bar. Tapping one fills the draft in.
 struct CommandSuggestions: View {
     let commands: [ChatFeed.Command]
