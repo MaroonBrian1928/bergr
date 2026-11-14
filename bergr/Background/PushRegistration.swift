@@ -32,6 +32,13 @@ final class PushRegistration {
     func alertsChanged() {
         if alerts != Delivery.notifications { alerts = Delivery.notifications }
         if prefs != NotificationPrefs.load() { prefs = NotificationPrefs.load() }
+        focusChanged()
+    }
+    /// The Focus profile that is on now (Settings > Focus > Focus Filters > Bergr); the helpers get
+    /// the prefs with it applied.
+    private(set) var focus = FocusProfile.active()
+    func focusChanged() {
+        if focus != FocusProfile.active() { focus = FocusProfile.active() }
     }
     /// Kinds, muted agents and quiet hours, sent to each machine. Mirrors `Delivery.prefs`.
     private(set) var prefs = NotificationPrefs.load()
@@ -214,7 +221,8 @@ final class PushRegistration {
 
     private func observe() {
         let current = withObservationTracking {
-            (enabled, deviceToken, alerts, prefs, ApprovalRuleStore.shared.rules, (sessions?.ids ?? []).compactMap { id in
+            _ = focus
+            return (enabled, deviceToken, alerts, prefs, ApprovalRuleStore.shared.rules, (sessions?.ids ?? []).compactMap { id in
                 sessions?.existing(id).map { ($0, $0.state == .connected && $0.canRunCommands) }
             })
         } onChange: { [weak self] in
@@ -224,8 +232,10 @@ final class PushRegistration {
         let alerts = current.2
         let prefs = current.3
         let rules = current.4
+        let focus = self.focus
         for (session, ready) in current.5 where ready {
             let id = session.host.id
+            let prefs = prefs.effective(host: id, focus: focus)
             let identity = ObjectIdentifier(session)
             let state = "\(token)|\(current.0)|\(alerts)|\(TimeZone.current.identifier)|\(prefs.fingerprint(host: id))|\(Self.rulesFingerprint(rules, host: id))"
             if let last = written[id], last.session == identity, last.state == state { continue }

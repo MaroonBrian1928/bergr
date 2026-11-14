@@ -76,9 +76,24 @@ struct NotificationPrefs: Codable, Equatable, Sendable {
     }
 
     /// The one rule for local and remote: the kind's switch, the agent's mute, then quiet hours.
-    nonisolated func allows(kind: AgentNotifier.Kind, host: UUID, address: String, minute: Int) -> Bool {
-        guard kindOn(kind), !isMuted(host: host, address: address) else { return false }
-        return kind == .needsYou || !isQuiet(minute: minute)
+    /// An active Focus profile narrows it further (see `effective`).
+    nonisolated func allows(kind: AgentNotifier.Kind, host: UUID, address: String, minute: Int,
+                            focus: FocusProfile? = FocusProfile.active()) -> Bool {
+        let p = effective(host: host, focus: focus)
+        guard p.kindOn(kind), !p.isMuted(host: host, address: address) else { return false }
+        return kind == .needsYou || !p.isQuiet(minute: minute)
+    }
+
+    /// These prefs with a Focus profile on top, for one machine: a kind is on only when both allow
+    /// it, and a machine the Focus leaves out has every kind off. No profile changes nothing.
+    nonisolated func effective(host: UUID?, focus: FocusProfile?) -> NotificationPrefs {
+        guard let focus else { return self }
+        var next = self
+        let included = host.map(focus.includes(machine:)) ?? true
+        next.needsYou = needsYou && focus.needsYou && included
+        next.finished = finished && focus.finished && included
+        next.errors = errors && focus.errors && included
+        return next
     }
 
     /// A stable string of what one machine is sent, to notice when it must be sent again.
@@ -102,5 +117,42 @@ struct NotificationPrefs: Codable, Equatable, Sendable {
         ]
         if quietEnabled { object["quiet"] = ["start": quietStart, "end": quietEnd] }
         return object
+    }
+}
+
+/// What a Focus mode's "Bergr" filter asks for while that Focus is on: which machines may alert
+/// (nil: all) and which kinds get through. It narrows the normal prefs, never widens them.
+struct FocusProfile: Codable, Equatable, Sendable {
+    var machines: [UUID]?
+    var needsYou: Bool
+    var finished: Bool
+    var errors: Bool
+
+    nonisolated init(machines: [UUID]? = nil, needsYou: Bool = true, finished: Bool = true, errors: Bool = true) {
+        self.machines = machines
+        self.needsYou = needsYou
+        self.finished = finished
+        self.errors = errors
+    }
+
+    nonisolated func includes(machine: UUID) -> Bool { machines?.contains(machine) ?? true }
+
+    /// Everything allowed on every machine: the same as no Focus at all.
+    nonisolated var isNeutral: Bool { machines == nil && needsYou && finished && errors }
+
+    static let storageKey = "bergr.focus.profile"
+
+    /// The profile of the Focus that is on now, if any.
+    nonisolated static func active(_ defaults: UserDefaults = .standard) -> FocusProfile? {
+        defaults.data(forKey: storageKey).flatMap { try? JSONDecoder().decode(FocusProfile.self, from: $0) }
+    }
+
+    /// Sets the active profile; nil (or a profile that changes nothing) clears it.
+    nonisolated static func setActive(_ profile: FocusProfile?, _ defaults: UserDefaults = .standard) {
+        if let profile, !profile.isNeutral {
+            defaults.set(try? JSONEncoder().encode(profile), forKey: storageKey)
+        } else {
+            defaults.removeObject(forKey: storageKey)
+        }
     }
 }
