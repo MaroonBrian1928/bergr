@@ -11,7 +11,7 @@ struct PairingTests {
     private let hostList = [PairingHost(name: "Box", host: "box.lan", port: 22, user: "me")]
     // A real ed25519 public key line.
     private var keyLine: String {
-        OpenSSH.authorizedKeysLine(Curve25519.Signing.PrivateKey().publicKey, comment: "Brian's iPhone")
+        OpenSSH.authorizedKeysLine(Curve25519.Signing.PrivateKey().publicKey, comment: "Alex's iPhone")
     }
 
     // MARK: payload
@@ -86,7 +86,7 @@ struct PairingTests {
 
     @Test func pairedKeyChecksAndCleansTheLine() throws {
         let key = try #require(PairedKey(keyLine))
-        #expect(key.comment == "Brians iPhone")
+        #expect(key.comment == "Alexs iPhone")
         #expect(!key.line.contains("'"))
         #expect(key.fingerprint.hasPrefix("SHA256:"))
         #expect(PairedKey("ssh-ed25519 not-base64") == nil)

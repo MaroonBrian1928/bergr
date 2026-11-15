@@ -35,7 +35,7 @@ import Testing
 }
 
 @Test func promptHeuristic() {
-    #expect(PromptDetector.looksLikePrompt("brian@mac:~/src$ ls"))
+    #expect(PromptDetector.looksLikePrompt("user@mac:~/src$ ls"))
     #expect(PromptDetector.looksLikePrompt("~/src/bergr % git status"))
     #expect(PromptDetector.looksLikePrompt("bergr ❯ "))
     #expect(PromptDetector.looksLikePrompt("❯"))
