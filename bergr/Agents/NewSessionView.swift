@@ -116,6 +116,9 @@ struct NewSessionView: View {
     @State private var error: String?
     @State private var recent: [RecentSession] = []
     @State private var loadingRecent = false
+    @State private var isRepo = false
+    @State private var useWorktree = false
+    @State private var branch = ""
 
     /// Machines a session can start on: connected, and real (the demo can't run agents).
     private var machines: [Host] {
@@ -151,6 +154,7 @@ struct NewSessionView: View {
                     if let session {
                         folderSection(session)
                     }
+                    if isRepo, agent != nil { worktreeSection }
                     RecentSessionsSection(sessions: recent, loading: loadingRecent) { s in
                         Task { await start(resuming: s) }
                     }
@@ -200,6 +204,7 @@ struct NewSessionView: View {
                 }
             }
             .task(id: hostID) { await locate() }
+            .task(id: RecentKey(host: hostID, agent: nil, folder: folder, ready: agents != nil)) { await checkRepo() }
             .task(id: RecentKey(host: hostID, agent: agent, folder: folder, ready: agents != nil)) { await loadRecent() }
         }
         #if os(macOS)
@@ -273,6 +278,68 @@ struct NewSessionView: View {
         }
     }
 
+    /// The branch to create: what was typed, sanitized, else the default.
+    private var effectiveBranch: String {
+        let typed = Worktrees.sanitizeBranch(branch)
+        if !typed.isEmpty { return typed }
+        return Worktrees.defaultBranch(agent: agent ?? .claude, date: .now)
+    }
+
+    @ViewBuilder
+    private var worktreeSection: some View {
+        Section {
+            Toggle("Start in a new worktree", isOn: $useWorktree)
+            if useWorktree {
+                TextField("Branch", text: $branch, prompt: Text(Worktrees.defaultBranch(agent: agent ?? .claude, date: .now)))
+                    .font(.body.monospaced())
+                    .noAutocapitalization()
+                    .autocorrectionDisabled()
+            }
+        } footer: {
+            Text(useWorktree
+                 ? "Creates the branch in a folder next to this one, so agents don't step on each other."
+                 : "This folder is a git repository.")
+        }
+    }
+
+    /// Whether the chosen folder is a git repo, asked once typing pauses.
+    private func checkRepo() async {
+        isRepo = false
+        guard let session else { return }
+        try? await Task.sleep(for: .milliseconds(400))
+        guard !Task.isCancelled, let cwd = resolvedFolder(session) else { return }
+        let out = try? await session.commandOutput(
+            Worktrees.branchCommand(cwd: cwd, windows: session.isWindowsHost), timeout: .seconds(8))
+        if !Task.isCancelled { isRepo = out.flatMap(Worktrees.parseBranchInfo) != nil }
+    }
+
+    /// Creates the worktree beside the repo root and returns the root, the worktree and the folder to
+    /// start in (the chosen subfolder's twin, else the worktree root); throws with git's message on failure.
+    private func createWorktree(session: HostSession, folder: String) async throws -> (root: String, path: String, start: String) {
+        let win = session.isWindowsHost
+        let name = effectiveBranch
+        let top = try? await session.commandOutput(Worktrees.toplevelCommand(cwd: folder, windows: win), timeout: .seconds(8))
+        let root = top.flatMap { Worktrees.parseToplevel($0, windows: win) } ?? folder
+        let relative = Worktrees.relativePath(folder: folder, root: root) ?? ""
+        let base = Worktrees.basePath(folder: root, branch: name, windows: win)
+        let out = try await session.commandOutput(
+            Worktrees.existsCommand(paths: Worktrees.candidates(base: base), windows: win))
+        let existing = Set(out.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) })
+        let path = Worktrees.choosePath(base: base, existing: existing)
+        let result = try await session.commandOutput(
+            Worktrees.addCommand(folder: root, branch: name, path: path, windows: win), timeout: .seconds(60))
+        guard Worktrees.succeeded(result) else {
+            throw AgentLifecycle.LifecycleError("Couldn't create the worktree: " + Worktrees.failureText(result))
+        }
+        var start = path
+        if !relative.isEmpty {
+            let sub = Worktrees.startFolder(worktree: path, relative: relative, windows: win)
+            let found = try? await session.commandOutput(Worktrees.existsCommand(paths: [sub], windows: win))
+            if found?.contains(where: { !$0.isWhitespace }) == true { start = sub }
+        }
+        return (root, path, start)
+    }
+
     private struct RecentKey: Equatable {
         let host: Host.ID?, agent: ChatAgent?, folder: String, ready: Bool
     }
@@ -331,9 +398,21 @@ struct NewSessionView: View {
         }
         // Shown in herdr-app as a space of its own, like a terminal started there; nothing has
         // finished yet, so it starts read.
+        var record: WorktreeRecord?
+        if useWorktree, isRepo, resumed == nil, let repoFolder = request.cwd {
+            do {
+                let made = try await createWorktree(session: session, folder: repoFolder)
+                record = WorktreeRecord(repo: made.root, path: made.path, windows: session.isWindowsHost)
+                request.cwd = made.start
+            } catch {
+                self.error = error.localizedDescription
+                return
+            }
+        }
         request.labels = [Terminal.seenLabel: "0", HerdrAppLayout.spaceLabel: HerdrAppLayout.newSpaceID()]
         do {
             let terminal = try await session.run(request)
+            if let record { WorktreeRegistry.set(record, host: hostID, address: terminal.address) }
             dismiss()
             onStarted(hostID, terminal.address)
         } catch {

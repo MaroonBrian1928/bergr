@@ -79,7 +79,7 @@ final class AgentLifecycle {
     var error: String?
 
     /// Interrupts the agent (Esc), then kills its terminal.
-    func end(session: HostSession, terminal: Terminal, interrupt: (() -> Void)?) {
+    func end(session: HostSession, terminal: Terminal, interrupt: (() -> Void)?, removeWorktree: WorktreeRecord? = nil) {
         confirming = nil
         Task {
             do {
@@ -88,6 +88,18 @@ final class AgentLifecycle {
                     try await Task.sleep(for: .milliseconds(400))
                 }
                 try await session.kill(terminal.address)
+                if let removeWorktree {
+                    // Without --force: git refuses when there are changes, and the worktree stays.
+                    let out = try await session.commandOutput(
+                        Worktrees.removeCommand(repo: removeWorktree.repo, path: removeWorktree.path, windows: removeWorktree.windows),
+                        timeout: .seconds(60))
+                    if Worktrees.succeeded(out) {
+                        WorktreeRegistry.set(nil, host: session.host.id, address: terminal.address)
+                    } else {
+                        throw LifecycleError("The session ended, but the worktree was kept because it has changes or couldn't be removed: "
+                                             + Worktrees.failureText(out))
+                    }
+                }
             } catch {
                 self.error = error.localizedDescription
             }
@@ -135,9 +147,10 @@ final class AgentLifecycle {
 extension View {
     /// The confirmation and error dialogs for `AgentLifecycle`.
     func agentLifecycleDialogs(
-        _ lifecycle: AgentLifecycle, name: String, end: @escaping () -> Void, restart: @escaping () -> Void
+        _ lifecycle: AgentLifecycle, name: String, end: @escaping () -> Void,
+        endRemovingWorktree: (() -> Void)? = nil, restart: @escaping () -> Void
     ) -> some View {
-        modifier(LifecycleDialogs(lifecycle: lifecycle, name: name, end: end, restart: restart))
+        modifier(LifecycleDialogs(lifecycle: lifecycle, name: name, end: end, endRemoving: endRemovingWorktree, restart: restart))
     }
 }
 
@@ -145,6 +158,8 @@ private struct LifecycleDialogs: ViewModifier {
     @Bindable var lifecycle: AgentLifecycle
     let name: String
     let end: () -> Void
+    /// Offered for an agent in a worktree Bergr made; never the default.
+    let endRemoving: (() -> Void)?
     let restart: () -> Void
 
     func body(content: Content) -> some View {
@@ -158,6 +173,9 @@ private struct LifecycleDialogs: ViewModifier {
                     Button("Restart", role: .destructive, action: restart)
                 } else {
                     Button("End Session", role: .destructive, action: end)
+                    if let endRemoving {
+                        Button("End and remove the worktree", role: .destructive, action: endRemoving)
+                    }
                 }
                 Button("Cancel", role: .cancel) { lifecycle.confirming = nil }
             } message: {

@@ -10,6 +10,8 @@ struct AgentRow: View {
     var machine: String?
     /// A reply that wasn't delivered is waiting in its draft.
     var unsent = false
+    /// The git branch of its folder, when that is a repo.
+    var branch: Worktrees.BranchInfo?
     @Environment(\.dynamicTypeSize) private var typeSize
     /// At the largest text sizes a title wraps instead of being cut to a few letters.
     private var lines: Int { typeSize.isAccessibilitySize ? 3 : 1 }
@@ -44,6 +46,12 @@ struct AgentRow: View {
                             Text(info).font(.footnote).foregroundStyle(.secondary).lineLimit(lines)
                         }
                     }
+                }
+                if let branch {
+                    Label(Worktrees.rowText(branch), systemImage: branch.isLinkedWorktree ? "square.on.square" : "arrow.triangle.branch")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 if unsent {
                     Label("Unsent reply", systemImage: "exclamationmark.circle")
@@ -88,7 +96,7 @@ struct AgentRow: View {
                 Text(AgentsOrdering.title(terminal))
                     .font(.body.weight(state == .needsYou ? .semibold : .regular))
                     .lineLimit(1)
-                Text([machine, AgentsOrdering.info(terminal),
+                Text([machine, AgentsOrdering.info(terminal), branch.map(Worktrees.rowText),
                       subagents > 0 ? "\(subagents) sub-agents running" : nil,
                       unsent ? "Unsent reply" : nil]
                     .compactMap { $0 }.joined(separator: " · "))

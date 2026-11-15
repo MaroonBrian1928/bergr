@@ -519,9 +519,27 @@ private struct SubagentRow: View {
         .buttonBorderShape(.capsule)
     }
 
+    private var cwd: String { terminal.foreground?.cwd ?? terminal.cwd }
+    private var worktree: WorktreeRecord? {
+        canManage ? WorktreeRegistry.record(host: session.host.id, address: terminal.address) : nil
+    }
+
     private var rowContent: some View {
         AgentRow(terminal: terminal, subagents: session.runningSubagents(address: terminal.address), machine: machine,
-                 unsent: ReplyDrafts.hasUnsent(for: "\(session.host.id.uuidString)|\(terminal.address)"))
+                 unsent: ReplyDrafts.hasUnsent(for: "\(session.host.id.uuidString)|\(terminal.address)"),
+                 branch: terminal.isLive && terminal.isAgent ? BranchInfoStore.shared.info(host: session.host.id, cwd: cwd) : nil)
+            // At most one ask per folder a minute (the store skips fresh answers); a turn ending forces one.
+            .task(id: cwd) {
+                guard terminal.isLive, terminal.isAgent else { return }
+                while !Task.isCancelled {
+                    await BranchInfoStore.shared.refresh(session: session, cwd: cwd)
+                    try? await Task.sleep(for: .seconds(BranchInfoStore.maxAge))
+                }
+            }
+            .onChange(of: terminal.agentState) { old, new in
+                guard old == .working, new != .working, terminal.isLive, terminal.isAgent else { return }
+                Task { await BranchInfoStore.shared.refresh(session: session, cwd: cwd, force: true) }
+            }
             .contextMenu {
                 if terminal.isLive, terminal.isAgent, !terminal.address.contains("/") {
                     if let agent = ChatAgent.detect(terminal), agent != .antigravity {
@@ -532,6 +550,8 @@ private struct SubagentRow: View {
             }
             .agentLifecycleDialogs(lifecycle, name: AgentsOrdering.title(terminal), end: {
                 lifecycle.end(session: session, terminal: terminal, interrupt: nil)
+            }, endRemovingWorktree: worktree == nil ? nil : {
+                lifecycle.end(session: session, terminal: terminal, interrupt: nil, removeWorktree: worktree)
             }, restart: {
                 if let agent = ChatAgent.detect(terminal) {
                     lifecycle.restart(session: session, terminal: terminal, agent: agent, conversationID: nil)
