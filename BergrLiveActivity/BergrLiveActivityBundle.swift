@@ -6,6 +6,7 @@ struct BergrLiveActivityBundle: WidgetBundle {
     var body: some Widget {
         AgentsLiveActivity()
         AgentsWidget()
+        UsageWidget()
         NeedsYouControl()
     }
 }

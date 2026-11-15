@@ -1,9 +1,17 @@
+import Charts
 import SwiftUI
 
 /// Context and plan usage of every running agent, across machines, grouped by account.
 struct UsageScreen: View {
     @Environment(HostStore.self) private var hosts
     let sessions: SessionStore?
+    @State private var range = HistoryRange.day
+
+    enum HistoryRange: String, CaseIterable, Identifiable {
+        case day = "24 hours", week = "7 days"
+        var id: String { rawValue }
+        var seconds: TimeInterval { self == .day ? 24 * 3600 : 7 * 24 * 3600 }
+    }
 
     var body: some View {
         let readings = UsageReadings.readings(hosts: hosts.hosts, sessions: sessions)
@@ -15,10 +23,19 @@ struct UsageScreen: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            if accounts.contains(where: { $0.session != nil || $0.weekly != nil }) {
+                Section {
+                    Picker("History", selection: $range) {
+                        ForEach(HistoryRange.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+            }
             ForEach(accounts) { account in
                 Section {
-                    if let session = account.session { meter("Current session", session) }
-                    if let weekly = account.weekly { meter("Weekly", weekly) }
+                    if let session = account.session { meter("Current session", session, kind: "session", account: account) }
+                    if let weekly = account.weekly { meter("Weekly", weekly, kind: "weekly", account: account) }
                     ForEach(account.readings) { reading in
                         readingRow(reading)
                     }
@@ -65,7 +82,12 @@ struct UsageScreen: View {
         .padding(.vertical, 2)
     }
 
-    private func meter(_ title: String, _ window: ChatFeed.Usage.Window) -> some View {
+    private func meter(_ title: String, _ window: ChatFeed.Usage.Window, kind: String, account: UsageAccount) -> some View {
+        let key = account.readings.first.map { UsageHistory.key(machine: $0.machine, agent: $0.agent.rawValue, kind: kind) }
+        return meter(title, window, key: key)
+    }
+
+    private func meter(_ title: String, _ window: ChatFeed.Usage.Window, key: String?) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(title)
@@ -78,7 +100,43 @@ struct UsageScreen: View {
                 Text("Resets \(resets.formatted(.dateTime.weekday(.abbreviated).hour().minute()))")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            if let key {
+                if let forecast = UsageHistory.shared.forecast(key: key, window: window).sentence() {
+                    Text(forecast).font(.footnote).foregroundStyle(.secondary)
+                }
+                UsageHistoryChart(
+                    entries: UsageHistory.shared.entries(key: key, since: Date.now.addingTimeInterval(-range.seconds)),
+                    range: range.seconds)
+            }
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// A plan window's readings over the chosen range: percent used against time.
+private struct UsageHistoryChart: View {
+    let entries: [UsageHistory.Entry]
+    let range: TimeInterval
+
+    var body: some View {
+        if entries.count < 2 {
+            Text("Not enough history yet").font(.footnote).foregroundStyle(.tertiary)
+        } else {
+            Chart(entries, id: \.time) { entry in
+                LineMark(x: .value("Time", entry.time), y: .value("Used", entry.percent))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(.tint)
+            }
+            .chartXScale(domain: Date.now.addingTimeInterval(-range)...Date.now)
+            .chartYScale(domain: 0...100)
+            .chartYAxis {
+                AxisMarks(values: [0, 50, 100]) { value in
+                    AxisGridLine()
+                    AxisValueLabel { if let v = value.as(Int.self) { Text("\(v)%") } }
+                }
+            }
+            .frame(height: 100)
+            .accessibilityLabel("Usage history")
+        }
     }
 }

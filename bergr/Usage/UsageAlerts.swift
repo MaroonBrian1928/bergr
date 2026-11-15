@@ -1,6 +1,9 @@
 import Foundation
 import SwiftUI
 import UserNotifications
+#if os(iOS)
+import WidgetKit
+#endif
 
 /// A plan window that reached the threshold: the notification's text and its identity.
 struct UsageAlert: Equatable {
@@ -18,11 +21,13 @@ final class UsageAlertTracker {
     static let storageKey = "usageAlerts.windows.v2"
 
     private let defaults: UserDefaults?
+    private let history: UsageHistory?
     private var fired: [String: Double]
     private var latest: [String: Double]
 
-    init(defaults: UserDefaults? = .standard) {
+    init(defaults: UserDefaults? = .standard, history: UsageHistory? = nil) {
         self.defaults = defaults
+        self.history = history
         fired = defaults?.dictionary(forKey: Self.storageKey) as? [String: Double] ?? [:]
         latest = defaults?.dictionary(forKey: Self.storageKey + ".latest") as? [String: Double] ?? [:]
     }
@@ -84,18 +89,26 @@ final class UsageAlertTracker {
             if let observed = candidate.observed { latest[key] = observed }
             guard candidate.window.percent >= Self.threshold, fired[key] == nil else { continue }
             fired[key] = candidate.window.resetsAt!.timeIntervalSince1970
-            alerts.append(UsageAlert(key: key, body: Self.body(reading: candidate.reading, kind: candidate.kind, window: candidate.window)))
+            let suffix = history.flatMap { history -> String? in
+                let historyKey = UsageHistory.key(machine: candidate.reading.machine,
+                                                  agent: candidate.reading.agent.rawValue, kind: candidate.kind)
+                return history.forecast(key: historyKey, window: candidate.window, now: now).alertSuffix(now: now)
+            }
+            alerts.append(UsageAlert(key: key, body: Self.body(reading: candidate.reading, kind: candidate.kind,
+                                                               window: candidate.window, forecast: suffix)))
         }
         if oldFired != fired { defaults?.set(fired, forKey: Self.storageKey) }
         if oldLatest != latest { defaults?.set(latest, forKey: Self.storageKey + ".latest") }
         return alerts
     }
 
-    static func body(reading: UsageReading, kind: String, window: ChatFeed.Usage.Window) -> String {
+    static func body(reading: UsageReading, kind: String, window: ChatFeed.Usage.Window,
+                     forecast: String? = nil) -> String {
         var text = "\(reading.agent.displayName) on \(reading.machine): \(kind) limit at \(Int(window.percent.rounded()))%"
         if let resets = window.resetsAt {
             text += ", resets \(resets.formatted(.dateTime.weekday(.abbreviated).hour().minute()))"
         }
+        if let forecast { text += ", \(forecast)" }
         return text
     }
 }
@@ -185,7 +198,7 @@ extension UsageNotifications {
 /// Attach it once at the app's root, so the alerts come whichever screen is open.
 struct UsageAlertsModifier: ViewModifier {
     let readings: [UsageReading]
-    @State private var tracker = UsageAlertTracker()
+    @State private var tracker = UsageAlertTracker(history: .shared)
     @State private var contextTracker = ContextAlertTracker()
 
     func body(content: Content) -> some View {
@@ -195,8 +208,21 @@ struct UsageAlertsModifier: ViewModifier {
     }
 
     private func check(_ readings: [UsageReading]) {
+        // The readings come from the live feeds and the probe: record them (throttled), then alert.
+        UsageHistory.shared.record(readings)
+        publishSnapshot(readings)
         UsageNotifications.post(tracker.alerts(for: readings))
         UsageNotifications.post(contextTracker.alerts(for: readings))
+    }
+
+    /// The Usage widget's data, written when it changes.
+    private func publishSnapshot(_ readings: [UsageReading]) {
+        let snapshot = UsageSnapshot.make(readings: readings, history: .shared)
+        guard !snapshot.windows.isEmpty, UsageSnapshot.load().windows != snapshot.windows else { return }
+        snapshot.save()
+        #if os(iOS)
+        WidgetCenter.shared.reloadTimelines(ofKind: UsageSnapshot.widgetKind)
+        #endif
     }
 }
 
