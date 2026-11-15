@@ -41,6 +41,19 @@ struct NotificationPrefsSection: View {
             Text("The helper on each machine stops it sleeping while an agent is working, and lets go two minutes after the last one stops.")
         }
 
+        Section {
+            Picker("Alert when an agent shows no output for", selection: minutes(\.stuckMinutes)) {
+                Text("Off").tag(0)
+                ForEach([10, 20, 30, 60], id: \.self) { Text("\($0) min").tag($0) }
+            }
+            Picker("Remind me again after", selection: minutes(\.renudgeMinutes)) {
+                Text("Off").tag(0)
+                ForEach([15, 30, 60], id: \.self) { Text("\($0) min").tag($0) }
+            }
+        } footer: {
+            Text("A hung tool or an unanswered question otherwise stays silent. These need the helper's latest version on each machine.")
+        }
+
         if !prefs.muted.isEmpty {
             Section("Muted agents") {
                 ForEach(prefs.muted.sorted { $0.value.localizedCaseInsensitiveCompare($1.value) == .orderedAscending }, id: \.key) { entry in
@@ -65,6 +78,14 @@ struct NotificationPrefsSection: View {
     }
 
     private func edit(_ path: WritableKeyPath<NotificationPrefs, Bool>) -> Binding<Bool> {
+        Binding(get: { prefs[keyPath: path] }, set: { value in
+            var next = prefs
+            next[keyPath: path] = value
+            set(next)
+        })
+    }
+
+    private func minutes(_ path: WritableKeyPath<NotificationPrefs, Int>) -> Binding<Int> {
         Binding(get: { prefs[keyPath: path] }, set: { value in
             var next = prefs
             next[keyPath: path] = value

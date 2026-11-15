@@ -24,6 +24,11 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse
     ) async {
         let info = response.notification.request.content.userInfo
+        // "Remind me in 1 h": re-post the same alert locally; nothing else to do.
+        if response.actionIdentifier == AnswerCategory.snoozeAction {
+            try? await center.add(AnswerCategory.snoozeRequest(from: response.notification.request.content))
+            return
+        }
         // An answer button: awaited here, so a background action (answered through the relay)
         // finishes before iOS suspends the app again.
         let answer: (AnswerNotificationRequest, (AnswerNotificationRequest) async -> Void)? = await MainActor.run {

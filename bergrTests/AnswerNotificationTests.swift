@@ -52,9 +52,10 @@ struct AnswerNotificationTests {
         #expect(AnswerCategory.pushCategory(question: nil, address: "t1") == "bergr.reply")
         #expect(AnswerCategory.pushCategory(question: q, address: "t1") == "bergr.answer.2")
         let four = AnswerCategory.categories().first { $0.identifier == "bergr.answer.4" }
-        #expect(four?.actions.count == 5)  // four answers and Reply
-        #expect(four?.actions.allSatisfy { $0.options.contains(.foreground) && $0.options.contains(.authenticationRequired) } == true)
-        #expect(four?.actions.last is UNTextInputNotificationAction)
+        #expect(four?.actions.count == 6)  // four answers, Reply and Remind me
+        #expect(four?.actions.dropLast().allSatisfy { $0.options.contains(.foreground) && $0.options.contains(.authenticationRequired) } == true)
+        #expect(four?.actions[4] is UNTextInputNotificationAction)
+        #expect(four?.actions.last?.identifier == AnswerCategory.snoozeAction)
     }
 
     @Test func userInfoRoundTripsIntoARequest() throws {

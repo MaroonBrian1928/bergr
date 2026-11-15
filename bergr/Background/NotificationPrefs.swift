@@ -15,6 +15,10 @@ struct NotificationPrefs: Codable, Equatable, Sendable {
     var quietEnd = 7 * 60
     /// Ask each machine's helper to keep it awake while agents work (helper v17 on).
     var keepAwake = true
+    /// Alert when a working agent's screen has not changed for this many minutes (helper v23 on; 0: off).
+    var stuckMinutes = 20
+    /// Remind once when an agent is still blocked on the same question after this many minutes (0: off).
+    var renudgeMinutes = 30
 
     init() {}
 
@@ -29,6 +33,8 @@ struct NotificationPrefs: Codable, Equatable, Sendable {
         quietStart = try c.decodeIfPresent(Int.self, forKey: .quietStart) ?? 22 * 60
         quietEnd = try c.decodeIfPresent(Int.self, forKey: .quietEnd) ?? 7 * 60
         keepAwake = try c.decodeIfPresent(Bool.self, forKey: .keepAwake) ?? true
+        stuckMinutes = try c.decodeIfPresent(Int.self, forKey: .stuckMinutes) ?? 20
+        renudgeMinutes = try c.decodeIfPresent(Int.self, forKey: .renudgeMinutes) ?? 30
     }
 
     static let storageKey = "bergr.notifications.prefs"
@@ -114,6 +120,8 @@ struct NotificationPrefs: Codable, Equatable, Sendable {
             "tz": zone.identifier,
             "tz_offset": zone.secondsFromGMT(for: now) / 60,
             "keepAwake": keepAwake,
+            "stuckMinutes": stuckMinutes,
+            "renudgeMinutes": renudgeMinutes,
         ]
         if quietEnabled { object["quiet"] = ["start": quietStart, "end": quietEnd] }
         return object

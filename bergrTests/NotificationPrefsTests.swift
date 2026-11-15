@@ -16,6 +16,23 @@ struct NotificationPrefsTests {
         }
     }
 
+    @Test func stuckAndRenudgeDefaultAndRoundTrip() {
+        let defaults = NotificationPrefs().payload(host: nil)
+        #expect(defaults["stuckMinutes"] as? Int == 20)
+        #expect(defaults["renudgeMinutes"] as? Int == 30)
+        let suite = UserDefaults(suiteName: "stuck-\(UUID().uuidString)")!
+        var p = NotificationPrefs()
+        p.stuckMinutes = 0
+        p.renudgeMinutes = 60
+        p.save(suite)
+        let loaded = NotificationPrefs.load(suite)
+        #expect(loaded.stuckMinutes == 0 && loaded.renudgeMinutes == 60)
+        #expect(loaded.payload(host: nil)["stuckMinutes"] as? Int == 0)
+        suite.set(Data(#"{"needsYou":false}"#.utf8), forKey: NotificationPrefs.storageKey)
+        #expect(NotificationPrefs.load(suite).stuckMinutes == 20)
+        #expect(NotificationPrefs.load(suite).renudgeMinutes == 30)
+    }
+
     @Test func keepAwakeDefaultsOnAndRoundTrips() throws {
         #expect(NotificationPrefs().keepAwake)
         #expect(NotificationPrefs().payload(host: nil)["keepAwake"] as? Bool == true)

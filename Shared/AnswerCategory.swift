@@ -43,6 +43,9 @@ nonisolated enum AnswerCategory {
     /// The category with just a Reply text field (done alerts, blocked ones without buttons).
     static let replyCategory = "bergr.reply"
     static let replyAction = "bergr.reply.action"
+    /// "Remind me in 1 h" on answer alerts: appended after the numbered buttons and Reply, so their order is unchanged.
+    static let snoozeAction = "bergr.snooze.action"
+    static let snoozeDelay: TimeInterval = 3600
     /// Whether the app can send a typed reply (iOS and Mac); when off, alerts only open the chat.
     nonisolated(unsafe) static var replyEnabled = true
 
@@ -99,6 +102,26 @@ nonisolated enum AnswerCategory {
         question.options.enumerated().map { "\($0.offset + 1) \($0.element)" }.joined(separator: " · ")
     }
 
+    /// A local notification that re-posts `content` after `delay`. It is a plain local alert: the helper's
+    /// answerID has expired by then, so the buttons open the app (the non-remote category) instead.
+    static func snoozeRequest(from content: UNNotificationContent, delay: TimeInterval = snoozeDelay,
+                              id: String = UUID().uuidString) -> UNNotificationRequest {
+        let next = UNMutableNotificationContent()
+        next.title = content.title
+        next.subtitle = content.subtitle
+        next.body = content.body
+        next.sound = .default
+        next.threadIdentifier = content.threadIdentifier
+        next.categoryIdentifier = content.categoryIdentifier.hasPrefix(remotePrefix)
+            ? prefix + content.categoryIdentifier.dropFirst(remotePrefix.count) : content.categoryIdentifier
+        var info = content.userInfo
+        info[answerIDKey] = nil
+        info["snoozed"] = true
+        next.userInfo = info
+        return UNNotificationRequest(identifier: id, content: next,
+                                     trigger: UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false))
+    }
+
     /// Registered by the app at launch (the extension only names a category).
     static func categories() -> Set<UNNotificationCategory> {
         func answers(_ identifier: String, count: Int, options: UNNotificationActionOptions) -> UNNotificationCategory {
@@ -106,6 +129,7 @@ nonisolated enum AnswerCategory {
                 UNNotificationAction(identifier: actionIdentifier(index: $0), title: "\($0 + 1)", options: options)
             }
             if replyEnabled { actions.append(replyButton()) }
+            actions.append(UNNotificationAction(identifier: snoozeAction, title: "Remind me in 1 h", options: []))
             return UNNotificationCategory(
                 identifier: identifier, actions: actions, intentIdentifiers: [],
                 hiddenPreviewsBodyPlaceholder: nil, categorySummaryFormat: PushGrouping.summaryFormat, options: [])

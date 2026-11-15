@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 22
+VERSION = 23
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 # Windows: child processes (hc, curl, git) get no console window; the helper runs under pythonw.exe,
 # where each console child would otherwise flash a window.
@@ -990,6 +990,155 @@ class KeepAwake:
                 pass
 
 
+# Watchdog (v23): the two silent failures. A terminal "working" whose screen has not changed for
+# `stuckMinutes` (pref, default 20, 0 off) gets one "no output" alert (kind error, so prefs, quiet
+# hours and mute apply); a terminal still blocked on the same turn `renudgeMinutes` (default 30,
+# 0 off) after its alert gets one "Still waiting" reminder with the same answer buttons. The screen
+# is read with `hc read --json` at most once a minute per working terminal, only while one works.
+STUCK_DEFAULT = 20
+RENUDGE_DEFAULT = 30
+WATCH_SAMPLE = 60
+WATCH_TICK = 15
+
+
+def pref_minutes(cfg, key, default):
+    """The smallest positive `key` pref among the registered phones (a phone without it means the
+    default); 0 when every phone turned it off or none is registered."""
+    values = []
+    for d in (cfg or {}).get("devices") or []:
+        if not isinstance(d, dict):
+            continue
+        prefs = d.get("prefs")
+        v = prefs.get(key) if isinstance(prefs, dict) else None
+        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+            v = default
+        values.append(v)
+    positive = [v for v in values if v > 0]
+    return min(positive) if positive else 0
+
+
+def screen_digest(address, runner=_hc_run):
+    """A cheap hash of the terminal's screen text, or None when it can't be read."""
+    try:
+        screen = _hc_json(["read", address], runner)
+    except Exception:
+        return None
+    if not screen or not isinstance(screen.get("text"), str):
+        return None
+    return hashlib.sha1(screen["text"].encode("utf-8", "replace")).hexdigest()
+
+
+def stuck_alert(term, minutes, machine=""):
+    status = term.get("status") if isinstance(term.get("status"), dict) else {}
+    labels = term.get("labels") if isinstance(term.get("labels"), dict) else {}
+    app = APP_NAMES.get(_text(status.get("app")), _text(status.get("app")) or "Agent")
+    where = f" on {machine}" if machine else ""
+    body = _text(labels.get("where")) or _text(term.get("title"))
+    return {"address": term.get("address"), "turn": term.get("turn"), "state": "error",
+            "title": f"{app}{where} has shown no output for {minutes} min", "body": body}
+
+
+class Watchdog:
+    def __init__(self, reader=screen_digest, clock=time.time, host=""):
+        self.reader = reader
+        self.clock = clock
+        self.host = host
+        self.lock = threading.Lock()
+        self.screens = {}  # address -> {"hash", "changed", "sampled", "alerted"}
+        self.blocked = {}  # address -> {"turn", "at", "alert", "q", "nudged"}
+
+    def note_alert(self, alert, q=None, now=None):
+        """Remembers a blocked alert that was sent, for the reminder."""
+        if alert.get("state") != "blocked":
+            return
+        with self.lock:
+            self.blocked[alert["address"]] = {"turn": alert.get("turn"), "at": self.clock() if now is None else now,
+                                              "alert": alert, "q": q, "nudged": False}
+
+    def stuck(self, terms, minutes, now=None):
+        now = self.clock() if now is None else now
+        working = {a: t for a, t in terms.items() if isinstance(t, dict) and isinstance(t.get("status"), dict)
+                   and t["status"].get("state") == "working" and t.get("notify") is not False}
+        alerts = []
+        with self.lock:
+            # Leaving working (or the pref going off) re-arms.
+            self.screens = {a: v for a, v in self.screens.items() if a in working} if minutes > 0 else {}
+            if minutes <= 0:
+                return alerts
+            for address, t in working.items():
+                rec = self.screens.get(address)
+                if rec and now - rec["sampled"] < WATCH_SAMPLE:
+                    continue
+                digest = self.reader(address)
+                if digest is None:
+                    continue
+                if rec is None or rec["hash"] != digest:
+                    self.screens[address] = {"hash": digest, "changed": now, "sampled": now, "alerted": False}
+                    continue
+                rec["sampled"] = now
+                if not rec["alerted"] and now - rec["changed"] >= minutes * 60:
+                    rec["alerted"] = True
+                    alerts.append(stuck_alert(t, minutes, self.host))
+        return alerts
+
+    def renudge(self, terms, minutes, now=None):
+        now = self.clock() if now is None else now
+        alerts = []
+        with self.lock:
+            for address, rec in list(self.blocked.items()):
+                t = terms.get(address)
+                status = t.get("status") if isinstance(t, dict) and isinstance(t.get("status"), dict) else {}
+                if status.get("state") != "blocked" or t.get("turn") != rec["turn"]:
+                    del self.blocked[address]
+                    continue
+                if minutes <= 0 or rec["nudged"] or now - rec["at"] < minutes * 60:
+                    continue
+                rec["nudged"] = True
+                orig, q = rec["alert"], rec["q"]
+                question = _text(q.get("title") if q else None) or _text(status.get("msg")) or _text(orig.get("body"))
+                alerts.append({"address": address, "turn": orig["turn"], "state": "blocked",
+                               "title": ("Still waiting: " + question)[:120], "body": _text(orig.get("title")), "q": q})
+        return alerts
+
+    def tick(self, cfg, terms, now=None):
+        """Alerts due now (stuck ones first); a reminder carries its q."""
+        return (self.stuck(terms, pref_minutes(cfg, "stuckMinutes", STUCK_DEFAULT), now)
+                + self.renudge(terms, pref_minutes(cfg, "renudgeMinutes", RENUDGE_DEFAULT), now))
+
+
+def send_with_answer(cfg, a, q, host, jwt_cache, poster, answers_path):
+    """Sends alert `a`; answer buttons answer through the relay, so a key question gets a fresh answerID
+    the helper remembers (this address, turn and question) for 10 minutes."""
+    answer_id = None
+    if q and q.get("keys") is True:
+        try:
+            answer_id = record_pending_answer(answers_path, a["address"], a["turn"], q["title"])
+        except Exception as e:
+            log(f"could not save the answer id: {e}")
+    send_alert(cfg, a["title"], a["body"], a["address"], host, jwt_cache,
+               on_reply=poster.learn if poster else None, state=a["state"], q=q, a=answer_id)
+
+
+class WatchdogThread(threading.Thread):
+    def __init__(self, watcher, shared, watchdog, host, jwt_cache, poster, answers_path):
+        super().__init__(daemon=True)
+        self.args = (watcher, shared, watchdog, host, jwt_cache, poster, answers_path)
+
+    def run(self):
+        watcher, shared, watchdog, host, jwt_cache, poster, answers_path = self.args
+        while True:
+            time.sleep(WATCH_TICK)
+            try:
+                cfg = watcher.get()
+                if cfg is None:
+                    continue
+                for a in watchdog.tick(cfg, shared.get("terms") or {}):
+                    log(f"watchdog alert for {a['address']}: {a['title']}")
+                    send_with_answer(cfg, a, a.get("q"), host, jwt_cache, poster, answers_path)
+            except Exception as e:
+                log(f"watchdog failed: {e}")
+
+
 # Turn baselines (v18): when a terminal starts working, its cwd's tree is snapshotted with
 # `git stash create` (a commit of the tracked changes; the worktree, index and branches are not
 # touched) and kept under refs/bergr/turns/<name>, latest only. The list of untracked files at that
@@ -1733,6 +1882,9 @@ def run():
     atexit.register(awake.release)
     answers_path = remote_answers_path()
     AnswerPoller(watcher, answers_path, host, jwt_cache).start()
+    watchdog = Watchdog(host=host)
+    shared = {"terms": {}}
+    WatchdogThread(watcher, shared, watchdog, host, jwt_cache, poster, answers_path).start()
     while True:
         try:
             proc = subprocess.Popen(["hc", "events", "--json"], stdout=subprocess.PIPE,
@@ -1748,6 +1900,7 @@ def run():
                     try:
                         before = state
                         state, alerts = alerts_for(state, line, host)
+                        shared["terms"] = state.get("terms", {})
                         for address in started_working(before, state):
                             cwd = (state.get("terms", {}).get(address) or {}).get("cwd")
                             threading.Thread(target=record_turn_baseline, args=(address, cwd), daemon=True).start()
@@ -1789,16 +1942,8 @@ def run():
                             continue
                         log(f"alert for {a['address']}: {a['title']}")
                         q = alert_answers(cfg, a)
-                        # Answer buttons answer through the relay: the helper remembers what this
-                        # answerID may answer (this address, turn and question) for 10 minutes.
-                        answer_id = None
-                        if q and q.get("keys") is True:
-                            try:
-                                answer_id = record_pending_answer(answers_path, a["address"], a["turn"], q["title"])
-                            except Exception as e:
-                                log(f"could not save the answer id: {e}")
-                        send_alert(cfg, a["title"], a["body"], a["address"], host, jwt_cache,
-                                   on_reply=poster.learn, state=a["state"], q=q, a=answer_id)
+                        watchdog.note_alert(a, q)
+                        send_with_answer(cfg, a, q, host, jwt_cache, poster, answers_path)
             finally:
                 if proc.poll() is None:
                     proc.kill()

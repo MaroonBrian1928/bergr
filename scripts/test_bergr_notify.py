@@ -1458,6 +1458,123 @@ class RemoteAnswerTests(unittest.TestCase):
                                     a=self.aid)
         self.assertEqual(notify.decrypt_alert(self.KEY, base64.b64decode(blob))["a"], self.aid)
 
+class WatchdogTests(unittest.TestCase):
+    class Screen:
+        def __init__(self):
+            self.text, self.reads = "a", 0
+
+        def __call__(self, address):
+            self.reads += 1
+            return self.text
+
+    def setUp(self):
+        self.screen = self.Screen()
+        self.wd = notify.Watchdog(reader=self.screen, host="pop-os")
+        self.terms = {"t1": term("t1", state="working", msg="")}
+        self.cfg = {"devices": [{"relay": "r", "secret": "s", "prefs": {}}]}
+
+    def stuck(self, now, minutes=20):
+        return self.wd.stuck(self.terms, minutes, now)
+
+    def test_pref_minutes(self):
+        self.assertEqual(notify.pref_minutes(self.cfg, "stuckMinutes", 20), 20)
+        cfg = {"devices": [{"prefs": {"stuckMinutes": 0}}, {"prefs": {"stuckMinutes": 10}}, {}]}
+        self.assertEqual(notify.pref_minutes(cfg, "stuckMinutes", 20), 10)
+        self.assertEqual(notify.pref_minutes({"devices": [{"prefs": {"stuckMinutes": 0}}]}, "stuckMinutes", 20), 0)
+        self.assertEqual(notify.pref_minutes({}, "stuckMinutes", 20), 0)
+
+    def test_stall_alerts_once_and_rearms(self):
+        self.assertEqual(self.stuck(0), [])
+        self.assertEqual(self.stuck(19 * 60), [])
+        alerts = self.stuck(20 * 60)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["title"], "Claude on pop-os has shown no output for 20 min")
+        self.assertEqual(alerts[0]["state"], "error")
+        self.assertEqual(self.stuck(40 * 60), [])  # once per stall
+        self.screen.text = "b"  # output: re-armed
+        self.assertEqual(self.stuck(41 * 60), [])
+        self.assertEqual(len(self.stuck(61 * 60)), 1)
+
+    def test_leaving_working_rearms(self):
+        self.stuck(0)
+        self.assertEqual(len(self.stuck(20 * 60)), 1)
+        self.wd.stuck({"t1": term("t1", state="done")}, 20, 21 * 60)
+        self.stuck(22 * 60)
+        self.assertEqual(self.stuck(41 * 60), [])
+        self.assertEqual(len(self.stuck(42 * 60)), 1)
+
+    def test_sampling_throttled_and_only_while_working(self):
+        self.stuck(0)
+        self.stuck(10)
+        self.stuck(59)
+        self.assertEqual(self.screen.reads, 1)
+        self.stuck(60)
+        self.assertEqual(self.screen.reads, 2)
+        self.wd.stuck({"t1": term("t1", state="done")}, 20, 200)
+        self.assertEqual(self.screen.reads, 2)
+
+    def test_off_and_unreadable(self):
+        self.assertEqual(self.stuck(0, minutes=0), [])
+        self.assertEqual(self.stuck(99999, minutes=0), [])
+        self.assertEqual(self.screen.reads, 0)
+        self.screen.text = None
+        self.assertEqual(self.stuck(0), [])
+
+    def test_stuck_alert_respects_quiet_hours_and_mute(self):
+        a = self.stuck(0) or self.stuck(20 * 60)
+        self.assertEqual(a[0]["state"], "error")
+        quiet = {"quiet": {"start": 0, "end": 1439}, "tz": "UTC"}
+        self.assertEqual(notify.prefs_verdict(quiet, "error", "t1", now=3600), "quiet")
+        self.assertFalse(notify.prefs_allow({"muted": ["t1"]}, "error", "t1"))
+        self.assertFalse(notify.prefs_allow({"kinds": {"error": False}}, "error", "t1"))
+
+    def test_renudge_once_per_turn_with_new_answer_id(self):
+        blocked = {"t1": term("t1", state="blocked", turn=5)}
+        alert = {"address": "t1", "turn": 5, "state": "blocked", "title": "Claude needs you on pop-os", "body": "b"}
+        q = {"title": "Run ls?", "options": ["Yes", "No"], "keys": True}
+        self.wd.note_alert(alert, q, now=0)
+        self.assertEqual(self.wd.renudge(blocked, 30, 29 * 60), [])
+        out = self.wd.renudge(blocked, 30, 30 * 60)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["title"], "Still waiting: Run ls?")
+        self.assertEqual(out[0]["q"], q)
+        self.assertEqual(self.wd.renudge(blocked, 30, 90 * 60), [])
+        # Sent through the alert builder: a fresh answerID each time.
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "r.json")
+        sent = []
+        with mock.patch.object(notify, "send_alert", lambda *a, **k: sent.append(k)):
+            notify.send_with_answer({}, alert, q, "h", None, None, path)
+            notify.send_with_answer({}, out[0], out[0]["q"], "h", None, None, path)
+        self.assertNotEqual(sent[0]["a"], sent[1]["a"])
+        self.assertEqual(sent[1]["q"], q)
+
+    def test_renudge_dropped_when_turn_moves_or_pref_off(self):
+        alert = {"address": "t1", "turn": 5, "state": "blocked", "title": "x", "body": "b"}
+        self.wd.note_alert(alert, None, now=0)
+        self.assertEqual(self.wd.renudge({"t1": term("t1", state="blocked", turn=6)}, 30, 3600), [])
+        self.wd.note_alert(alert, None, now=0)
+        self.assertEqual(self.wd.renudge({"t1": term("t1", state="blocked", turn=5)}, 0, 3600), [])
+
+    def test_windows_uses_no_posix_calls(self):
+        src = open(SCRIPT).read()
+        start = src.index("class Watchdog:")
+        block = src[start:src.index("# Turn baselines (v18)")]
+        for banned in ("os.fork", "signal.", "fcntl", "os.getuid", "/dev/", "pgrep", "os.kill"):
+            self.assertNotIn(banned, block)
+        with mock.patch.object(notify.os, "name", "nt"):
+            self.wd.stuck(self.terms, 20, 0)
+        self.assertEqual(notify.NO_WINDOW, {"creationflags": 0x08000000} if os.name == "nt" else {})
+
+    def test_digest_reads_hc_with_no_window_runner(self):
+        calls = []
+        def runner(args):
+            calls.append(args)
+            return json.dumps({"text": "hello"})
+        self.assertEqual(notify.screen_digest("t1", runner), notify.screen_digest("t1", runner))
+        self.assertEqual(calls[0], ["hc", "read", "t1", "--json"])
+        self.assertIsNone(notify.screen_digest("t1", lambda a: 1 / 0))
+
 
 if __name__ == "__main__":
     unittest.main()
