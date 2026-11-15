@@ -37,7 +37,7 @@ struct PushRegistrationTests {
 
     @Test func commandEncodesScriptAndPayload() throws {
         let payload = Data("{\"x\":1}".utf8)
-        let parts = PushRegistration.command(payload: payload).split(separator: " ")
+        let parts = PushRegistration.command(payload: payload).command.split(separator: " ")
         #expect(parts.prefix(3) == ["python3", "-I", "-c"])
         let args = parts.suffix(2)
         let script = try #require(Data(base64Encoded: String(args.first!)))
@@ -64,7 +64,7 @@ struct PushRegistrationTests {
 
     @Test func installerCommandCarriesInstallerAndArgs() throws {
         let parts = PushRegistration.installerCommand(installer: "print(1)", op: "install", script: "VERSION = 1")
-            .split(separator: " ")
+            .command.split(separator: " ")
         #expect(parts.prefix(3) == ["python3", "-I", "-c"])
         #expect(String(decoding: try #require(Data(base64Encoded: String(parts[parts.count - 2]))), as: UTF8.self) == "print(1)")
         let args = try #require(Data(base64Encoded: String(parts.last!)))
@@ -94,6 +94,36 @@ struct PushRegistrationTests {
         let parsed = PushRegistration.parseProbe("Linux\n__python3__\n")
         #expect(parsed.uname == "Linux" && parsed.hasPython)
         #expect(PushRegistration.parseProbe("'uname' is not recognized as a command").uname == nil)
+    }
+
+    @Test func windowsProbeAndTestCommands() {
+        let py = #"cmd /d /v:on /s /c "set PATH=%LOCALAPPDATA%\Programs\Python\Python313;%PATH%&& set P=python.exe& where /q py.exe&& set P=py.exe -3& !P! "#
+        #expect(PushRegistration.probeCommand(windows: true) == .init(command: py + #"-V 2>&1""#))
+        #expect(PushRegistration.testCommand(windows: true)
+            == .init(command: py + #"-I %LOCALAPPDATA%\bergr\bergr-notify.py --test 2>&1""#))
+        #expect(PushRegistration.testCommand(windows: false).command == "python3 -I ~/.local/bin/bergr-notify --test 2>&1")
+        #expect(PushRegistration.autoApprovalsCommand(windows: true).command
+            == #"cmd /d /s /c "type %USERPROFILE%\.config\bergr\auto-approvals.json 2>nul""#)
+        #expect(PushRegistration.windowsUnsupportedReason("Python 3.13.16\r\n") == nil)
+        #expect(PushRegistration.windowsUnsupportedReason("'python.exe' is not recognized") == "Python 3 isn't installed")
+    }
+
+    /// Windows: the code goes on stdin (cmd lines stop at 8191 characters); the line is short and
+    /// free of `$` and inner quotes so PowerShell and cmd pass it alike.
+    @Test func windowsRegisterAndInstallSendCodeOnStdin() throws {
+        let payload = Data("{\"x\":1}".utf8)
+        let register = PushRegistration.command(payload: payload, windows: true)
+        let stage1 = #"-I -c S=__import__('sys');exec(S.stdin.buffer.readline())""#
+        #expect(register.command == PushRegistration.windowsPython + stage1)
+        let line = String(decoding: try #require(register.input), as: UTF8.self)
+        #expect(line == "import base64,sys;sys.argv=['-c','\(payload.base64EncodedString())'];exec(base64.b64decode('"
+            + Data(PushRegistration.mergeScript.utf8).base64EncodedString() + "'))\n")
+        let script = String(repeating: "x = 1\n", count: 20_000) + "VERSION = 22\n"
+        let install = PushRegistration.installerCommand(installer: "print(1)", op: "install", script: script, windows: true)
+        #expect(install.command.count < 8191 && !install.command.contains("$"))
+        #expect(install.command == PushRegistration.windowsPython + stage1)
+        #expect(String(decoding: try #require(install.input), as: UTF8.self).contains(Data("print(1)".utf8).base64EncodedString()))
+        #expect(PushRegistration.command(payload: payload).input == nil)
     }
 
     @Test func installQueueIsFIFOAndDedupes() {

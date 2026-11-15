@@ -248,7 +248,7 @@ final class PushRegistration {
             guard let secret = relaySecret ?? (current.0 ? nil : "") else { continue }
             written[id] = (identity, state)
             let command = Self.command(token: token, secret: secret, enabled: current.0, alerts: alerts, host: id, prefs: prefs,
-                                       rules: rules, askPatterns: askPatterns)
+                                       rules: rules, askPatterns: askPatterns, windows: session.isWindowsHost)
             let enabled = current.0
             Task { @MainActor [weak self] in
                 if enabled, let reason = await Self.probe(session) {
@@ -257,7 +257,7 @@ final class PushRegistration {
                 }
                 if await Self.run(command, on: session) == false {
                     if self?.written[id]?.state == state { self?.written[id] = nil }
-                    if enabled { self?.helperState[id] = .failed("couldn't save this phone on the machine (is python3 there?)") }
+                    if enabled { self?.helperState[id] = .failed("couldn't save this phone on the machine (is Python 3 there?)") }
                     return
                 }
                 if enabled {
@@ -278,7 +278,59 @@ final class PushRegistration {
         return hasPython ? nil : "python3 isn't installed"
     }
 
-    private nonisolated static let probeCommand = "uname -s 2>/dev/null; if command -v python3 >/dev/null 2>&1; then echo __python3__; fi"
+    /// Why a Windows machine can't run the helper: only Python 3 is needed (`-V` prints "Python 3.x").
+    nonisolated static func windowsUnsupportedReason(_ output: String) -> String? {
+        output.contains("Python 3") ? nil : "Python 3 isn't installed"
+    }
+
+    /// A command and what to write to its stdin. On Windows the code travels on stdin: cmd.exe
+    /// lines stop at 8191 characters, far less than the helper's source.
+    struct RemoteCommand: Equatable, Sendable {
+        let command: String
+        var input: Data? = nil
+    }
+
+    /// cmd line start that runs Python 3 on Windows: the `py` launcher when there is one, else
+    /// python.exe with the standard per-user runtime first on PATH (so not the WindowsApps stub when
+    /// that runtime exists). It survives cmd and PowerShell as the SSH default shell alike: one
+    /// double-quoted argument, no `$`, no inner quotes (see `ChatHelperLaunch`).
+    nonisolated static let windowsPython = #"cmd /d /v:on /s /c "set PATH=%LOCALAPPDATA%\Programs\Python\Python313;%PATH%&& set P=python.exe& where /q py.exe&& set P=py.exe -3& !P! "#
+
+    /// Where install-helper.py puts the helper on Windows.
+    nonisolated static let windowsHelperPath = #"%LOCALAPPDATA%\bergr\bergr-notify.py"#
+
+    nonisolated static func probeCommand(windows: Bool) -> RemoteCommand {
+        windows
+            ? RemoteCommand(command: windowsPython + #"-V 2>&1""#)
+            : RemoteCommand(command: "uname -s 2>/dev/null; if command -v python3 >/dev/null 2>&1; then echo __python3__; fi")
+    }
+
+    /// Runs Python `code` with `argument` as sys.argv[1]; both travel base64-encoded, so no shell
+    /// quoting can break them.
+    nonisolated static func pythonCommand(code: String, argument: String, windows: Bool) -> RemoteCommand {
+        let code64 = Data(code.utf8).base64EncodedString()
+        guard windows else {
+            return RemoteCommand(command: "python3 -I -c 'import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))' "
+                + code64 + " " + argument)
+        }
+        let line = "import base64,sys;sys.argv=['-c','\(argument)'];exec(base64.b64decode('\(code64)'))\n"
+        return RemoteCommand(command: windowsPython + #"-I -c S=__import__('sys');exec(S.stdin.buffer.readline())""#,
+                             input: Data(line.utf8))
+    }
+
+    /// Sends one alert through the installed helper; it prints "sent N".
+    nonisolated static func testCommand(windows: Bool) -> RemoteCommand {
+        windows
+            ? RemoteCommand(command: windowsPython + "-I " + windowsHelperPath + #" --test 2>&1""#)
+            : RemoteCommand(command: "python3 -I ~/.local/bin/bergr-notify --test 2>&1")
+    }
+
+    /// Prints the helper's auto-answer log (next to push.json).
+    nonisolated static func autoApprovalsCommand(windows: Bool) -> RemoteCommand {
+        windows
+            ? RemoteCommand(command: #"cmd /d /s /c "type %USERPROFILE%\.config\bergr\auto-approvals.json 2>nul""#)
+            : RemoteCommand(command: AutoApprovalImport.readCommand)
+    }
 
     /// Splits the probe's output into (uname, hasPython). A first line that isn't a single word
     /// (a cmd.exe "not recognized" message, say) counts as no uname.
@@ -291,25 +343,28 @@ final class PushRegistration {
 
     /// The reason this machine can't run the helper; nil when it can, or when the probe itself failed.
     private static func probe(_ session: HostSession) async -> String? {
-        guard let out = try? await outputOrError(probeCommand, on: session) else { return nil }
+        let windows = session.isWindowsHost
+        guard let out = try? await outputOrError(probeCommand(windows: windows), on: session) else { return nil }
+        if windows { return windowsUnsupportedReason(out) }
         let parsed = parseProbe(out)
         return unsupportedReason(uname: parsed.uname, hasPython: parsed.hasPython)
     }
 
-    private static func run(_ command: String, on session: HostSession) async -> Bool {
+    private static func run(_ command: RemoteCommand, on session: HostSession) async -> Bool {
         await output(command, on: session)?.contains("ok") ?? false
     }
 
-    private static func output(_ command: String, on session: HostSession) async -> String? {
+    private static func output(_ command: RemoteCommand, on session: HostSession) async -> String? {
         try? await outputOrError(command, on: session)
     }
 
     /// The command's output; gives up after 20 seconds so a stuck channel can't hang a check.
-    private static func outputOrError(_ command: String, on session: HostSession) async throws -> String {
+    private static func outputOrError(_ command: RemoteCommand, on session: HostSession) async throws -> String {
         try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask {
-                let pipe = try await session.openExec(command)
+                let pipe = try await session.openExec(command.command)
                 defer { pipe.close() }
+                if let input = command.input { try await pipe.write(input) }
                 var out = Data()
                 do {
                     for try await chunk in pipe.output { out.append(chunk) }
@@ -363,12 +418,19 @@ final class PushRegistration {
     }
 
     /// The command that runs install-helper.py with these arguments on the machine.
-    nonisolated static func installerCommand(installer: String, op: String, script: String? = nil) -> String {
+    nonisolated static func installerCommand(installer: String, op: String, script: String? = nil,
+                                             windows: Bool = false) -> RemoteCommand {
         var object: [String: Any] = ["op": op]
         if let script { object["script"] = script }
         let args = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
-        return "python3 -I -c 'import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))' "
-            + Data(installer.utf8).base64EncodedString() + " " + args.base64EncodedString()
+        return pythonCommand(code: installer, argument: args.base64EncodedString(), windows: windows)
+    }
+
+    /// install-helper.py's status answer (Setup's push row).
+    static func helperStatusOutput(on session: HostSession) async throws -> String {
+        guard let installer else { throw HelperError("the installer is missing from the app") }
+        return try await outputOrError(
+            installerCommand(installer: installer, op: "status", windows: session.isWindowsHost), on: session)
     }
 
     private static func helperResult(_ op: String, script: String? = nil, on session: HostSession) async -> [String: Any]? {
@@ -377,7 +439,7 @@ final class PushRegistration {
 
     private static func helperResultOrError(_ op: String, script: String? = nil, on session: HostSession) async throws -> [String: Any] {
         guard let installer else { throw HelperError("the installer is missing from the app") }
-        let command = installerCommand(installer: installer, op: op, script: script)
+        let command = installerCommand(installer: installer, op: op, script: script, windows: session.isWindowsHost)
         let out = try await outputOrError(command, on: session)
         let line = out.split(separator: "\n").last.map(String.init) ?? ""
         guard let object = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else {
@@ -441,7 +503,7 @@ final class PushRegistration {
             RemoteAnswer.setHelperVersion(Self.bundledVersion, for: id)
             let updated = before == .outdated
             // A real alert from the machine, through the whole chain, proves it works.
-            let sent = await Self.output("python3 -I ~/.local/bin/bergr-notify --test 2>&1", on: session)
+            let sent = await Self.output(Self.testCommand(windows: session.isWindowsHost), on: session)
             let tested = sent?.contains("sent 1") == true || sent?.contains("sent 2") == true
             finishedMessage = (updated ? "The push helper on \(name) is updated." : "Push alerts are set up on \(name).")
                 + (tested ? " A test alert is on its way." : " The test alert didn't go out; check Settings → When Bergr isn't open.")
@@ -501,9 +563,11 @@ final class PushRegistration {
 
     /// Script and payload both travel base64-encoded, so no shell quoting can break them.
     static func command(token: String, secret: String, enabled: Bool, alerts: Bool = true, host: UUID? = nil,
-                        prefs: NotificationPrefs? = nil, rules: [ApprovalRule]? = nil, askPatterns: [String]? = nil) -> String {
+                        prefs: NotificationPrefs? = nil, rules: [ApprovalRule]? = nil, askPatterns: [String]? = nil,
+                        windows: Bool = false) -> RemoteCommand {
         command(payload: payload(token: token, secret: secret, enabled: enabled, alerts: alerts,
-                                 name: DeviceName.current, host: host, prefs: prefs, rules: rules, askPatterns: askPatterns))
+                                 name: DeviceName.current, host: host, prefs: prefs, rules: rules, askPatterns: askPatterns),
+                windows: windows)
     }
 
     nonisolated static func rulesFingerprint(_ rules: [ApprovalRule], host: UUID) -> String {
@@ -514,16 +578,16 @@ final class PushRegistration {
 
     /// Brings the helper's auto-answers on this machine into the approvals log.
     private static func importAutoApprovals(on session: HostSession) async {
-        guard let text = await output(AutoApprovalImport.readCommand, on: session), !text.isEmpty else { return }
+        guard let text = await output(autoApprovalsCommand(windows: session.isWindowsHost), on: session), !text.isEmpty else { return }
         let host = session.host
         let entries = AutoApprovalImport.entries(
             from: text, machine: host.name.isEmpty ? host.target.host : host.name, existing: ApprovalLog.load())
         ApprovalLog.merge(entries)
     }
 
-    nonisolated static func command(payload: Data) -> String {
-        "python3 -I -c 'import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))' "
-            + Data(mergeScript.utf8).base64EncodedString() + " " + payload.base64EncodedString()
+    /// push.json lands in ~/.config/bergr on Windows too (%USERPROFILE%), where the helper reads it.
+    nonisolated static func command(payload: Data, windows: Bool = false) -> RemoteCommand {
+        pythonCommand(code: mergeScript, argument: payload.base64EncodedString(), windows: windows)
     }
 
     /// Read-modify-write of push.json: adds or removes one device by id (entries a machine-held

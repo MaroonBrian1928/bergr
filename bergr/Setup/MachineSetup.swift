@@ -162,12 +162,8 @@ final class MachineSetup {
     }
 
     private func pushState() async -> CheckState {
-        guard let source = Bundle.main.url(forResource: "install-helper", withExtension: "py")
-            .flatMap({ try? String(contentsOf: $0, encoding: .utf8) }) else {
-            return .failed("the installer is missing from the app")
-        }
         do {
-            let output = try await run(PushRegistration.installerCommand(installer: source, op: "status"))
+            let output = try await PushRegistration.helperStatusOutput(on: session)
             guard let status = SetupCheck.parseHelper(output) else { return .failed("no answer from the machine") }
             guard status.installed else { return .missing("Not installed. Push alerts need it.") }
             helperVersion = status.version

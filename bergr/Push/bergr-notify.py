@@ -30,8 +30,37 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 21
+VERSION = 22
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
+# Windows: child processes (hc, curl, git) get no console window; the helper runs under pythonw.exe,
+# where each console child would otherwise flash a window.
+NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}
+
+
+def windows_setup(environ=None, stderr=None):
+    """On Windows: puts herdr-core's folder on PATH (the Scheduled Task may start with a PATH that
+    lacks it) and, under pythonw.exe (no stderr), logs to %LOCALAPPDATA%\\bergr\\bergr-notify.log.
+    Returns the log file it opened, or None."""
+    environ = os.environ if environ is None else environ
+    local = environ.get("LOCALAPPDATA")
+    if os.name != "nt" or not local:
+        return None
+    herdr = os.path.join(local, "Programs", "herdr-core")
+    parts = environ.get("PATH", "").split(os.pathsep)
+    if os.path.isdir(herdr) and herdr.lower() not in (p.lower() for p in parts):
+        environ["PATH"] = os.pathsep.join([herdr] + [p for p in parts if p])
+    if (stderr if stderr is not None else sys.stderr) is not None:
+        return None
+    try:
+        d = os.path.join(local, "bergr")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, "bergr-notify.log")
+        if os.path.exists(path) and os.path.getsize(path) > 1 << 20:
+            os.replace(path, path + ".1")
+        sys.stderr = open(path, "a", encoding="utf-8", buffering=1)
+        return sys.stderr
+    except OSError:
+        return None
 
 
 def default_config_path():
@@ -286,7 +315,8 @@ def _hc_json(args, runner):
 
 
 def _hc_run(args):
-    res = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+    res = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+                         **NO_WINDOW)
     if res.returncode != 0:
         raise RuntimeError(f"{' '.join(args[:2])} exited with {res.returncode}")
     return res.stdout
@@ -917,7 +947,8 @@ def working_count(terms):
 class KeepAwake:
     def __init__(self, spawn=None, clock=time.time, pid=None, platform=None):
         self.spawn = spawn or (lambda cmd: subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
-                                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+                                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                                            **NO_WINDOW))
         self.clock = clock
         self.pid = os.getpid() if pid is None else pid
         self.platform = platform
@@ -979,7 +1010,7 @@ def _git(cwd, args, timeout=GIT_TIMEOUT, stdin=None):
     """Stdout of `git -C cwd args`, or None on any failure or timeout."""
     try:
         out = subprocess.run(["git", "-C", cwd] + args, input=stdin, capture_output=True, text=True,
-                             timeout=timeout, env=dict(os.environ, GIT_OPTIONAL_LOCKS="0"))
+                             timeout=timeout, env=dict(os.environ, GIT_OPTIONAL_LOCKS="0"), **NO_WINDOW)
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
     return out.stdout if out.returncode == 0 else None
@@ -1125,7 +1156,7 @@ def make_jwt(team_id, key_id, key_path, now):
     unsigned = signing_input(key_id, team_id, now)
     out = subprocess.run(
         ["openssl", "dgst", "-sha256", "-sign", os.path.expanduser(key_path)],
-        input=unsigned.encode("ascii"), capture_output=True, timeout=30)
+        input=unsigned.encode("ascii"), capture_output=True, timeout=30, **NO_WINDOW)
     if out.returncode != 0:
         raise RuntimeError("openssl sign failed: " + out.stderr.decode("utf-8", errors="replace").strip())
     return unsigned + "." + b64url(der_to_raw(out.stdout))
@@ -1545,7 +1576,7 @@ def send_apns(cfg, device, title, body, address, host, jwt_cache, now, state=Non
            "-H", f"apns-collapse-id: {address}",
            "-H", "content-type: application/json",
            "--data-binary", "@-"]
-    res = subprocess.run(cmd, input=payload, capture_output=True, timeout=30)
+    res = subprocess.run(cmd, input=payload, capture_output=True, timeout=30, **NO_WINDOW)
     code = res.stdout.decode("ascii", errors="replace").strip()
     if res.returncode != 0 or code != "200":
         detail = res.stderr.decode("utf-8", errors="replace").strip()[:300]
@@ -1705,7 +1736,7 @@ def run():
     while True:
         try:
             proc = subprocess.Popen(["hc", "events", "--json"], stdout=subprocess.PIPE,
-                                    text=True, encoding="utf-8", errors="replace")
+                                    text=True, encoding="utf-8", errors="replace", **NO_WINDOW)
         except OSError as e:
             log(f"cannot run hc events: {e}")
         else:
@@ -1777,6 +1808,7 @@ def run():
 
 
 def main(argv):
+    windows_setup()
     if "--version" in argv:
         print(VERSION)
         return 0

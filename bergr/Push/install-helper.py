@@ -19,6 +19,9 @@ OS = os.environ.get("BERGR_HELPER_OS") or (
 TASK = "BergrNotify"
 LOCALAPPDATA = os.environ.get("LOCALAPPDATA") or os.path.join(HOME, "AppData", "Local")
 WIN_BIN = os.path.join(LOCALAPPDATA, "bergr", "bergr-notify.py")
+WIN_TASK_XML = os.path.join(LOCALAPPDATA, "bergr", "bergr-notify-task.xml")
+# Where the herdr-core installer puts hc.exe (and herdr-core.exe) on Windows.
+WIN_HC = os.path.join(LOCALAPPDATA, "Programs", "herdr-core", "hc.exe")
 if OS == "windows":
     BIN = WIN_BIN
 planned = []
@@ -61,7 +64,7 @@ def windows_python():
 
 def installed_version():
     try:
-        with open(BIN) as f:
+        with open(BIN, encoding="utf-8") as f:
             m = re.search(r"^VERSION\s*=\s*(\d+)", f.read(), re.M)
         return int(m.group(1)) if m else 0
     except OSError:
@@ -96,7 +99,7 @@ def find_hc():
                     return line
         except (OSError, subprocess.SubprocessError):
             pass
-    for p in ("~/.local/bin/hc", "~/.cargo/bin/hc", "~/.cargo/bin/hc.exe", "~/AppData/Local/Programs/herdr/hc.exe", "/opt/homebrew/bin/hc", "/usr/local/bin/hc"):
+    for p in (WIN_HC, "~/.local/bin/hc", "~/.cargo/bin/hc", "~/.cargo/bin/hc.exe", "/opt/homebrew/bin/hc", "/usr/local/bin/hc"):
         p = os.path.expanduser(p)
         if os.path.isfile(p) and os.access(p, os.X_OK):
             return p
@@ -106,10 +109,54 @@ def find_hc():
 def write_atomic(path, text, mode):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
-    with os.fdopen(fd, "w") as f:
-        f.write(text)
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def task_xml(python, script, user, logon="S4U"):
+    """A Task Scheduler definition for this user, no admin: S4U runs it whether or not anyone is
+    signed in at the screen (herdr-core usually runs from SSH with nobody logged on); started at
+    logon and every 5 minutes (a no-op while it runs, one instance), no 3-day time limit (schtasks
+    /SC ONLOGON's default would end the helper after 72 hours), runs on battery."""
+    return """<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Bergr push alerts for herdr-core</Description></RegistrationInfo>
+  <Triggers>
+    <LogonTrigger><Enabled>true</Enabled><UserId>%s</UserId></LogonTrigger>
+    <TimeTrigger><Enabled>true</Enabled><StartBoundary>2025-01-01T00:00:00</StartBoundary><Repetition><Interval>PT5M</Interval></Repetition></TimeTrigger>
+  </Triggers>
+  <Principals><Principal id="Author"><UserId>%s</UserId><LogonType>%s</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>%s</Command><Arguments>-I "%s"</Arguments></Exec></Actions>
+</Task>
+""" % (xml(user), xml(user), logon, xml(python), xml(script))
+
+
+def windows_user():
+    """DOMAIN\\user as Task Scheduler knows it. Over SSH, USERDOMAIN can say WORKGROUP, which
+    maps to no account, so whoami goes first."""
+    out = None if DRY else query_output("whoami")
+    if out and out.strip():
+        return out.strip().splitlines()[0]
+    return os.environ.get("USERNAME") or os.path.basename(HOME)
 
 
 def xml(s):
@@ -128,9 +175,17 @@ def install(script):
     result = {"ok": True, "version": version, "os": OS}
     if OS == "windows":
         write_atomic(BIN, script, 0o644)
-        action = '"%s" -I "%s"' % (windows_python(), BIN)
+        os.makedirs(os.path.dirname(WIN_TASK_XML), exist_ok=True)
+        user = windows_user()
         sh("schtasks", "/End", "/TN", TASK)
-        if sh("schtasks", "/Create", "/TN", TASK, "/TR", action, "/SC", "ONLOGON", "/RL", "LIMITED", "/F") != 0:
+        # S4U first; where policy refuses it, a task that runs while the user is signed in.
+        for logon in ("S4U", "InteractiveToken"):
+            with open(WIN_TASK_XML, "w", encoding="utf-16") as f:
+                f.write(task_xml(windows_python(), BIN, user, logon))
+            if sh("schtasks", "/Create", "/TN", TASK, "/XML", WIN_TASK_XML, "/F") == 0:
+                result["logon"] = logon
+                break
+        else:
             return {"ok": False, "error": "schtasks /Create failed"}
         sh("schtasks", "/Run", "/TN", TASK)
     elif OS == "darwin":
@@ -190,7 +245,7 @@ def uninstall():
     if OS == "windows":
         sh("schtasks", "/End", "/TN", TASK)
         sh("schtasks", "/Delete", "/TN", TASK, "/F")
-        files = [BIN]
+        files = [BIN, WIN_TASK_XML]
     elif OS == "darwin":
         sh("launchctl", "bootout", "gui/%d/%s" % (os.getuid(), LABEL))
         files = [PLIST_PATH, BIN]

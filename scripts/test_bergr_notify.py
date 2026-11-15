@@ -1082,6 +1082,83 @@ class FakeChild:
         return 0
 
 
+class WindowsTests(unittest.TestCase):
+    """The helper's Windows paths, checked on any OS by pretending os.name == "nt"."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.local = os.path.join(self.tmp.name, "Local")
+        os.makedirs(os.path.join(self.local, "Programs", "herdr-core"))
+
+    def test_setup_puts_herdr_core_on_path_once(self):
+        env = {"LOCALAPPDATA": self.local, "PATH": "sysdir"}
+        with mock.patch.object(notify.os, "name", "nt"):
+            notify.windows_setup(env, stderr=object())
+            notify.windows_setup(env, stderr=object())
+        herdr = os.path.join(self.local, "Programs", "herdr-core")
+        self.assertEqual(env["PATH"].split(os.pathsep), [herdr, "sysdir"])
+
+    def test_setup_logs_to_a_file_under_pythonw(self):
+        env = {"LOCALAPPDATA": self.local, "PATH": ""}
+        saved = notify.sys.stderr
+        try:
+            with mock.patch.object(notify.os, "name", "nt"), mock.patch.object(notify.sys, "stderr", None):
+                f = notify.windows_setup(env)
+                self.assertIsNotNone(f)
+                notify.log("hello")
+                f.close()
+        finally:
+            notify.sys.stderr = saved
+        with open(os.path.join(self.local, "bergr", "bergr-notify.log"), encoding="utf-8") as fh:
+            self.assertIn("hello", fh.read())
+
+    def test_setup_does_nothing_elsewhere(self):
+        env = {"LOCALAPPDATA": self.local, "PATH": "/bin"}
+        with mock.patch.object(notify.os, "name", "posix"):
+            self.assertIsNone(notify.windows_setup(env, stderr=None))
+        self.assertEqual(env["PATH"], "/bin")
+
+    def test_children_get_no_console_window(self):
+        if os.name != "nt":
+            self.assertEqual(notify.NO_WINDOW, {})
+        calls = []
+
+        def fake_run(*a, **k):
+            calls.append(k)
+            raise OSError("missing")
+        with mock.patch.object(notify, "NO_WINDOW", {"creationflags": 0x08000000}), \
+                mock.patch.object(notify.subprocess, "run", fake_run):
+            self.assertIsNone(notify._git(self.tmp.name, ["status"]))  # git missing: skipped, no crash
+            with self.assertRaises(OSError):
+                notify._hc_run(["hc", "list"])
+        self.assertTrue(calls and all(k.get("creationflags") == 0x08000000 for k in calls))
+
+    def test_features_avoid_posix_only_calls_on_windows(self):
+        cfg_dir = os.path.join(self.tmp.name, "cfg")
+        os.makedirs(cfg_dir)
+        cfg = os.path.join(cfg_dir, "push.json")
+
+        def boom(*a, **k):
+            raise AssertionError("POSIX-only call on Windows")
+
+        def no_git(cmd, *a, **k):  # git isn't installed; nothing else may be spawned
+            if cmd[0] == "git":
+                raise FileNotFoundError("git")
+            boom()
+        with mock.patch.object(notify.os, "name", "nt"), \
+                mock.patch.object(notify.sys, "platform", "win32"), \
+                mock.patch.object(notify.os, "getuid", boom, create=True), \
+                mock.patch.object(notify.subprocess, "Popen", no_git):
+            awake = notify.KeepAwake(pid=1)
+            awake.update(2)  # keep-awake: nothing to spawn on Windows
+            self.assertFalse(awake.held())
+            self.assertIsNone(notify.battery_reading())  # disk only
+            self.assertIsNotNone(notify.disk_reading(self.tmp.name))
+            self.assertIsNone(notify.record_turn_baseline("t1", self.tmp.name, cfg))  # not a repo
+            notify.record_pending_answer(os.path.join(cfg_dir, "answers.json"), "t1", 1, "q")
+
+
 class KeepAwakeTests(unittest.TestCase):
     def make(self, platform="darwin"):
         self.t, self.spawned = [1000.0], []
