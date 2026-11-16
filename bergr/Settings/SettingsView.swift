@@ -17,6 +17,8 @@ struct SettingsView: View {
     @State private var keepAlive = KeepAlive.shared
     @AppStorage(LiveActivityKeys.push) private var liveActivityPush = false
     @AppStorage(QuietAgents.key) private var hideAfter = QuietAgents.defaultSeconds
+    @AppStorage(LinkedMachines.showKey) private var showLinked = true
+    @AppStorage(LinkedMachines.hiddenKey) private var hiddenLinked = ""
     private var liveActivityHistory: [String] {
         UserDefaults.standard.stringArray(forKey: LiveActivityKeys.history) ?? []
     }
@@ -132,6 +134,25 @@ struct SettingsView: View {
                 .frame(minHeight: 44)
             } footer: {
                 Text("Finished and idle agents untouched for longer don't count on the Lock Screen and widget, and fold away under Older in the list. Agents that need you or are working always show.")
+            }
+
+            Section {
+                Toggle(isOn: $showLinked) {
+                    Label {
+                        Text("Show machines linked through another")
+                    } icon: {
+                        SettingsIcon("point.3.connected.trianglepath.dotted", color: .gray)
+                    }
+                }
+                .frame(minHeight: 44)
+                if !hiddenLinked.isEmpty {
+                    Button("Show Hidden Linked Machines (\(LinkedMachines.hidden(hiddenLinked).count))") {
+                        hiddenLinked = ""
+                    }
+                    .frame(minHeight: 44)
+                }
+            } footer: {
+                Text("A machine another machine's core is linked to shows under it as \"via\" that machine. Turn this off, or long-press one machine's heading to hide just it, when you've also added those machines directly.")
             }
 
             #if os(iOS)

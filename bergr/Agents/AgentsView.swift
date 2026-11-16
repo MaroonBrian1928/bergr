@@ -88,6 +88,8 @@ struct AgentsView: View {
     @State private var digest = AwayDigestModel()
     @State private var showingMigration = false
     @AppStorage("bergr.directBanner.dismissed") private var dismissedBanner = ""
+    @AppStorage(LinkedMachines.showKey) private var showLinked = true
+    @AppStorage(LinkedMachines.hiddenKey) private var hiddenLinked = ""
 
     init(sessions: SessionStore, openBeside: ((_ host: Host.ID, _ address: String) -> Void)? = nil,
          open: @escaping (_ host: Host.ID, _ address: String) -> Void) {
@@ -180,7 +182,10 @@ struct AgentsView: View {
         let hidden = SameMachine.duplicates(hosts.hosts.map { ($0, sessions.existing($0.id)?.coreName) })
         return hosts.hosts.filter { !hidden.keys.contains($0.id) }.map { host in
             let session = sessions.session(for: host)
-            let live = session.terminals.filter(\.isLive)
+            let hiddenNames = LinkedMachines.hidden(hiddenLinked)
+            let live = session.terminals.filter(\.isLive).filter {
+                LinkedMachines.shows($0.address, showLinked: showLinked, hidden: hiddenNames)
+            }
             let ordered = AgentsOrdering.ordered(live)
             return MachineLists(
                 host: host, session: session, ordered: ordered,
@@ -228,6 +233,11 @@ struct AgentsView: View {
                         LinkedMachineHeader(name: group.name, via: host.name, state: group.state,
                                             count: group.terminals.count)
                             .padding(.top, 10)
+                            .contextMenu {
+                                Button("Hide \(group.name) Here", systemImage: "eye.slash") {
+                                    hiddenLinked = LinkedMachines.hiding(group.name, in: hiddenLinked)
+                                }
+                            }
                             .listRowSeparator(.hidden)
                             .selectionDisabled()
                         ForEach(group.terminals) { terminal in row(terminal, host: host, session: session) }
@@ -650,6 +660,28 @@ private struct MachineHealthLine: View {
         .sheet(isPresented: $showing) {
             MachineHealthSheet(health: health, failure: failure, source: source)
         }
+    }
+}
+
+/// Machines reached through another machine's core ("via mac"): all of them can be turned off, or
+/// one at a time, for a machine that is also added directly and would otherwise show twice.
+enum LinkedMachines {
+    static let showKey = "agents.showLinkedMachines"
+    static let hiddenKey = "agents.hiddenLinkedMachines"
+
+    static func hidden(_ stored: String) -> Set<String> {
+        Set(stored.split(separator: "\n").map { $0.lowercased() })
+    }
+
+    static func hiding(_ name: String, in stored: String) -> String {
+        (hidden(stored).union([name.lowercased()])).sorted().joined(separator: "\n")
+    }
+
+    /// Whether a terminal shows: a core's own (`t3`) always; a linked one (`laptop/t3`) unless
+    /// linked machines are off or that machine is hidden.
+    static func shows(_ address: String, showLinked: Bool, hidden: Set<String>) -> Bool {
+        guard let slash = address.firstIndex(of: "/") else { return true }
+        return showLinked && !hidden.contains(address[..<slash].lowercased())
     }
 }
 

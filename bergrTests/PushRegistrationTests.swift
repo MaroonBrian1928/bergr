@@ -37,12 +37,12 @@ struct PushRegistrationTests {
 
     @Test func commandEncodesScriptAndPayload() throws {
         let payload = Data("{\"x\":1}".utf8)
-        let parts = PushRegistration.command(payload: payload).command.split(separator: " ")
-        #expect(parts.prefix(3) == ["python3", "-I", "-c"])
-        let args = parts.suffix(2)
-        let script = try #require(Data(base64Encoded: String(args.first!)))
+        let command = PushRegistration.command(payload: payload)
+        #expect(command.command == #"python3 -I -c "import sys;exec(sys.stdin.buffer.readline())""#)
+        let parts = String(decoding: try #require(command.input), as: UTF8.self).split(separator: "'")
+        let script = try #require(Data(base64Encoded: String(parts[5])))
         #expect(String(decoding: script, as: UTF8.self) == PushRegistration.mergeScript)
-        #expect(Data(base64Encoded: String(args.last!)) == payload)
+        #expect(Data(base64Encoded: String(parts[3])) == payload)
     }
 
     @MainActor @Test func parsesVersionLine() {
@@ -62,14 +62,17 @@ struct PushRegistrationTests {
         #expect(PushRegistration.declinedHosts(defaults) == [b.uuidString])
     }
 
-    @Test func installerCommandCarriesInstallerAndArgs() throws {
-        let parts = PushRegistration.installerCommand(installer: "print(1)", op: "install", script: "VERSION = 1")
-            .command.split(separator: " ")
-        #expect(parts.prefix(3) == ["python3", "-I", "-c"])
+    @Test func installerCommandCarriesInstallerAndArgsOnStdin() throws {
+        let script = String(repeating: "x", count: 200_000)
+        let command = PushRegistration.installerCommand(installer: "print(1)", op: "install", script: script)
+        // The script must not ride on the command line: Linux caps one argument at 128 KB.
+        #expect(command.command == #"python3 -I -c "import sys;exec(sys.stdin.buffer.readline())""#)
+        let line = String(decoding: try #require(command.input), as: UTF8.self)
+        let parts = line.split(separator: "'")
         #expect(String(decoding: try #require(Data(base64Encoded: String(parts[parts.count - 2]))), as: UTF8.self) == "print(1)")
-        let args = try #require(Data(base64Encoded: String(parts.last!)))
+        let args = try #require(Data(base64Encoded: String(parts[3])))
         let object = try #require(try JSONSerialization.jsonObject(with: args) as? [String: String])
-        #expect(object == ["op": "install", "script": "VERSION = 1"])
+        #expect(object == ["op": "install", "script": script])
     }
 
     @Test func payloadIncludesKeyOnlyWhenGiven() throws {
@@ -123,7 +126,7 @@ struct PushRegistrationTests {
         #expect(install.command.count < 8191 && !install.command.contains("$"))
         #expect(install.command == PushRegistration.windowsPython + stage1)
         #expect(String(decoding: try #require(install.input), as: UTF8.self).contains(Data("print(1)".utf8).base64EncodedString()))
-        #expect(PushRegistration.command(payload: payload).input == nil)
+        #expect(PushRegistration.command(payload: payload).input != nil)
     }
 
     @Test func installQueueIsFIFOAndDedupes() {

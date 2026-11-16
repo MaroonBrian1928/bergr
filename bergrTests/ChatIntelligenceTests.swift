@@ -22,6 +22,15 @@ private let fourLines = "a\nb\nc\nd"
 
 @MainActor
 struct ToolOutputSummaryTests {
+    @MainActor @Test func stepsGetOneLineAndPromptEchoesAreDropped() async {
+        let summaries = ToolOutputSummaries(writer: FakeWriter(reply: "Fix the padding and rerun the tests."))
+        await summaries.requestSteps(id: "s", titles: ["Read a.swift", "Read b.swift", "Ran just test"])
+        #expect(summaries.summary(for: "s") == "Fix the padding and rerun the tests")
+        let echo = ToolOutputSummaries(writer: FakeWriter(reply: "counts: 689, what failed: none, names that matter: bergr"))
+        await echo.request(id: "t", finished: true, name: "Bash", command: "just test", output: "a\nb\nc\nd\ne\nf")
+        #expect(echo.summary(for: "t") == nil)
+    }
+
     @Test func longOutputOfAFinishedToolGetsOneLine() async {
         let writer = FakeWriter(reply: "Ran 214 tests, 2 failed: test_auth_redirect, test_logout")
         let summaries = ToolOutputSummaries(writer: writer)
@@ -208,5 +217,41 @@ struct ReplySuggestionTests {
             await suggestions.request(messageID: "m1", text: "All done.", working: false)
         }
         #expect(await writer.calls == ReplySuggestions.maxAttempts)
+    }
+}
+
+struct ToolRunTitleTests {
+    private func step(_ name: String, _ summary: String, failed: Bool = false) -> ToolRun.Step {
+        ToolRun.Step(id: UUID().uuidString, name: name, summary: summary, output: nil, failed: failed)
+    }
+
+    @Test func describedCommandsShowTheLatestDescription() {
+        let steps = [step("Bash", "Read the test\nsed x"), step("Bash", "ls"), step("Bash", "Run all tests\njust test")]
+        #expect(ToolRun.title(steps) == "Run all tests +2")
+    }
+
+    @Test func factsByConsequence() {
+        let steps = [step("Read", "/a/x.swift"), step("Edit", "/a/ChatView.swift"), step("Bash", "just test"),
+                     step("Bash", "ls"), step("Edit", "/a/ChatView.swift")]
+        #expect(ToolRun.title(steps) == "Edited ChatView.swift · ran 2 commands · read 1 file")
+        #expect(ToolRun.title([step("Read", "/a"), step("Grep", "x"), step("Read", "/b")]) == "Explored 3 files")
+        #expect(ToolRun.failedNote(steps) == nil)
+        #expect(ToolRun.failedNote([step("Bash", "x", failed: true), step("Bash", "y")]) == "1 failed")
+    }
+
+}
+
+struct ToolSummaryStoreTests {
+    @MainActor @Test func summariesSurviveARelaunch() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let first = ToolOutputSummaries(writer: FakeWriter(reply: "Fix padding and rerun tests"), store: url)
+        await first.requestSteps(id: "s", titles: ["a", "b"])
+        try await Task.sleep(for: .seconds(1.5))
+        let writer = FakeWriter(reply: "should not be asked")
+        let second = ToolOutputSummaries(writer: writer, store: url)
+        #expect(second.summary(for: "s") == "Fix padding and rerun tests")
+        await second.requestSteps(id: "s", titles: ["a", "b"])
+        #expect(await writer.calls == 0)
     }
 }

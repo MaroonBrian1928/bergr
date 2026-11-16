@@ -62,4 +62,71 @@ import HerdrKit
         #expect(!AnswerFlow.isCodexQuestion(status: try status(app: "codex"), alertQuestion: nil))
         #expect(!AnswerFlow.isCodexQuestion(status: try status(app: "claude"), alertQuestion: "Which db?"))
     }
+
+    @Test func aLaterUserMessageClosesTheQuestion() {
+        let items: [(String, String)?] = [("q1", "Which?"), nil, nil]
+        let info: [String: (async: Bool, answered: Bool)] = ["q1": (true, false)]
+        #expect(CodexQuestionReply.open(items: items, info: { info[$0] }, picked: { _ in false }, lastUserMessage: 1) == nil)
+        #expect(CodexQuestionReply.open(items: items, info: { info[$0] }, picked: { _ in false }, lastUserMessage: nil)?.id == "q1")
+    }
+}
+
+struct ConversationAlertsTests {
+    @Test func newAlertReplacesOlderFinishedOnesOfTheSameConversation() {
+        let info: [AnyHashable: Any] = ["host": "mac", "address": "t1"]
+        let delivered: [(id: String, info: [AnyHashable: Any], category: String)] = [
+            ("old-done", ["host": "mac", "address": "t1"], "reply"),
+            ("old-question", ["host": "mac", "address": "t1"], AnswerCategory.identifier(for: AnswerQuestion(title: "Run?", options: ["Yes", "No"], keys: false)) ?? "x"),
+            ("other-agent", ["host": "mac", "address": "t2"], "reply"),
+            ("new", ["host": "mac", "address": "t1"], "reply"),
+        ]
+        #expect(ConversationAlerts.superseded(by: info, keeping: "new", among: delivered) == ["old-done"])
+    }
+}
+
+struct MessageTimeRevealTests {
+    @Test func leftOnlyAfterADeliberatePull() {
+        #expect(MessageTimeReveal.clamp(40) == 0)
+        #expect(MessageTimeReveal.clamp(-20) == 0)
+        #expect(MessageTimeReveal.clamp(-70) == -40)
+        #expect(MessageTimeReveal.clamp(-206) == -(MessageTimeReveal.width + 100 * 0.15))
+    }
+
+    @Test func labelShowsOnlyTheTimeForToday() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let today = MessageTimeReveal.label(now.addingTimeInterval(-60), now: now, calendar: calendar)
+        let older = MessageTimeReveal.label(now.addingTimeInterval(-30 * 86_400), now: now, calendar: calendar)
+        #expect(today.count < older.count)
+    }
+}
+
+struct UsageHistoryChartTests {
+    @Test func dropsMarkResetsAndSplitTheLine() {
+        let t = Date(timeIntervalSince1970: 0)
+        let e = [10.0, 40, 80, 2, 20].enumerated().map {
+            UsageHistory.Entry(key: "k", time: t.addingTimeInterval(Double($0.offset) * 600), percent: $0.element)
+        }
+        #expect(UsageHistoryChart.resets(e) == [t.addingTimeInterval(1800)])
+        #expect(UsageHistoryChart.segments(e).map(\.count) == [3, 2])
+    }
+}
+
+struct ChangesFolderAndVerdictTests {
+    @Test func workFolderFollowsEditsAndCd() {
+        let edit = ChatFeed.Item(id: "1", kind: .tool(name: "Edit", summary: "/Users/me/src/app/a.swift"))
+        let cd = ChatFeed.Item(id: "2", kind: .tool(name: "Bash", summary: "cd ~/src/bergr && just test"))
+        let other = ChatFeed.Item(id: "3", kind: .tool(name: "Bash", summary: "ls"))
+        #expect(ChangesSummary.workFolder(in: [edit, other], cwd: "/Users/me") == "/Users/me/src/app")
+        #expect(ChangesSummary.workFolder(in: [edit, cd, other], cwd: "/Users/me") == "~/src/bergr")
+        #expect(ChangesSummary.workFolder(in: [other], cwd: "/Users/me") == "/Users/me")
+        #expect(ChangesModel.git("~/src/bergr", "status").hasPrefix(#"git -C ~/"src/bergr""#))
+    }
+
+    @Test func runnerSummaryBeatsStrayErrorWords() {
+        #expect(TestRun.verdict("finish(id:error:): dropping\n✔ Test run with 686 tests in 117 suites passed after 10.2 seconds.") == .passed)
+        #expect(TestRun.verdict("✘ Test run with 3 tests in 1 suite failed after 0.1 seconds with 1 issue.") == .failed)
+        #expect(TestRun.verdict("Ran 80 tests in 11.0s\n\nOK") == .passed)
+    }
 }

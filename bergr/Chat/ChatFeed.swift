@@ -185,6 +185,10 @@ final class ChatFeed {
     /// read again), and when: the chat fades those in. Set before they're shown, so the very
     /// first frame of a new row already knows it is new.
     private(set) var arrivedAt: [String: Date] = [:]
+    /// When each message was written, from the transcript (shown on a sideways drag in the chat).
+    @ObservationIgnored private(set) var sentAt: [String: Date] = [:]
+    /// Tools that reported an error or a non-zero exit (Claude's is_error, Codex's exit code).
+    private(set) var toolFailed: Set<String> = []
 
     /// More about a question card than its title and options (Claude's AskUserQuestion): option
     /// descriptions, that it's answered in the terminal by number, its place among the questions
@@ -602,8 +606,10 @@ final class ChatFeed {
 
     private func apply(_ event: [String: Any], type: String, prepared: ChatEvent? = nil) {
         guard let id = event["id"] as? String else { return }
+        if let at = event["at"] as? Double { sentAt[id] = Date(timeIntervalSince1970: at) }
         if type == "toolout" {
-            if let text = event["text"] as? String, toolOutput[id] != text { toolOutput[id] = text }
+            if event["failed"] as? Bool == true, !toolFailed.contains(id) { toolFailed.insert(id) }
+            if let text = event["text"] as? String, !text.isEmpty, toolOutput[id] != text { toolOutput[id] = text }
             return
         }
         let kind: Kind

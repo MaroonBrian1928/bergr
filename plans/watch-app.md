@@ -1,6 +1,6 @@
 # Handoff: native Apple Watch app
 
-Status: **built, tested, not merged.** The code is on local branch `watch-app` (commit `abf1775`,
+Status: **shelved (2026-11-15).** Built, tested, not merged. The code is on local branch `watch-app` (commit `abf1775`,
 based on `ff654f1`; main has moved on, so rebase first). It is blocked only by signing.
 
 ## What it is
@@ -32,8 +32,8 @@ unaffected. Not run in a watch simulator (no watchOS runtime installed: `xcodebu
 
 ## The blocker: signing
 
-The new bundle ids (`com.brianriste.bergr.dev.watchkitapp` and its widget) with the App Group
-`group.com.brianriste.bergr` need new development profiles. From the command line here, neither
+The new bundle ids (`<prefix>.bergr.dev.watchkitapp` and its widget) with the App Group
+`group.<prefix>.bergr` need new development profiles. From the command line here, neither
 route can create them:
 
 - `just build` / `just phone`: "No Accounts" (Xcode's signed-in account isn't visible to
@@ -50,6 +50,20 @@ Alternative if profiles can't be made: drop the App Group from the two watch tar
 profile then signs them). The complication would lose its shared count, so it would need another
 source (e.g. the watch app writing its own `UserDefaults` via a shared container is not possible
 without the group — consider showing only the app, no complication).
+
+## Shelved, and why (2026-11-15)
+
+It installed on the real watch only after three fixes, then was shelved: the watch list only
+updates while the phone app runs, so without background keep-running it is mostly stale, and
+alerts on the watch already carry answer buttons. Worth reviving only with relay-driven updates.
+
+Fixes needed to install it (not on the branch yet; redo them):
+- Signing: be signed in to Xcode → Settings → Accounts; then `just build` creates the profiles.
+- The watch must be in the dev profile: it was registered through the App Store Connect API
+  (its UDID); delete the cached watch profiles so new ones include it.
+- Every target's `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION` must equal the iPhone app's: the
+  watch targets were still 0.3.8 (2) and the watch silently refused the install (progress fills,
+  then back to "Install").
 
 ## Still to check on a real watch
 

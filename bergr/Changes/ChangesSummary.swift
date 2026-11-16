@@ -33,6 +33,24 @@ enum ChangesSummary {
         diff.split(separator: "\n", omittingEmptySubsequences: false).prefix(diffLineLimit).joined(separator: "\n")
     }
 
+    /// Where the agent last worked: the folder of the file it last edited, or the folder its last
+    /// `cd <path> &&` command went to; else the terminal's own folder. An agent started in the home
+    /// folder that works in a repository elsewhere shows that repository's changes.
+    static func workFolder(in items: [ChatFeed.Item], cwd: String?) -> String? {
+        let editors: Set<String> = ["edit", "write", "multiedit", "notebookedit", "str_replace_based_edit_tool"]
+        for item in items.reversed() {
+            guard case .tool(let name, let summary) = item.kind else { continue }
+            let command = TestRun.command(of: summary)
+            if editors.contains(name.lowercased()), command.hasPrefix("/") || command.hasPrefix("~/") {
+                return (command as NSString).deletingLastPathComponent
+            }
+            if let match = command.firstMatch(of: /^cd\s+("?)([\/~][^"&;]*?)\1\s*(&&|;)/) {
+                return String(match.output.2).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return cwd
+    }
+
     /// The text of the agent's latest assistant message, if any.
     static func lastReply(in items: [ChatFeed.Item]) -> String? {
         for item in items.reversed() {

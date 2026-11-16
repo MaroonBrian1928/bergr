@@ -52,6 +52,8 @@ struct ChatView: View {
     /// How many rows to draw. The list isn't lazy, so a long conversation drawn whole is slow to
     /// open and to scroll; the latest rows show, earlier ones a tap away. Search looks at all.
     @State private var rowLimit = Self.rowPage
+    /// A sideways drag's pull, which shows the messages' times (iOS).
+    @State private var timeReveal = MessageTimeReveal.Pull()
     // Rows shown at once ("Show earlier" adds more). Fewer on the Mac, where a wide window lays out
     // long rows and every one is measured.
     #if os(macOS)
@@ -215,7 +217,7 @@ struct ChatView: View {
             }
         }
         .sheet(isPresented: $showingChanges) {
-            ChangesSheet(session: session, folder: terminal?.cwd, address: terminal?.address, items: feed.items, toolOutput: feed.toolOutput)
+            ChangesSheet(session: session, folder: ChangesSummary.workFolder(in: feed.items, cwd: terminal?.cwd), address: terminal?.address, items: feed.items, toolOutput: feed.toolOutput)
         }
         .sheet(isPresented: $showingUsage) {
             UsageSheet(usage: feed.usage, agent: agent, machine: session?.host.name,
@@ -354,12 +356,16 @@ struct ChatView: View {
                     // of them changed, and only the changed ones are built (see `RowList`).
                     RowList(store: rowStore, epoch: epoch)
                 }
+
                 // The read conversation arrives in one step: fade it in where it lands (no slide).
                 .opacity(feed.items.isEmpty ? 0 : 1)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: feed.items.isEmpty)
                 trailingRows(shownReplies: shownReplies, loose: loose, noMatches: noMatches, state: state)
             }
             .modifier(IdleHitTesting(state: scroll))
+            // The whole list slides as one (on the stack, not the rows' Group: a Group hands its
+            // modifiers to each row, and each row got its own clip, cutting off letters).
+            .modifier(MessageTimeReveal.Slide(pull: timeReveal))
             // Not a scroll target layout: with one, the scroll position followed the top row as
             // the list scrolled, and each change rebuilt the chat and redrew its text (slow on the
             // Mac). Showing earlier rows still scrolls to the old first row by its id.
@@ -375,6 +381,18 @@ struct ChatView: View {
             .frame(maxWidth: .infinity)
         }
         .scrollPosition($position)
+        // Drag sideways to see when each message was written (like Messages); it springs back.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 24)
+                .onChanged { value in
+                    let dx = value.translation.width
+                    guard dx < 0, abs(dx) > abs(value.translation.height) * 2 else { return }
+                    timeReveal.offset = MessageTimeReveal.clamp(dx)
+                }
+                .onEnded { _ in
+                    guard timeReveal.offset != 0 else { return }
+                    withAnimation(reduceMotion ? nil : .spring(duration: 0.3)) { timeReveal.offset = 0 }
+                })
         .onScrollPhaseChange { _, phase in
             if scroll.scrolling != phase.isScrolling { scroll.scrolling = phase.isScrolling }
         }
@@ -901,7 +919,8 @@ struct ChatView: View {
             if case .question(let title, _) = item.kind { return (item.id, title) }
             return nil
         }, info: { id in feed.questionInfo[id].map { ($0.codexAsync, $0.answer != nil) } },
-           picked: { questionPicks[$0] != nil || questionSending.contains($0) })
+           picked: { questionPicks[$0] != nil || questionSending.contains($0) },
+           lastUserMessage: feed.items.lastIndex { if case .user = $0.kind { return true }; return false })
     }
 
     private func answerCodexQuestion(_ answer: String, title: String, id: String) {
@@ -1083,7 +1102,8 @@ struct ChatView: View {
             let started = tools.started
             key.steps = items.compactMap { item -> ToolRun.Step? in
                 if case .tool(let name, let summary) = item.kind, !started.contains(item.id) {
-                    ToolRun.Step(id: item.id, name: name, summary: summary, output: feed.toolOutput[item.id])
+                    ToolRun.Step(id: item.id, name: name, summary: summary, output: feed.toolOutput[item.id],
+                                 failed: feed.toolFailed.contains(item.id))
                 } else { nil }
             }
             if !tools.agents.isEmpty {
@@ -1248,10 +1268,12 @@ struct ChatView: View {
     private struct RowList: View {
         let store: RowStore
         let epoch: Int
+        /// How far a sideways drag has pulled the rows (see `MessageTimeReveal`).
 
         var body: some View {
             ForEach(store.slots) { slot in
                 RowSlot(box: slot.box, version: slot.version)
+                    .modifier(MessageTimeReveal(time: store.chat?.feed.sentAt[slot.id]))
                     // A row is hit as its box, not its text's outline: matching the outline
                     // on every pointer move made scrolling slow on the Mac.
                     .contentShape(.rect)
@@ -1745,12 +1767,14 @@ private struct SubagentLine: View {
 
 /// A run of tool calls: one line that says what happened ("Ran 2 commands"), opening to every
 /// step. The run the agent is still in says "Running…" with a shimmer.
-private struct ToolRun: View {
+struct ToolRun: View {
     struct Step: Identifiable, Equatable {
         let id: String
         let name: String
         let summary: String
         var output: String?
+        /// The tool reported an error or a non-zero exit.
+        var failed = false
     }
 
     let steps: [Step]
@@ -1777,40 +1801,85 @@ private struct ToolRun: View {
         }
     }
 
-    private var title: String { Self.title(steps) }
+    /// One line, whatever it says: the on-device model's few words on what the steps did, once
+    /// written ("Fix padding and rerun tests"), else the counts. Always one line, so the swap
+    /// never changes the row's height (taller rows made the chat creep up).
+    private var title: String {
+        guard steps.count > 1, let gist = summaries.summary(for: stepsKey) else { return Self.title(steps) }
+        return gist
+    }
 
-    /// The newest step with output, when the run is done and that output is long enough to summarize.
+    private var stepsKey: String { "steps|" + (steps.last?.id ?? "") }
+
+    /// The step whose output the second line sums up, once the run is done: the last failed one
+    /// (its output says what went wrong), else the newest with output; only when that output is long.
     private var digestStep: Step? {
-        guard !running, !waiting, let step = steps.last(where: { $0.output != nil }),
+        guard !running, !waiting,
+              let step = steps.last(where: { $0.failed && $0.output != nil }) ?? steps.last(where: { $0.output != nil }),
               let output = step.output, ToolOutputSummaries.isLong(output) else { return nil }
         return step
     }
     /// The one-line summary of that output, once written on the device.
     private var digest: String? { digestStep.flatMap { summaries.summary(for: $0.id) } }
 
-    private static func title(_ steps: [Step]) -> String {
+
+    static func title(_ steps: [Step]) -> String {
         if steps.count == 1, let step = steps.first {
             let line = step.summary.split(separator: "\n").first.map(String.init) ?? ""
             let what = line.isEmpty ? step.name : line
+            // Claude gives a command a description on its first line: that already reads as a
+            // sentence ("Read the misplaced padding context"), without "Ran" in front.
+            let described = step.summary.contains("\n") && !line.isEmpty
             switch kind(step.name) {
-            case .command: return "Ran " + what
+            case .command: return described ? line : "Ran " + what
             case .edit: return "Edited " + what
             case .read: return "Read " + what
             case .search: return "Searched " + what
             case .other: return line.isEmpty ? step.name : "\(step.name) · \(line)"
             }
         }
+        // Claude described its commands: the latest description and how many more beats
+        // "Ran 4 commands" (shown until, or instead of, the model's few words).
+        if steps.allSatisfy({ kind($0.name) == .command }),
+           let last = steps.last(where: { $0.summary.contains("\n") }),
+           let line = last.summary.split(separator: "\n").first.map({ $0.trimmingCharacters(in: .whitespaces) }),
+           !line.isEmpty {
+            return line + " +\(steps.count - 1)"
+        }
+        // Facts only, by consequence: what changed (naming up to two files), then what ran, then
+        // what was only looked at.
         var counts: [Kind: Int] = [:]
         for step in steps { counts[kind(step.name), default: 0] += 1 }
         func n(_ count: Int, _ one: String, _ many: String) -> String { "\(count) \(count == 1 ? one : many)" }
         var parts: [String] = []
+        if let c = counts[.edit] {
+            var files: [String] = []
+            for step in steps where kind(step.name) == .edit {
+                let path = step.summary.split(separator: "\n").first.map(String.init) ?? ""
+                let name = (path as NSString).lastPathComponent
+                if !name.isEmpty, !files.contains(name) { files.append(name) }
+            }
+            parts.append((1...2).contains(files.count) ? "edited " + files.joined(separator: ", ")
+                         : "edited " + n(files.isEmpty ? c : files.count, "file", "files"))
+        }
         if let c = counts[.command] { parts.append("ran " + n(c, "command", "commands")) }
-        if let c = counts[.edit] { parts.append("edited " + n(c, "file", "files")) }
-        if let c = counts[.read] { parts.append("read " + n(c, "file", "files")) }
-        if let c = counts[.search] { parts.append("searched " + n(c, "time", "times")) }
+        let looked = (counts[.read] ?? 0) + (counts[.search] ?? 0)
+        if looked > 0 {
+            if parts.isEmpty && counts[.other] == nil { parts.append("explored " + n(looked, "file", "files")) }
+            else {
+                if let c = counts[.read] { parts.append("read " + n(c, "file", "files")) }
+                if let c = counts[.search] { parts.append("searched " + n(c, "time", "times")) }
+            }
+        }
         if let c = counts[.other] { parts.append(n(c, "other step", "other steps")) }
-        let text = parts.joined(separator: ", ")
+        let text = parts.joined(separator: " · ")
         return text.prefix(1).uppercased() + text.dropFirst()
+    }
+
+    /// "1 failed" when any step reported an error.
+    static func failedNote(_ steps: [Step]) -> String? {
+        let failed = steps.filter(\.failed).count
+        return failed == 0 ? nil : "\(failed) failed"
     }
 
     private var symbol: String {
@@ -1823,7 +1892,10 @@ private struct ToolRun: View {
     @State private var height: CGFloat?
     /// The glide and clip apply while the run is live and shortly after (so folding shut still plays).
     @State private var gliding = false
-    private var clipReach: CGFloat { max(0, (PlatformMetrics.controlHeight - 24) / 2) }
+    /// How far past the measured box the clip reaches. The rows hang out of the box by the pulled-in
+    /// padding plus however much taller than their 28-pt row larger text makes them, so this is
+    /// generous: a tight reach cut the tops and tails of letters at bigger text sizes.
+    @ScaledMetric(relativeTo: .footnote) private var clipReach: CGFloat = 40
 
     var body: some View {
         #if DEBUG
@@ -1888,11 +1960,20 @@ private struct ToolRun: View {
             if earlier > 0 {
                 HStack(spacing: 8) {
                     Image(systemName: "checkmark").font(.footnote).frame(width: 18)
-                    Text("\(earlier) earlier step\(earlier == 1 ? "" : "s")").font(.footnote)
+                    Text(earlierSummary(earlier) ?? "\(earlier) earlier step\(earlier == 1 ? "" : "s")")
+                        .font(.footnote)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     Spacer(minLength: 0)
                 }
                 .frame(minHeight: 28, alignment: .leading)
                 .contentTransition(.numericText())
+                // A few words on what the folded steps did (one line, so the run never grows by it).
+                .task(id: earlierKey(earlier)) {
+                    guard earlier > 1 else { return }
+                    await summaries.requestSteps(id: earlierKey(earlier),
+                                                 titles: steps.prefix(earlier).map { Self.title([$0]) })
+                }
             }
             ForEach(shown, id: \.id) { step in
                 let newest = step.id == steps.last?.id
@@ -1932,6 +2013,19 @@ private struct ToolRun: View {
         }
         .animation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.35), value: steps.map(\.id))
         .animation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.35), value: outputLines)
+    }
+
+    private func earlierKey(_ earlier: Int) -> String {
+        "steps|" + (steps.prefix(earlier).last?.id ?? "")
+    }
+
+    /// The newest few words written for this run's folded steps: while the next are written, the
+    /// last ones stay, so the line doesn't flip back to a count.
+    private func earlierSummary(_ earlier: Int) -> String? {
+        for n in stride(from: earlier, through: 2, by: -1) {
+            if let line = summaries.summary(for: earlierKey(n)) { return line }
+        }
+        return nil
     }
 
     private static func lineCount(_ text: String) -> Int {
@@ -1982,10 +2076,10 @@ private struct ToolRun: View {
                             .shimmer(palette: palette)
                     } else {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(title)
+                            (Text(title) + (Self.failedNote(steps).map { Text(" · " + $0).foregroundStyle(.red) } ?? Text("")))
                                 .font(.footnote)
                                 .lineLimit(1)
-                                .truncationMode(.middle)
+                                .truncationMode(.tail)
                             if let digest {
                                 Text(digest)
                                     .font(.footnote)
@@ -2003,7 +2097,7 @@ private struct ToolRun: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(running ? "Running: \(title)" : [title, digest].compactMap { $0 }.joined(separator: ". "))
+            .accessibilityLabel(running ? "Running: \(title)" : [title, Self.failedNote(steps), digest].compactMap { $0 }.joined(separator: ". "))
             .accessibilityHint(open ? "Hides the steps" : "Shows each step")
 
             if open || waiting {
@@ -2032,8 +2126,14 @@ private struct ToolRun: View {
             guard let step = digestStep, let output = step.output else { return }
             await summaries.request(id: step.id, finished: true, name: step.name, command: step.summary, output: output)
         }
+        .task(id: running || waiting ? "" : stepsKey) {
+            guard !running, !waiting, steps.count > 1 else { return }
+            await summaries.requestSteps(id: stepsKey, titles: steps.map { Self.title([$0]) })
+        }
         .foregroundStyle(palette.secondary)
-        .padding(.vertical, -max(0, (PlatformMetrics.controlHeight - 24) / 2)) // Keep the control from adding air between messages.
+        // Keep the control from adding air between messages; not with the second line, which
+        // makes the row taller than the control (pulling it in clipped both lines).
+        .padding(.vertical, digest == nil || running || waiting ? -max(0, (PlatformMetrics.controlHeight - 24) / 2) : 0)
     }
 }
 
@@ -2872,3 +2972,68 @@ struct Isolated<Content: View>: View {
 /// bounced on opening a chat: rows realized near the bottom changed the estimated height, the
 /// bottom anchor moved, more rows realized… The Mac shows fewer rows at a time instead (`rowPage`).
 typealias ChatRows<Content: View> = VStack<Content>
+
+
+/// A sideways drag slides the messages and shows when each was written, in the space it opens.
+struct MessageTimeReveal: ViewModifier {
+    /// The drag's pull. Only `Slide` reads it: the chat and its rows don't redraw while dragging.
+    @MainActor @Observable final class Pull { var offset: CGFloat = 0 }
+
+    static let width: CGFloat = 76
+    let time: Date?
+
+    /// Leftward only (like Messages; times show on the right), and only after a deliberate
+    /// 30-pt pull: the first stretch does nothing, then it follows the finger, then resists.
+    static let deadZone: CGFloat = 30
+
+    static func clamp(_ dx: CGFloat) -> CGFloat {
+        let pulled = max(0, -dx - deadZone)
+        return -(pulled <= width ? pulled : width + (pulled - width) * 0.15)
+    }
+
+    static func label(_ time: Date, now: Date = .now, calendar: Calendar = .current) -> String {
+        if calendar.isDate(time, inSameDayAs: now) { return time.formatted(date: .omitted, time: .shortened) }
+        if let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: time),
+                                              to: calendar.startOfDay(for: now)).day, days < 7 {
+            return time.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        }
+        return time.formatted(.dateTime.month(.abbreviated).day().hour().minute())
+    }
+
+    /// The time on both sides, outside the row: the slide brings one into view. The row takes the
+    /// full width first, so the times sit past the screen's edges and not just past a short row's.
+    func body(content: Content) -> some View {
+        content.frame(maxWidth: time == nil ? nil : .infinity, alignment: .leading).overlay {
+            if let time {
+                let text = Self.label(time)
+                HStack(spacing: 0) {
+                    Self.stamp(text, alignment: .trailing).offset(x: -Self.width)
+                    Spacer(minLength: 0)
+                    Self.stamp(text, alignment: .leading).offset(x: Self.width)
+                }
+                .accessibilityHidden(true)
+            }
+        }
+    }
+
+    private static func stamp(_ text: String, alignment: Alignment) -> some View {
+        Text(text)
+            .font(.caption2)
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .multilineTextAlignment(alignment == .leading ? .leading : .trailing)
+            .frame(width: width - 8, alignment: alignment)
+    }
+
+    /// Moves the whole list with the drag and clips the times waiting outside it.
+    struct Slide: ViewModifier {
+        let pull: Pull
+        func body(content: Content) -> some View {
+            content
+                .offset(x: pull.offset)
+                // Clips only the sides, where the times wait: never the rows' tops and bottoms.
+                .mask { Rectangle().padding(.vertical, -10_000) }
+        }
+    }
+}

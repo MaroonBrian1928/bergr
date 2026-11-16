@@ -50,7 +50,10 @@ final class ChangesModel {
     nonisolated static func git(_ folder: String, _ args: String) -> String {
         var f = folder
         while f.count > 1, f.hasSuffix("\\") || f.hasSuffix("/") { f.removeLast() }
-        return "git -C \"\(f.replacingOccurrences(of: "\"", with: ""))\" \(args)"
+        let quoted = f.replacingOccurrences(of: "\"", with: "")
+        // A home-relative folder (from a `cd ~/…` the agent ran): the shell expands an unquoted ~.
+        if quoted.hasPrefix("~/") { return "git -C ~/\"\(quoted.dropFirst(2))\" \(args)" }
+        return "git -C \"\(quoted)\" \(args)"
     }
 
     /// The helper's ref component for a terminal address (same as `ref_name` in bergr-notify.py).

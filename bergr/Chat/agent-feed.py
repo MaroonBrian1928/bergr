@@ -96,6 +96,32 @@ def lazify(ev):
     return out
 
 
+def record_time(d):
+    """A transcript record's time as epoch seconds (ISO strings, seconds or milliseconds), or None."""
+    stamp = d.get("timestamp") if isinstance(d, dict) else None
+    if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) and math.isfinite(stamp):
+        return stamp / 1000 if stamp > 1e11 else stamp
+    if isinstance(stamp, str):
+        try:
+            parsed = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+            return parsed.timestamp() if parsed.tzinfo is not None else None
+        except (ValueError, OverflowError, OSError):
+            pass
+    return None
+
+
+def timed(d, events):
+    """Adds the record's time (`at`) to the messages it produced: the chat shows it on a sideways drag."""
+    at = None
+    for ev in events or ():
+        if ev.get("t") == "msg" and "at" not in ev:
+            if at is None:
+                at = record_time(d) or False
+            if at:
+                ev["at"] = round(at)
+        yield ev
+
+
 def emit(obj):
     obj = lazify(obj)
     line = json.dumps(obj, ensure_ascii=False) + "\n"
@@ -221,9 +247,30 @@ def tool_tail(text, lines=12, chars=1200):
     return text[-chars:] if len(text) > chars else text
 
 
-def toolout(tid, text):
+def toolout(tid, text, failed=False):
+    """The tail of a tool's output; `failed` when the tool reported an error or a non-zero exit."""
     tail = tool_tail(text)
-    return [{"t": "toolout", "id": tid, "text": tail}] if tail and tid else []
+    if not tid or not (tail or failed):
+        return []
+    ev = {"t": "toolout", "id": tid, "text": tail or ""}
+    if failed:
+        ev["failed"] = True
+    return [ev]
+
+
+EXIT_LINE = re.compile(r"(?mi)^(?:exit code|process exited with code)[: ]+(-?\d+)")
+
+
+def exit_failed(out):
+    """Codex's output: a non-zero exit code in its metadata or in an "Exit code: N" line."""
+    if isinstance(out, dict):
+        code = (out.get("metadata") or {}).get("exit_code") if isinstance(out.get("metadata"), dict) else None
+        if isinstance(code, int) and not isinstance(code, bool):
+            return code != 0
+    if isinstance(out, str):
+        m = EXIT_LINE.search(out[:400])
+        return bool(m) and m.group(1) != "0"
+    return False
 
 
 def result_text(content):
@@ -676,7 +723,8 @@ class Claude:
                 if ev:
                     yield ev
             elif t == "tool_result":
-                yield from toolout(block.get("tool_use_id"), result_text(block.get("content")))
+                yield from toolout(block.get("tool_use_id"), result_text(block.get("content")),
+                                   failed=bool(block.get("is_error")))
                 # An image a tool brought back (Read of a screenshot, a browser capture): shown
                 # inline after its tool row, on the agent's side, like an image it sent.
                 for j, part in enumerate(block.get("content") if isinstance(block.get("content"), list) else []):
@@ -1143,10 +1191,12 @@ class Codex:
                     out = json.loads(out)
                 except Exception:
                     pass
+            failed = exit_failed(out)
             if isinstance(out, dict) and ("content" in out or "output" in out):
                 out = out.get("content") if "content" in out else out.get("output")
+            failed = failed or exit_failed(out)
             cid = p.get("call_id")
-            yield from toolout(self.__dict__.get("calls", {}).get(cid, cid), result_text(out))
+            yield from toolout(self.__dict__.get("calls", {}).get(cid, cid), result_text(out), failed=failed)
             yield from tool_images(pid, out)
 
 
@@ -1582,7 +1632,7 @@ def usage_before(source, path, offset):
                 d = json.loads(raw)
             except Exception:
                 continue
-            for ev in source.parse(d) or ():
+            for ev in timed(d, source.parse(d)):
                 if ev.get("t") == "usage":
                     usage = ev
     except Exception:
@@ -1624,7 +1674,7 @@ def follow_jsonl(source):
                 opening = True
             CURSOR = None
         if tail:
-            events = [ev for d in tail.lines() for ev in (source.parse(d) or ())]
+            events = [ev for d in tail.lines() for ev in timed(d, source.parse(d))]
             later = []
             if opening:
                 if LAZY:
@@ -1758,7 +1808,7 @@ def read_usage_once(source):
         usage = None
         for d in tail.lines():
             try:
-                for ev in source.parse(d) or ():
+                for ev in timed(d, source.parse(d)):
                     if ev.get("t") == "usage":
                         usage = ev
             except Exception:

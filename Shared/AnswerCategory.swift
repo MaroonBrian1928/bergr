@@ -276,3 +276,33 @@ enum AnswerNotificationBridge {
     static var handler: ((AnswerNotificationRequest) async -> Void)?
     static var replyHandler: ((ReplyNotificationRequest) -> Void)?
 }
+
+/// One conversation's alerts in Notification Center: a new alert replaces its older ones that
+/// can't be answered (finished, replied), so they don't stack up; opening the chat clears them all.
+enum ConversationAlerts {
+    /// The same conversation: the same machine (Bergr's host id or the push's hostname) and terminal.
+    static func matches(_ info: [AnyHashable: Any], host: String, address: String) -> Bool {
+        address != AnswerCategory.healthAddress
+            && info["host"] as? String == host && info["address"] as? String == address
+    }
+
+    /// Older alerts for the conversation in `info` that a new one supersedes: those without answer
+    /// buttons (a question still waiting for an answer stays).
+    static func superseded(by info: [AnyHashable: Any], keeping id: String,
+                           among delivered: [(id: String, info: [AnyHashable: Any], category: String)]) -> [String] {
+        guard let host = info["host"] as? String, let address = info["address"] as? String else { return [] }
+        return delivered.filter {
+            $0.id != id && matches($0.info, host: host, address: address)
+                && !AnswerCategory.isAnswerCategory($0.category)
+        }.map(\.id)
+    }
+
+    static func removeSuperseded(by info: [AnyHashable: Any], keeping id: String) async {
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications().map {
+            (id: $0.request.identifier, info: $0.request.content.userInfo, category: $0.request.content.categoryIdentifier)
+        }
+        let ids = superseded(by: info, keeping: id, among: delivered)
+        if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+    }
+}

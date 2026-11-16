@@ -240,6 +240,17 @@ enum TestRun {
         let o = output.lowercased()
         guard !o.isEmpty else { return .unknown }
         // "0 failed" is a pass; strip it before looking for failure words.
+        // A runner's own summary line decides first: a log line elsewhere in the output
+        // ("finish(id:error:)") isn't a failure when the run says it passed.
+        let summaryFailed = ["** test failed **", "test result: failed", "tests failed", "with 1 issue", "issues.", "failed after"]
+        let summaryPassed = ["** test succeeded **", "test result: ok"]
+        if summaryFailed.contains(where: o.contains) { return .failed }
+        if summaryPassed.contains(where: o.contains) { return .passed }
+        if o.range(of: #"test run with \d+ tests? .*passed"#, options: .regularExpression) != nil
+            || o.range(of: #"(?m)^ran \d+ tests? in [\d.]+s\s*\n+ok\b"#, options: .regularExpression) != nil
+            || o.range(of: #"\b\d+ passed\b"#, options: .regularExpression) != nil && !o.contains(" failed,") {
+            return .passed
+        }
         let cleaned = o.replacingOccurrences(of: "0 failed", with: "").replacingOccurrences(of: "0 failures", with: "")
         let failed = ["** test failed **", "test result: failed", "failures:", "failed", "error:", "traceback", "✗", "✘", "assertionerror"]
         if failed.contains(where: cleaned.contains) { return .failed }

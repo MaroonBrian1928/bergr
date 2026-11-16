@@ -178,7 +178,9 @@ struct ChatRenderTests {
         let scroll = try #require(Self.scrollView(in: hosted.window))
         let bottom = scroll.contentSize.height - scroll.bounds.height
         scroll.contentOffset.y = bottom
-        await hosted.settle(0.3)
+        // The on-device model (real in the simulator) may still be writing tool summaries, which
+        // redraw their rows when they land: let those finish (ToolOutputSummaries.timeout) first.
+        await hosted.settle(3.5)
         RenderProbe.counts = [:]
         let clock = ContinuousClock()
         var spent = Duration.zero

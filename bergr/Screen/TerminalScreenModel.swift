@@ -504,7 +504,8 @@ final class TerminalScreenModel {
         guard let vt else { return }
         frame = vt.frame()
         let lines = frame.textLines
-        if lines != textLines { textLines = lines }
+        guard lines != textLines else { return }
+        textLines = lines
         let login = AnswerParser.inLogin(lines)
         if login != inLogin { inLogin = login }
     }

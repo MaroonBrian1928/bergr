@@ -9,7 +9,22 @@ final class NotificationRouter {
     var pending: (host: UUID, address: String)?
 
     /// What the app is showing now, so banners are skipped for the terminal on screen.
-    @ObservationIgnored var focused: (host: UUID, address: String)?
+    /// Opening a conversation clears its alerts from Notification Center: they've been seen.
+    @ObservationIgnored var focused: (host: UUID, address: String)? {
+        didSet { if let focused { Self.clearDelivered(host: focused.host, address: focused.address) } }
+    }
+
+    static func clearDelivered(host: UUID, address: String) {
+        Task { @MainActor in
+            let center = UNUserNotificationCenter.current()
+            let ids = await center.deliveredNotifications().filter {
+                let info = $0.request.content.userInfo
+                guard let target = NotificationDelegate.target(info) ?? PushRegistration.shared.target(info) else { return false }
+                return target.host == host && target.address == address
+            }.map(\.request.identifier)
+            if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+        }
+    }
 }
 
 /// Receives taps on notifications and decides whether to show banners in the foreground.

@@ -114,7 +114,7 @@ struct UsageScreen: View {
 }
 
 /// A plan window's readings over the chosen range: percent used against time.
-private struct UsageHistoryChart: View {
+struct UsageHistoryChart: View {
     let entries: [UsageHistory.Entry]
     let range: TimeInterval
 
@@ -122,10 +122,24 @@ private struct UsageHistoryChart: View {
         if entries.count < 2 {
             Text("Not enough history yet").font(.footnote).foregroundStyle(.tertiary)
         } else {
-            Chart(entries, id: \.time) { entry in
-                LineMark(x: .value("Time", entry.time), y: .value("Used", entry.percent))
-                    .interpolationMethod(.monotone)
-                    .foregroundStyle(.tint)
+            Chart {
+                // Where the window reset: a dashed line at each reading after a drop.
+                ForEach(Self.resets(entries), id: \.self) { time in
+                    RuleMark(x: .value("Reset", time))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                        .foregroundStyle(.secondary)
+                        .annotation(position: .top, alignment: .leading, spacing: 2) {
+                            Text("Reset").font(.caption2).foregroundStyle(.secondary)
+                        }
+                }
+                ForEach(Self.segments(entries).indices, id: \.self) { i in
+                    ForEach(Self.segments(entries)[i], id: \.time) { entry in
+                        LineMark(x: .value("Time", entry.time), y: .value("Used", entry.percent),
+                                 series: .value("Window", i))
+                            .interpolationMethod(.monotone)
+                            .foregroundStyle(.tint)
+                    }
+                }
             }
             .chartXScale(domain: Date.now.addingTimeInterval(-range)...Date.now)
             .chartYScale(domain: 0...100)
@@ -138,5 +152,20 @@ private struct UsageHistoryChart: View {
             .frame(height: 100)
             .accessibilityLabel("Usage history")
         }
+    }
+
+    /// A drop of more than 5 points between readings is a reset (usage only goes up within a window).
+    static func resets(_ entries: [UsageHistory.Entry]) -> [Date] {
+        zip(entries, entries.dropFirst()).compactMap { a, b in b.percent < a.percent - 5 ? b.time : nil }
+    }
+
+    /// The readings split at each reset, so the line doesn't slope down across one.
+    static func segments(_ entries: [UsageHistory.Entry]) -> [[UsageHistory.Entry]] {
+        var out: [[UsageHistory.Entry]] = []
+        for entry in entries {
+            if let last = out.last?.last, entry.percent >= last.percent - 5 { out[out.count - 1].append(entry) }
+            else { out.append([entry]) }
+        }
+        return out
     }
 }

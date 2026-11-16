@@ -147,7 +147,8 @@ final class AgentNotifier {
                 content.categoryIdentifier = category
             }
             let request = UNNotificationRequest(identifier: alert.key, content: content, trigger: nil)
-            UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+            try? await UNUserNotificationCenter.current().add(request)
+            await ConversationAlerts.removeSuperseded(by: content.userInfo, keeping: alert.key)
         }
     }
 }

@@ -41,7 +41,12 @@ final class NotificationService: UNNotificationServiceExtension {
             }
         }
         handler = nil  // delivered: iOS running out of time afterwards mustn't deliver it again
-        contentHandler(content)
+        // The conversation's older finished alerts give way to this one instead of stacking up.
+        let info = content.userInfo, id = request.identifier
+        Task {
+            await ConversationAlerts.removeSuperseded(by: info, keeping: id)
+            contentHandler(content)
+        }
     }
 
     override func serviceExtensionTimeWillExpire() {

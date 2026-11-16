@@ -81,6 +81,7 @@ struct UsageSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
     @State private var setupState: SetupState = .idle
+    @State private var range = UsageScreen.HistoryRange.day
     enum SetupState: Equatable { case idle, running, done([String]), failed(String) }
 
     /// Claude saves its context window and plan limits only through a status line that writes
@@ -99,8 +100,15 @@ struct UsageSheet: View {
                 } }
                 if let usage, usage.session != nil || usage.weekly != nil {
                     Section("Plan usage") {
-                        if let session = usage.session { window("Current session", session) }
-                        if let weekly = usage.weekly { window("Weekly", weekly) }
+                        if machine != nil {
+                            Picker("History", selection: $range) {
+                                ForEach(UsageScreen.HistoryRange.allCases) { Text($0.rawValue).tag($0) }
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                        }
+                        if let session = usage.session { window("Current session", session, kind: "session") }
+                        if let weekly = usage.weekly { window("Weekly", weekly, kind: "weekly") }
                     }
                 } else if needsSetup {
                     setupSection
@@ -192,9 +200,23 @@ struct UsageSheet: View {
         .padding(.vertical, 4)
     }
 
-    private func window(_ title: String, _ window: ChatFeed.Usage.Window) -> some View {
-        meter(title: title, fraction: window.percent / 100,
-              detail: window.resetsAt.map { "Resets \($0.formatted(.dateTime.weekday(.abbreviated).hour().minute()))" } ?? "")
+    /// A plan window: the meter, then (with the machine known) when it runs out at this rate and
+    /// its history.
+    private func window(_ title: String, _ window: ChatFeed.Usage.Window, kind: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            meter(title: title, fraction: window.percent / 100,
+                  detail: window.resetsAt.map { "Resets \($0.formatted(.dateTime.weekday(.abbreviated).hour().minute()))" } ?? "")
+            if let machine {
+                let key = UsageHistory.key(machine: machine, agent: agent.rawValue, kind: kind)
+                if let forecast = UsageHistory.shared.forecast(key: key, window: window).sentence() {
+                    Text(forecast).font(.footnote).foregroundStyle(.secondary)
+                }
+                UsageHistoryChart(
+                    entries: UsageHistory.shared.entries(key: key, since: Date.now.addingTimeInterval(-range.seconds)),
+                    range: range.seconds)
+                    .padding(.bottom, 4)
+            }
+        }
     }
 
     static func tokens(_ n: Int) -> String {

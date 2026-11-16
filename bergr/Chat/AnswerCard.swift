@@ -52,7 +52,10 @@ enum AnswerParser {
     /// herdr-core says the agent's state is.
     static func inLogin(_ lines: [String]) -> Bool {
         if loginStep(in: lines) != nil || rewindOpen(lines) { return true }
-        return !choices(in: lines).isEmpty && lines.suffix(30).contains { $0.localizedCaseInsensitiveContains("login method") }
+        // The cheap text check first: this runs on every terminal redraw, and parsing choices
+        // across the whole screen each keystroke made typing lag.
+        let recent = Array(lines.suffix(30))
+        return recent.contains { $0.localizedCaseInsensitiveContains("login method") } && !choices(in: recent).isEmpty
     }
 
     /// Claude's Rewind menu (Esc twice) is open: "Rewind" … "Esc to cancel".

@@ -309,11 +309,13 @@ final class PushRegistration {
     /// quoting can break them.
     nonisolated static func pythonCommand(code: String, argument: String, windows: Bool) -> RemoteCommand {
         let code64 = Data(code.utf8).base64EncodedString()
-        guard windows else {
-            return RemoteCommand(command: "python3 -I -c 'import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))' "
-                + code64 + " " + argument)
-        }
+        // Code and argument go on stdin: on the command line the helper script (~120 KB as base64)
+        // passes Linux's 128 KB per-argument limit once the login shell wraps it ("Argument list too long").
         let line = "import base64,sys;sys.argv=['-c','\(argument)'];exec(base64.b64decode('\(code64)'))\n"
+        guard windows else {
+            return RemoteCommand(command: #"python3 -I -c "import sys;exec(sys.stdin.buffer.readline())""#,
+                                 input: Data(line.utf8))
+        }
         return RemoteCommand(command: windowsPython + #"-I -c S=__import__('sys');exec(S.stdin.buffer.readline())""#,
                              input: Data(line.utf8))
     }

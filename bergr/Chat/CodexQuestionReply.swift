@@ -5,9 +5,13 @@ import Foundation
 @MainActor enum CodexQuestionReply {
     /// The newest async Codex question still open: not answered in the transcript and not picked
     /// or being sent from the app. `items` are the chat's items as (id, title) for questions.
+    /// `lastUserMessage` is the index in `items` of the user's newest message: a question before it
+    /// counts as answered, even when the transcript's reply couldn't be matched to it (the feed
+    /// restarted, say), so the reply box stops offering to answer it.
     static func open(items: [(String, String)?], info: (String) -> (async: Bool, answered: Bool)?,
-                     picked: (String) -> Bool) -> (id: String, title: String)? {
-        for item in items.reversed() {
+                     picked: (String) -> Bool, lastUserMessage: Int? = nil) -> (id: String, title: String)? {
+        for (index, item) in items.enumerated().reversed() {
+            if let lastUserMessage, index < lastUserMessage { break }
             guard let (id, title) = item, let i = info(id), i.async else { continue }
             if i.answered || picked(id) { continue }
             return (id, title)

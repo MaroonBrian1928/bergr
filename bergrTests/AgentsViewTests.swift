@@ -33,3 +33,22 @@ struct AgentsViewTests {
         #expect(AgentsOrdering.ordered(list).map(\.address) == ["blocked", "workNew", "workOld", "idle", "shell"])
     }
 }
+
+struct LinkedMachinesTests {
+    @Test func ownTerminalsAlwaysShow() {
+        #expect(LinkedMachines.shows("t3", showLinked: false, hidden: ["laptop"]))
+    }
+
+    @Test func linkedTerminalsFollowTheSwitchAndHiddenList() {
+        #expect(LinkedMachines.shows("laptop/t3", showLinked: true, hidden: []))
+        #expect(!LinkedMachines.shows("laptop/t3", showLinked: false, hidden: []))
+        #expect(!LinkedMachines.shows("Laptop/t3", showLinked: true, hidden: LinkedMachines.hidden("laptop")))
+        #expect(LinkedMachines.shows("desk/t1", showLinked: true, hidden: LinkedMachines.hidden("laptop")))
+    }
+
+    @Test func hidingAddsOnceCaseInsensitively() {
+        let once = LinkedMachines.hiding("Laptop", in: "")
+        #expect(LinkedMachines.hiding("laptop", in: once) == "laptop")
+        #expect(LinkedMachines.hidden(LinkedMachines.hiding("desk", in: once)) == ["desk", "laptop"])
+    }
+}

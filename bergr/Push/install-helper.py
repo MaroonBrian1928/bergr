@@ -1,5 +1,5 @@
 # Installs, checks or removes the bergr-notify user service. Run by Bergr over SSH:
-#   python3 -I -c 'import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))' <this file b64> <args b64>
+#   python3 -I -c "import sys;exec(sys.stdin.buffer.readline())"  (stdin: one line that sets sys.argv and execs this file)
 # Args JSON: {"op": "status"|"install"|"uninstall", "script": "<bergr-notify source>"}.
 # Prints exactly one JSON line. Never touches ~/.config/bergr.
 # On Windows the service is a Scheduled Task (schtasks, at logon, current user, no admin needed).
