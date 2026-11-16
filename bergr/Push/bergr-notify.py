@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 23
+VERSION = 24
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 # Windows: child processes (hc, curl, git) get no console window; the helper runs under pythonw.exe,
 # where each console child would otherwise flash a window.
@@ -1119,6 +1119,51 @@ def send_with_answer(cfg, a, q, host, jwt_cache, poster, answers_path):
                on_reply=poster.learn if poster else None, state=a["state"], q=q, a=answer_id)
 
 
+# Scheduled sends (v24): the app writes {id, address, at, text} entries to scheduled.json beside
+# push.json (e.g. "continue" when a plan limit resets). When one is due the helper types it into the
+# terminal with `hc send` and alerts that it did, so it happens with the phone asleep.
+def scheduled_path(config_path=None):
+    return os.path.join(os.path.dirname(config_path or default_config_path()), "scheduled.json")
+
+
+def run_scheduled(path, host, runner=_hc_run, now=None):
+    """Sends the due entries, drops them (and any older than a day) and returns their alerts."""
+    now = time.time() if now is None else now
+    try:
+        with open(path, encoding="utf-8") as f:
+            items = json.load(f)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(items, list):
+        return []
+    keep, alerts = [], []
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("at"), (int, float)):
+            continue
+        address, text = _text(item.get("address")), _text(item.get("text"))
+        if not address or not text or now - item["at"] > 86400:
+            continue
+        if item["at"] > now:
+            keep.append(item)
+            continue
+        where = f" on {host}" if host else ""
+        try:
+            runner(["hc", "send", address, text])
+            log(f"scheduled send to {address}")
+            alerts.append({"address": address, "turn": None, "state": "done",
+                           "title": f"Sent \u201c{text[:60]}\u201d{where}", "body": "Your scheduled message went out."})
+        except Exception as e:
+            log(f"scheduled send to {address} failed: {e}")
+            alerts.append({"address": address, "turn": None, "state": "error",
+                           "title": f"Couldn't send your scheduled message{where}", "body": str(e)[:120]})
+    if len(keep) != len(items):
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(keep, f)
+        os.replace(tmp, path)
+    return alerts
+
+
 class WatchdogThread(threading.Thread):
     def __init__(self, watcher, shared, watchdog, host, jwt_cache, poster, answers_path):
         super().__init__(daemon=True)
@@ -1135,6 +1180,8 @@ class WatchdogThread(threading.Thread):
                 for a in watchdog.tick(cfg, shared.get("terms") or {}):
                     log(f"watchdog alert for {a['address']}: {a['title']}")
                     send_with_answer(cfg, a, a.get("q"), host, jwt_cache, poster, answers_path)
+                for a in run_scheduled(scheduled_path(), host):
+                    send_with_answer(cfg, a, None, host, jwt_cache, poster, answers_path)
             except Exception as e:
                 log(f"watchdog failed: {e}")
 

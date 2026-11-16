@@ -26,7 +26,7 @@ nonisolated struct ReplyNotificationRequest: Equatable, Sendable {
     var host: UUID
     var address: String
     var text: String
-    /// The alert asked a question (a Codex question is answered from the chat, not typed).
+    /// The alert asked a question: a reply to a Codex question selects it before sending.
     var question: String? = nil
 }
 

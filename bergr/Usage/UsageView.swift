@@ -8,9 +8,15 @@ struct UsageScreen: View {
     @State private var range = HistoryRange.day
 
     enum HistoryRange: String, CaseIterable, Identifiable {
-        case day = "24 hours", week = "7 days"
+        case day = "24 hours", week = "7 days", month = "30 days"
         var id: String { rawValue }
-        var seconds: TimeInterval { self == .day ? 24 * 3600 : 7 * 24 * 3600 }
+        var seconds: TimeInterval {
+            switch self {
+            case .day: 24 * 3600
+            case .week: 7 * 24 * 3600
+            case .month: 30 * 24 * 3600
+            }
+        }
     }
 
     var body: some View {
@@ -121,37 +127,58 @@ struct UsageHistoryChart: View {
     var body: some View {
         if entries.count < 2 {
             Text("Not enough history yet").font(.footnote).foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             Chart {
-                // Where the window reset: a dashed line at each reading after a drop.
+                // Where the window reset: a quiet dashed line at each reading after a drop.
                 ForEach(Self.resets(entries), id: \.self) { time in
                     RuleMark(x: .value("Reset", time))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                        .foregroundStyle(.secondary)
-                        .annotation(position: .top, alignment: .leading, spacing: 2) {
-                            Text("Reset").font(.caption2).foregroundStyle(.secondary)
-                        }
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
+                        .foregroundStyle(.secondary.opacity(0.6))
                 }
                 ForEach(Self.segments(entries).indices, id: \.self) { i in
                     ForEach(Self.segments(entries)[i], id: \.time) { entry in
+                        AreaMark(x: .value("Time", entry.time), y: .value("Used", entry.percent),
+                                 series: .value("Window", i))
+                            .interpolationMethod(.linear)
+                            .foregroundStyle(.linearGradient(colors: [Color.accentColor.opacity(0.25), .clear],
+                                                             startPoint: .top, endPoint: .bottom))
                         LineMark(x: .value("Time", entry.time), y: .value("Used", entry.percent),
                                  series: .value("Window", i))
-                            .interpolationMethod(.monotone)
-                            .foregroundStyle(.tint)
+                            .interpolationMethod(.linear)
+                            .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                            .foregroundStyle(Color.accentColor)
                     }
                 }
             }
             .chartXScale(domain: Date.now.addingTimeInterval(-range)...Date.now)
             .chartYScale(domain: 0...100)
+            .chartXAxis {
+                AxisMarks(values: .automatic(desiredCount: 4)) { value in
+                    AxisGridLine()
+                    AxisValueLabel {
+                        if let date = value.as(Date.self) { Text(Self.axisLabel(date, range: range)) }
+                    }
+                }
+            }
             .chartYAxis {
                 AxisMarks(values: [0, 50, 100]) { value in
                     AxisGridLine()
                     AxisValueLabel { if let v = value.as(Int.self) { Text("\(v)%") } }
                 }
             }
-            .frame(height: 100)
+            // Full width: a Mac form row doesn't stretch a chart (it has no width of its own),
+            // and it drew nothing there.
+            .frame(maxWidth: .infinity, minHeight: 100, maxHeight: 100)
             .accessibilityLabel("Usage history")
         }
+    }
+
+    /// Hours on a day's chart, weekdays on a week's, dates on a month's.
+    static func axisLabel(_ date: Date, range: TimeInterval) -> String {
+        if range <= 24 * 3600 { return date.formatted(.dateTime.hour()) }
+        if range <= 7 * 24 * 3600 { return date.formatted(.dateTime.weekday(.abbreviated)) }
+        return date.formatted(.dateTime.month(.abbreviated).day())
     }
 
     /// A drop of more than 5 points between readings is a reset (usage only goes up within a window).

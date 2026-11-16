@@ -276,41 +276,50 @@ final class ChatFeed {
             phase = .failed("The chat helper is missing from the app.")
             return
         }
-        while !Task.isCancelled {
-            stalled = false
-            trace = FirstPaintTrace(label: "\(session.host.name) \(agent.rawValue)")
+        await run(makeLaunch: {
             // On a reconnect, name the conversation already shown: the helper then finds it at
             // once instead of searching (Codex retries for ~0.5 s when its file isn't open).
-            let launch: ChatHelperLaunch.Plan
-            do {
-                launch = try ChatHelperLaunch.make(script: script, agent: agent.rawValue, pid: pid,
+            return try ChatHelperLaunch.make(script: script, agent: agent.rawValue, pid: pid,
                     cwd: cwd, sessionHint: conversationID ?? sessionHint, windows: session.isWindowsHost,
                     expensive: isExpensive(), cursor: phase == .live && caughtUp ? cursor : nil)
-            } catch {
-                phase = .failed(error.localizedDescription)
-                return
-            }
+        }, open: { try await session.openExec($0) }, traceLabel: "\(session.host.name) \(agent.rawValue)")
+    }
+
+    /// The same reconnect loop with transport and timing supplied for focused lifecycle tests.
+    func run(makeLaunch: () throws -> ChatHelperLaunch.Plan,
+             open: @escaping @Sendable (String) async throws -> ExecPipe,
+             timeout: Duration = .seconds(45), retryDelay: Duration = .seconds(3),
+             traceLabel: String = "chat") async {
+        while !Task.isCancelled {
+            trace = FirstPaintTrace(label: traceLabel)
+            let launch: ChatHelperLaunch.Plan
+            do { launch = try makeLaunch() }
+            catch { phase = .failed(error.localizedDescription); return }
             do {
-                // Bounded: on a connection that died quietly, opening a channel never answers.
-                // The loop below tries again; the session's own watchdog replaces the connection.
-                let pipe = try await Self.openExec(timeout: .seconds(10)) { try await session.openExec(launch.command) }
+                let pipe = try await Self.openExec(timeout: .seconds(10)) { try await open(launch.command) }
                 defer { pipe.close() }
                 trace?.mark("opened")
-                try await pipe.write(launch.input)
-                trace?.mark("sent")
                 activePipe = pipe
                 defer { activePipe = nil }
-                // The helper pings after 15 s of silence. A channel that died quietly (the phone or the
-                // machine slept) sends nothing and never errors, so without a ping for a while,
-                // close it and follow the conversation again; otherwise the chat and its
-                // sub-agent count freeze at the last thing heard.
+                // Bound the initial write too: a suspended SSH channel may never finish it.
+                try await Self.bounded(timeout: { try await Task.sleep(for: timeout) }, onCancel: pipe.close) {
+                    try await pipe.write(launch.input)
+                }
+                trace?.mark("sent")
                 lastHeard = .now
+                ready = false
+                let started = ContinuousClock.now
                 let watchdog = Task { @MainActor [weak self] in
                     while !Task.isCancelled {
-                        try? await Task.sleep(for: .seconds(5))
+                        do { try await Task.sleep(for: min(timeout, .seconds(5))) }
+                        catch { return }
                         guard let self, !Task.isCancelled else { return }
-                        if Date.now.timeIntervalSince(self.lastHeard) > Self.stallAfter {
-                            self.stalled = true
+                        let idle = Double(timeout.components.seconds) + Double(timeout.components.attoseconds) / 1e18
+                        if (!self.ready && ContinuousClock.now - started >= timeout) ||
+                            Date.now.timeIntervalSince(self.lastHeard) >= idle {
+                            if self.items.isEmpty {
+                                self.phase = .failed("Reading the conversation timed out. Reconnecting…")
+                            }
                             pipe.close()
                             return
                         }
@@ -318,19 +327,19 @@ final class ChatFeed {
                 }
                 defer { watchdog.cancel() }
                 try await withTaskCancellationHandler {
-                    try await read(pipe, launch: launch)
+                    try await read(pipe, launch: launch, writeTimeout: timeout)
                 } onCancel: {
                     pipe.close()
                 }
-            } catch is CancellationError where stalled && !Task.isCancelled {
-                // Closed by the watchdog: reconnect below.
             } catch is CancellationError {
-                return
+                // SSH can cancel an individual operation during reconnect without cancelling
+                // the conversation's owner. Only the latter ends this feed.
+                if Task.isCancelled { return }
             } catch {
                 if Task.isCancelled { return }
                 if working.isEmpty { phase = .failed(Self.describe(error)) }
             }
-            try? await Task.sleep(for: .seconds(3))
+            try? await Task.sleep(for: retryDelay)
         }
     }
 
@@ -340,45 +349,86 @@ final class ChatFeed {
     /// the open never answers (a task group would wait for it); a channel that opens too late is
     /// closed.
     static func openExec(timeout limit: Duration, _ open: @escaping @Sendable () async throws -> ExecPipe) async throws -> ExecPipe {
-        let gate = OpenGate()
-        return try await withCheckedThrowingContinuation { continuation in
-            let work = Task {
-                do {
-                    let pipe = try await open()
-                    if !gate.finish(continuation, with: .success(pipe)) { pipe.close() }
-                } catch {
-                    _ = gate.finish(continuation, with: .failure(error))
+        try await bounded(timeout: { try await Task.sleep(for: limit) }, onCancel: {}, discard: { $0.close() }, operation: open)
+    }
+
+    /// An unstructured race deliberately avoids waiting for an SSH operation that ignores
+    /// cancellation. Its eventual result is discarded (and a late channel is closed).
+    private static func bounded<Value: Sendable>(
+        timeout: @escaping @MainActor @Sendable () async throws -> Void,
+        onCancel: @escaping @Sendable () -> Void,
+        discard: @escaping @Sendable (Value) -> Void = { _ in },
+        operation: @escaping @MainActor @Sendable () async throws -> Value
+    ) async throws -> Value {
+        let gate = OperationGate<Value>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                gate.install(continuation)
+                let work = Task {
+                    do {
+                        try Task.checkCancellation()
+                        let value = try await operation()
+                        if !gate.finish(.success(value)) { discard(value) }
+                    } catch { _ = gate.finish(.failure(error)) }
                 }
+                let timer = Task {
+                    do {
+                        try await timeout()
+                        if gate.finish(.failure(TimedOut())) { onCancel() }
+                    } catch { }
+                }
+                gate.setTasks([work, timer])
             }
-            Task {
-                try? await Task.sleep(for: limit)
-                if gate.finish(continuation, with: .failure(TimedOut())) { work.cancel() }
-            }
+        } onCancel: {
+            _ = gate.finish(.failure(CancellationError()))
+            onCancel()
         }
     }
 
-    /// Lets exactly one of the open and the timer answer.
-    private final class OpenGate: @unchecked Sendable {
+    // Cancellation runs on any thread; NSLock protects all mutable state below.
+    private nonisolated final class OperationGate<Value: Sendable>: @unchecked Sendable {
         private let lock = NSLock()
-        private var done = false
+        private var result: Result<Value, Error>?
+        private var continuation: CheckedContinuation<Value, Error>?
+        private var tasks: [Task<Void, Never>] = []
 
-        func finish(_ continuation: CheckedContinuation<ExecPipe, Error>, with result: Result<ExecPipe, Error>) -> Bool {
-            let first = lock.withLock { () -> Bool in
-                if done { return false }
-                done = true
-                return true
+        func install(_ continuation: CheckedContinuation<Value, Error>) {
+            let result: Result<Value, Error>? = lock.withLock {
+                if let result { return result }
+                self.continuation = continuation
+                return nil
             }
-            if first { continuation.resume(with: result) }
-            return first
+            if let result { continuation.resume(with: result) }
+        }
+
+        func setTasks(_ tasks: [Task<Void, Never>]) {
+            let finished = lock.withLock {
+                if result != nil { return true }
+                self.tasks = tasks
+                return false
+            }
+            if finished { tasks.forEach { $0.cancel() } }
+        }
+
+        @discardableResult func finish(_ result: Result<Value, Error>) -> Bool {
+            let state = lock.withLock { () -> (Bool, CheckedContinuation<Value, Error>?, [Task<Void, Never>]) in
+                guard self.result == nil else { return (false, nil, []) }
+                self.result = result
+                let state = (true, continuation, tasks)
+                continuation = nil
+                tasks = []
+                return state
+            }
+            state.2.forEach { $0.cancel() }
+            state.1?.resume(with: result)
+            return state.0
         }
     }
 
-    /// When the helper was last heard from (it pings after 15 s of silence).
     @ObservationIgnored private var lastHeard = Date.now
-    @ObservationIgnored private var stalled = false
-    static let stallAfter: TimeInterval = 45
+    @ObservationIgnored private var ready = false
 
-    func read(_ pipe: ExecPipe, launch: ChatHelperLaunch.Plan) async throws {
+    func read(_ pipe: ExecPipe, launch: ChatHelperLaunch.Plan, writeTimeout: Duration = .seconds(45)) async throws {
         var sawConversation = false
         // Splitting, JSON, base64 and markdown happen off the main actor; chunks are awaited one
         // at a time, so events keep their order.
@@ -395,14 +445,18 @@ final class ChatFeed {
                 switch type {
                 case "need-source":
                     // Stage 2 has no cached helper for this version: send it once.
-                    try await pipe.write(launch.sourceLine)
+                    try await Self.bounded(timeout: { try await Task.sleep(for: writeTimeout) }, onCancel: pipe.close) {
+                        try await pipe.write(launch.sourceLine)
+                    }
                 case "none":
+                    ready = true
                     if !sawConversation { phase = .noConversation }
                 case "cursor":
                     if let session = event["session"] as? String, let offset = (event["offset"] as? NSNumber)?.intValue {
                         cursor = .init(session: session, offset: offset)
                     }
                 case "resume":
+                    ready = true
                     // Same conversation, only what follows the cursor is sent: what's on screen
                     // stays exactly as it is (no re-read, no swap).
                     sawConversation = true
@@ -468,6 +522,7 @@ final class ChatFeed {
                     let now = event["items"] as? [String] ?? []
                     if now != queued { queued = now }
                 case "ping":
+                    ready = true
                     if !caughtUp {
                         // Read again after coming back: what's new since the chat was last on
                         // screen arrives like live messages (the agent's replies write

@@ -41,8 +41,8 @@ struct ChatInspector: View {
             }
             if let usage = feed.usage, usage.session != nil || usage.weekly != nil {
                 Section("Usage") {
-                    if let window = usage.session { limit("Current session", window) }
-                    if let window = usage.weekly { limit("Weekly", window) }
+                    if let window = usage.session { limit("Current session", window, kind: "session") }
+                    if let window = usage.weekly { limit("Weekly", window, kind: "weekly") }
                 }
             }
             Section("Permissions") {
@@ -164,14 +164,25 @@ struct ChatInspector: View {
         }
     }
 
-    private func limit(_ title: String, _ window: ChatFeed.Usage.Window) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    /// A plan limit: its meter and reset, then when it runs out at this rate and its recent history
+    /// (24 hours for the session, 7 days for the week).
+    private func limit(_ title: String, _ window: ChatFeed.Usage.Window, kind: String) -> some View {
+        let key = UsageHistory.key(machine: machine, agent: agent.rawValue, kind: kind)
+        let range: TimeInterval = kind == "session" ? 24 * 3600 : 7 * 24 * 3600
+        return VStack(alignment: .leading, spacing: 4) {
             meter(title, fraction: min(1, window.percent / 100), tint: .green)
             if let reset = window.resetsAt {
                 Text("Resets \(reset, format: .relative(presentation: .named))")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            if let forecast = UsageHistory.shared.forecast(key: key, window: window).sentence() {
+                Text(forecast).font(.caption).foregroundStyle(.secondary)
+            }
+            UsageHistoryChart(entries: UsageHistory.shared.entries(key: key, since: Date.now.addingTimeInterval(-range)),
+                              range: range)
+                .padding(.top, 2)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

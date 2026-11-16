@@ -187,7 +187,11 @@ final class HostSession {
             return entry.feed
         }
         feeds.removeValue(forKey: address)?.task.cancel()
-        while feeds.count >= Self.maxFeeds, let oldest = feeds.min(by: { $0.value.used < $1.value.used })?.key {
+        // A screen keeps its feed until the connection changes. Evicting it for a background
+        // request would leave that screen holding a cancelled loader indefinitely.
+        while feeds.count >= Self.maxFeeds,
+              let oldest = feeds.filter({ looking[$0.key, default: 0] <= 0 })
+                .min(by: { $0.value.used < $1.value.used })?.key {
             feeds.removeValue(forKey: oldest)?.task.cancel()
         }
         let paused = pausedFeeds.removeValue(forKey: address)

@@ -1458,6 +1458,42 @@ class RemoteAnswerTests(unittest.TestCase):
                                     a=self.aid)
         self.assertEqual(notify.decrypt_alert(self.KEY, base64.b64decode(blob))["a"], self.aid)
 
+class ScheduledSendTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "scheduled.json")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def write(self, items):
+        with open(self.path, "w") as f:
+            json.dump(items, f)
+
+    def test_sends_due_entries_and_keeps_later_ones(self):
+        self.write([{"id": "a", "address": "t1", "at": 100, "text": "continue"},
+                    {"id": "b", "address": "t2", "at": 500, "text": "later"}])
+        ran = []
+        alerts = notify.run_scheduled(self.path, "mac", runner=lambda a: ran.append(a) or "", now=200)
+        self.assertEqual(ran, [["hc", "send", "t1", "continue"]])
+        self.assertEqual(alerts[0]["title"], "Sent \u201ccontinue\u201d on mac")
+        with open(self.path) as f:
+            self.assertEqual([i["id"] for i in json.load(f)], ["b"])
+
+    def test_failure_alerts_and_stale_entries_drop(self):
+        self.write([{"id": "a", "address": "t1", "at": 100, "text": "go"},
+                    {"id": "old", "address": "t1", "at": 0, "text": "x"}])
+        def fail(_):
+            raise RuntimeError("no such terminal")
+        alerts = notify.run_scheduled(self.path, "", runner=fail, now=86500)
+        self.assertEqual([a["state"] for a in alerts], ["error"])
+        with open(self.path) as f:
+            self.assertEqual(json.load(f), [])
+
+    def test_missing_file_is_quiet(self):
+        self.assertEqual(notify.run_scheduled(self.path, "mac", runner=lambda a: "", now=1), [])
+
+
 class WatchdogTests(unittest.TestCase):
     class Screen:
         def __init__(self):

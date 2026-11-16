@@ -217,6 +217,7 @@ struct UsageSheet: View {
                     .padding(.bottom, 4)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     static func tokens(_ n: Int) -> String {
@@ -331,5 +332,94 @@ private struct UsageList<Content: View>: View {
         #else
         List { content }
         #endif
+    }
+}
+
+
+/// Runs scheduled-send commands on an agent's machine (see `ScheduledSend`).
+struct ScheduleRunner {
+    let address: String
+    let windows: Bool
+    let machine: String
+    /// The machine's push helper can send it (24+).
+    let helperReady: Bool
+    let run: (PushRegistration.RemoteCommand) async throws -> String
+}
+
+/// Above the reply box when the agent's plan limit is used up: when it resets, and a button to
+/// have the machine send "continue" (or what's being written) then, with the phone asleep.
+struct LimitBar: View {
+    let reset: Date
+    let scheduler: ScheduleRunner?
+    @Binding var draft: String
+    let palette: ChatPalette
+    @State private var scheduled: ScheduledSend.Entry?
+    @State private var busy = false
+    @State private var error: String?
+
+    private static func time(_ date: Date) -> String {
+        Calendar.current.isDateInToday(date) ? date.formatted(date: .omitted, time: .shortened)
+            : date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: scheduled == nil ? "hourglass" : "clock.badge.checkmark")
+                if let scheduled {
+                    Text("Sends \u{201C}\(scheduled.text)\u{201D} at \(Self.time(Date(timeIntervalSince1970: scheduled.at)))")
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Button("Cancel") { change(nil) }.disabled(busy)
+                } else {
+                    Text("Limit reached · resets \(Self.time(reset))").lineLimit(1)
+                    Spacer(minLength: 4)
+                    if let scheduler, scheduler.helperReady {
+                        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        Button(text.isEmpty ? "Continue Then" : "Send This Then") {
+                            change(ScheduledSend.Entry(id: UUID().uuidString, address: scheduler.address,
+                                                       at: ScheduledSend.sendTime(resetsAt: reset).timeIntervalSince1970,
+                                                       text: text.isEmpty ? ScheduledSend.defaultText : text))
+                            if !text.isEmpty { draft = "" }
+                        }
+                        .fontWeight(.semibold)
+                        .disabled(busy)
+                    }
+                }
+            }
+            if let error {
+                Text(error).foregroundStyle(palette.secondary)
+            } else if let scheduler, !scheduler.helperReady {
+                Text("Update the push helper on \(scheduler.machine) to send something when it resets.")
+                    .foregroundStyle(palette.secondary)
+            }
+        }
+        .font(.footnote)
+        .foregroundStyle(palette.text)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(palette.codeBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 12)
+        .task(id: scheduler?.address) {
+            guard let scheduler, scheduler.helperReady,
+                  let out = try? await scheduler.run(ScheduledSend.command(windows: scheduler.windows)) else { return }
+            scheduled = ScheduledSend.pending(in: out, address: scheduler.address)
+        }
+    }
+
+    private func change(_ entry: ScheduledSend.Entry?) {
+        guard let scheduler else { return }
+        busy = true
+        error = nil
+        Task {
+            defer { busy = false }
+            do {
+                let out = try await scheduler.run(ScheduledSend.command(
+                    entry: entry, remove: entry == nil ? scheduler.address : nil, windows: scheduler.windows))
+                scheduled = ScheduledSend.pending(in: out, address: scheduler.address)
+            } catch {
+                self.error = "Couldn't reach \(scheduler.machine): \(error.localizedDescription)"
+            }
+        }
     }
 }

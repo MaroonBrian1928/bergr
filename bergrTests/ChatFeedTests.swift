@@ -178,3 +178,165 @@ struct ChatFeedProtocolTests {
         #expect(feed.phase == .noConversation)
     }
 }
+
+@MainActor
+struct ChatFeedRecoveryTests {
+    private let launch = ChatHelperLaunch.Plan(command: "test", input: Data(), sourceLine: Data())
+
+    private final class Transport: @unchecked Sendable {
+        private let lock = NSLock()
+        private var attempts = 0
+        private var closedIDs: Set<Int> = []
+        private var opensEntered = 0
+        private var writes = 0
+        private var continuations: [AsyncThrowingStream<Data, Error>.Continuation] = []
+        var count: Int { lock.withLock { attempts } }
+        var closed: Int { lock.withLock { closedIDs.count } }
+        func isClosed(_ id: Int) -> Bool { lock.withLock { closedIDs.contains(id) } }
+        var openCount: Int { lock.withLock { opensEntered } }
+        func enteredOpen() { lock.withLock { opensEntered += 1 } }
+        var writeCount: Int { lock.withLock { writes } }
+        func pipe(fail: Bool = false, traffic: Bool = false, needSource: Bool = false,
+                  write: @escaping @Sendable (Data) async throws -> Void = { _ in }) -> ExecPipe {
+            let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
+            let id = lock.withLock {
+                attempts += 1
+                continuations.append(continuation)
+                return attempts
+            }
+            if fail { continuation.finish(throwing: CancellationError()) }
+            if needSource { continuation.yield(Data("{\"t\":\"need-source\"}\n".utf8)) }
+            if traffic {
+                Task {
+                    while !Task.isCancelled {
+                        if case .terminated = continuation.yield(Data("{\"t\":\"cursor\"}\n".utf8)) { return }
+                        try? await Task.sleep(for: .milliseconds(5))
+                    }
+                }
+            }
+            return ExecPipe(output: stream, write: { [self] data in
+                lock.withLock { writes += 1 }
+                try await write(data)
+            }, close: { [self] in
+                lock.withLock { _ = closedIDs.insert(id) }
+                continuation.finish(throwing: CancellationError())
+            })
+        }
+    }
+
+    private actor Gate {
+        private var continuations: [CheckedContinuation<Void, Never>] = []
+        private var released = false
+        func wait() async {
+            if released { return }
+            await withCheckedContinuation { continuations.append($0) }
+        }
+        func release() { released = true; continuations.forEach { $0.resume() }; continuations = [] }
+    }
+
+    private func waitUntil(_ predicate: () -> Bool) async -> Bool {
+        for _ in 0..<100 {
+            if predicate() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return predicate()
+    }
+
+    @Test func channelCancellationRetriesAndOwnerCancellationCloses() async {
+        let transport = Transport(), feed = ChatFeed(), launch = launch
+        let task = Task { await feed.run(makeLaunch: { launch }, open: { _ in
+            transport.pipe(fail: transport.count == 0)
+        }, timeout: .seconds(1), retryDelay: .milliseconds(1)) }
+        #expect(await waitUntil { transport.count >= 2 })
+        task.cancel()
+        await task.value
+        #expect(transport.isClosed(2))
+        let attempts = transport.count
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(transport.count == attempts)
+    }
+
+    @Test func stuckInitialWriteRetries() async {
+        let transport = Transport(), gate = Gate(), feed = ChatFeed(), launch = launch
+        let task = Task { await feed.run(makeLaunch: { launch }, open: { _ in
+            transport.pipe(write: { _ in await gate.wait() })
+        }, timeout: .milliseconds(30), retryDelay: .milliseconds(1)) }
+        #expect(await waitUntil { transport.count >= 2 })
+        task.cancel()
+        await task.value
+        await gate.release()
+        #expect(transport.isClosed(2))
+    }
+
+    @Test func cancellingStuckWriteClosesPromptly() async {
+        let transport = Transport(), gate = Gate(), feed = ChatFeed(), launch = launch
+        var finished = false
+        let task = Task {
+            await feed.run(makeLaunch: { launch }, open: { _ in
+                transport.pipe(write: { _ in await gate.wait() })
+            }, timeout: .seconds(10), retryDelay: .milliseconds(1))
+            finished = true
+        }
+        #expect(await waitUntil { transport.writeCount > 0 })
+        task.cancel()
+        #expect(await waitUntil { finished })
+        #expect(transport.closed > 0)
+        await gate.release()
+        await task.value
+        #expect(transport.count == 1)
+    }
+
+    @Test func stuckSourceUploadRetries() async {
+        let transport = Transport(), gate = Gate(), feed = ChatFeed(), launch = launch
+        let task = Task { await feed.run(makeLaunch: { launch }, open: { _ in
+            transport.pipe(needSource: true, write: { _ in
+                if transport.writeCount % 2 == 0 { await gate.wait() }
+            })
+        }, timeout: .milliseconds(40), retryDelay: .milliseconds(1)) }
+        #expect(await waitUntil { transport.count >= 2 })
+        task.cancel()
+        await gate.release()
+        await task.value
+        #expect(transport.isClosed(2))
+    }
+
+    @Test func cancelledOpenClosesLatePipe() async {
+        let transport = Transport(), gate = Gate(), feed = ChatFeed(), launch = launch
+        let task = Task { await feed.run(makeLaunch: { launch }, open: { _ in
+            transport.enteredOpen()
+            await gate.wait()
+            return transport.pipe()
+        }, timeout: .seconds(1), retryDelay: .milliseconds(1)) }
+        #expect(await waitUntil { transport.openCount > 0 })
+        task.cancel()
+        await task.value
+        await gate.release()
+        #expect(await waitUntil { transport.closed > 0 })
+        #expect(transport.count == 1)
+    }
+
+    @Test func trafficWithoutReadinessStillRetriesAndKeepsDisplayedItems() async {
+        let transport = Transport(), feed = ChatFeed(), launch = launch
+        feed.loadEvents([["t": "msg", "id": "old", "role": "user", "text": "kept"]])
+        let task = Task { await feed.run(makeLaunch: { launch }, open: { _ in
+            transport.pipe(traffic: true)
+        }, timeout: .milliseconds(40), retryDelay: .milliseconds(1)) }
+        #expect(await waitUntil { transport.count >= 2 })
+        #expect(feed.items.map(\.id) == ["old"])
+        task.cancel()
+        await task.value
+    }
+
+    @Test func initialReadTimeoutReplacesSpinnerWhileRetrying() async {
+        let transport = Transport(), feed = ChatFeed(), launch = launch
+        let task = Task { await feed.run(makeLaunch: { launch }, open: { _ in
+            transport.pipe(traffic: true)
+        }, timeout: .milliseconds(40), retryDelay: .milliseconds(1)) }
+        #expect(await waitUntil { transport.count >= 2 })
+        if case .failed = feed.phase {} else {
+            Issue.record("Timed-out initial load must show a failure instead of an endless spinner")
+        }
+        task.cancel()
+        await task.value
+    }
+}

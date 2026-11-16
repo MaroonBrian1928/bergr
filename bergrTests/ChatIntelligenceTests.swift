@@ -255,3 +255,27 @@ struct ToolSummaryStoreTests {
         #expect(await writer.calls == 0)
     }
 }
+
+struct ScheduledSendTests {
+    private func window(_ percent: Double, _ resets: Double) -> ChatFeed.Usage.Window {
+        ChatFeed.Usage.Window(percent: percent, resetsAt: Date(timeIntervalSince1970: resets))
+    }
+
+    @Test func onlyAFullWindowBlocks() {
+        let now = Date(timeIntervalSince1970: 0)
+        #expect(ScheduledSend.limitingReset(session: window(100, 10), weekly: window(40, 900), now: now) == Date(timeIntervalSince1970: 10))
+        #expect(ScheduledSend.limitingReset(session: window(100, 10), weekly: window(100, 900), now: now) == Date(timeIntervalSince1970: 900))
+        #expect(ScheduledSend.limitingReset(session: window(30, 10), weekly: window(80, 900), now: now) == nil)
+    }
+}
+
+@MainActor struct StepGistTests {
+    @Test func bareCommandsAndOneLineGists() {
+        #expect(ToolOutputSummaries.bare("Ran /bin/zsh -lc 'rg -n x src'") == "rg -n x src")
+        #expect(ToolOutputSummaries.bare("Ran docker ps") == "docker ps")
+        #expect(ToolOutputSummaries.bare("Read the render test") == "Read the render test")
+        #expect(ToolOutputSummaries.gist("Find image status\nFind creation time") == "Find image status")
+        #expect(ToolOutputSummaries.gist("List container image status, inspect creation, check git hash, count string pattern")
+                == "List container image status")
+    }
+}

@@ -41,6 +41,8 @@ struct PromptReading: Equatable {
 
 enum PromptStep: Equatable {
     case up, down, enter, escape
+    /// Shift+Left: Codex's composer selects the previous open question ("Re: …").
+    case previousQuestion
     case text(String)
 }
 
@@ -141,11 +143,15 @@ final class ScreenCapture {
             case .down: data = vt.encode(.down)
             case .enter: data = vt.encode(.enter)
             case .escape: data = vt.encode(.escape)
+            case .previousQuestion: data = vt.encode(.left, modifiers: .shift)
             case .text(let text): data = Data(text.utf8)
             }
             try? await attached.send(data)
         }
     }
+
+    /// The screen now, as the terminal has drawn it so far.
+    func currentLines() -> [String] { vt.frame().textLines }
 
     func close() async {
         pump?.cancel()
@@ -223,6 +229,8 @@ struct AnswerFlow {
         var status: TerminalStatus?
         var lines: [String]?
         var send: ([PromptStep]) async -> Void
+        /// The screen as it is now (it changes after keys are pressed).
+        var currentLines: () -> [String] = { [] }
         var record: (_ question: String, _ answer: String) -> Void
         var close: () async -> Void
     }
@@ -254,6 +262,30 @@ struct AnswerFlow {
         }
         // Typing into a permission or choice prompt would answer it (Enter picks the highlighted
         // option, a digit picks one): then the text waits in the chat's draft instead.
+        // A Codex question: select it in Codex's composer (Shift+Left until "Re: <question>" shows),
+        // then paste and send, as the chat does. Only if it can't be selected does it wait as a draft.
+        if Self.isCodexQuestion(status: screen.status, alertQuestion: request.question),
+           let question = request.question {
+            let result = await CodexQuestionReply.sendResult(
+                text, title: question, pendingCount: 3,
+                lines: screen.currentLines,
+                previous: { await screen.send([.previousQuestion]) },
+                paste: { await screen.send([.text($0)]) },
+                submit: { await screen.send([.enter]) },
+                choose: { await screen.send([.text(String($0))]) })
+            switch result {
+            case .sent:
+                screen.record(question, text)
+                await screen.close()
+                return .sent
+            case .unconfirmed:
+                await screen.close()
+                openChat(request.host, request.address)
+                return .openedChat
+            case .notSent:
+                break
+            }
+        }
         guard Self.acceptsFreeText(status: screen.status, lines: screen.lines),
               !Self.isCodexQuestion(status: screen.status, alertQuestion: request.question) else {
             await screen.close()
@@ -335,6 +367,7 @@ struct AnswerFlow {
                 // The status may have moved on while we attached.
                 status: session.terminal(address)?.status, lines: lines,
                 send: { await capture.send($0) },
+                currentLines: { capture.currentLines() },
                 record: {
                     AnswerRecorder.record(
                         question: $0, answer: $1, session: session, terminal: terminal, source: .notification)

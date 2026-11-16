@@ -64,14 +64,21 @@ final class ToolOutputSummaries {
             Task.detached { try? data?.write(to: store, options: .atomic) }
         }
     }
-    /// Ids already asked for (answered or not): each tool is asked once.
-    @ObservationIgnored private var asked: Set<String> = []
+    /// Output requests are coalesced while in flight and become repeatable after failure.
+    @ObservationIgnored private var outputInFlight: Set<String> = []
+    /// Step requests are coalesced while in flight; stored summaries are the success cache.
+    @ObservationIgnored private var stepsInFlight: Set<String> = []
     @ObservationIgnored private let writer: OnDeviceTextWriting
     @ObservationIgnored private let gate = ConcurrencyGate(limit: concurrent)
+    @ObservationIgnored private let stepsAttemptCount: Int
+    @ObservationIgnored private let stepsRetryBackoff: Duration
 
-    init(writer: OnDeviceTextWriting, store: URL? = nil) {
+    init(writer: OnDeviceTextWriting, store: URL? = nil,
+         stepsAttemptCount: Int = 3, stepsRetryBackoff: Duration = .milliseconds(250)) {
         self.writer = writer
         self.store = store
+        self.stepsAttemptCount = max(1, stepsAttemptCount)
+        self.stepsRetryBackoff = stepsRetryBackoff
         if let store, let data = try? Data(contentsOf: store),
            let saved = try? JSONDecoder().decode([Saved].self, from: data) {
             for entry in saved.suffix(Self.kept) where stored[entry.id] == nil {
@@ -89,13 +96,13 @@ final class ToolOutputSummaries {
         return text.split(separator: "\n", omittingEmptySubsequences: false).count > longerThanLines
     }
 
-    /// Writes the summary for a finished tool, once per id. Does nothing while the tool runs, when
-    /// its output is short, or when it was asked before.
+    /// Writes the summary for a finished tool, caching successes by id. Does nothing while the tool runs, when
+    /// its output is short, or while a request for it is in flight.
     func request(id: String, finished: Bool, name: String, command: String, output: String) async {
-        guard finished, Self.isLong(output), !asked.contains(id), stored[id] == nil else { return }
-        asked.insert(id)
+        guard finished, Self.isLong(output), !outputInFlight.contains(id), summary(for: id) == nil else { return }
+        outputInFlight.insert(id)
         // A row scrolled away cancels its request: forget it so it is asked again when it returns.
-        guard await gate.acquire() else { asked.remove(id); return }
+        guard await gate.acquire() else { outputInFlight.remove(id); return }
         let prompt = """
         Tool: \(name) \(OnDeviceText.truncate(command, to: 200))
         Its output, last lines:
@@ -103,32 +110,66 @@ final class ToolOutputSummaries {
         """
         let reply = await writer.write(instructions: Self.instructions, prompt: prompt, timeout: Self.timeout)
         await gate.release()
-        if Task.isCancelled, reply == nil { asked.remove(id); return }
+        outputInFlight.remove(id)
+        if Task.isCancelled { return }
         if let reply, let line = OnDeviceText.clean(reply, maxCharacters: 120), !Self.echoesPrompt(line) {
             set(line, for: id)
         }
     }
 
     /// What a run of steps was for, as a phrase ("fix the padding and rerun the tests"): a run's
-    /// line reads "Ran 2 commands to …". Asked once per `id`.
+    /// line reads "Ran 2 commands to …". Failed writes can be retried on a later request.
     func requestSteps(id: String, titles: [String]) async {
-        guard titles.count > 1, !asked.contains(id), stored[id] == nil else { return }
-        asked.insert(id)
-        guard await gate.acquire() else { asked.remove(id); return }
-        let prompt = "Steps:\n" + titles.suffix(20).map { "- " + OnDeviceText.truncate($0, to: 120) }.joined(separator: "\n")
-        let reply = await writer.write(instructions: Self.stepsInstructions, prompt: prompt, timeout: Self.timeout)
-        await gate.release()
-        if Task.isCancelled, reply == nil { asked.remove(id); return }
-        if let reply, let line = OnDeviceText.clean(reply, maxCharacters: 80), !Self.echoesPrompt(line) {
-            set(Self.gist(line), for: id)
+        guard titles.count > 1, !stepsInFlight.contains(id), summary(for: id) == nil else { return }
+        stepsInFlight.insert(id)
+        guard await gate.acquire() else { stepsInFlight.remove(id); return }
+        let prompt = "Commands:\n" + titles.suffix(20).map { "- " + OnDeviceText.truncate(Self.bare($0), to: 120) }.joined(separator: "\n")
+        // Longer than an output summary's: nothing waits on it (the row shows the count meanwhile).
+        var summary: String?
+        var holdsGate = true
+        for attempt in 0..<stepsAttemptCount {
+            let reply = await writer.write(instructions: Self.stepsInstructions, prompt: prompt, timeout: .seconds(8))
+            if Task.isCancelled { break }
+            if let reply, let line = OnDeviceText.clean(reply, maxCharacters: 80), !Self.echoesPrompt(line) {
+                summary = Self.gist(line)
+                break
+            }
+            guard attempt + 1 < stepsAttemptCount else { break }
+            await gate.release()
+            holdsGate = false
+            do { try await Task.sleep(for: stepsRetryBackoff) } catch { break }
+            guard !Task.isCancelled, await gate.acquire() else { break }
+            holdsGate = true
         }
+        if holdsGate { await gate.release() }
+        stepsInFlight.remove(id)
+        if !Task.isCancelled, let summary { set(summary, for: id) }
     }
 
-    /// "to fix the padding." → "Fix the padding": a row title.
+    /// "to fix the padding." → "Fix the padding": a row title. Only the first line (the model
+    /// sometimes answers one line per step), and a long one is cut at a comma past six words.
     static func gist(_ line: String) -> String {
-        var text = line.trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: ".")))
+        var text = String(line.split(whereSeparator: \.isNewline).first ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: ".")))
         if text.lowercased().hasPrefix("to ") { text.removeFirst(3) }
+        let words = text.split(separator: " ")
+        if words.count > 8 {
+            let clauses = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            text = clauses.first.map { $0.split(separator: " ").count <= 8 ? $0 : words.prefix(8).joined(separator: " ") }
+                ?? text
+        }
         return text.prefix(1).uppercased() + text.dropFirst()
+    }
+
+    /// A step as the model reads it: "Ran /bin/zsh -lc 'rg x'" → "rg x". A bare command reads as
+    /// a task to it; "Ran" and the shell wrapper made it answer "Ran command ran command".
+    static func bare(_ title: String) -> String {
+        var text = title
+        if text.hasPrefix("Ran ") { text.removeFirst(4) }
+        if let match = text.firstMatch(of: /^(?:\/[\w\/]+\/)?(?:ba|z)?sh\s+-l?c\s+(['"])(.*)\1\s*$/) {
+            text = String(match.output.2)
+        }
+        return text
     }
 
     /// The model sometimes answers with the instructions' own words ("counts: 689, what failed:
@@ -139,9 +180,10 @@ final class ToolOutputSummaries {
     }
 
     static let stepsInstructions = """
-    You name what a coding agent's steps did, from the list of steps, in at most 6 words, \
-    starting with a verb, like "Fix padding and rerun tests" or "Find where usage is shown". \
-    No period, no markdown, no quotes. Reply with the words only.
+    A coding agent ran some steps (shell commands, or descriptions of them). Say in one line of at \
+    most 6 words what they did together, as one task, starting with a verb. Examples: "Check the \
+    deployed container", "Run tests and fix padding", "Search the bot code for choices". \
+    One line only. No period, no quotes.
     """
 
     /// Requests waiting for a slot (for tests).

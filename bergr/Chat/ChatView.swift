@@ -53,6 +53,8 @@ struct ChatView: View {
     /// open and to scroll; the latest rows show, earlier ones a tap away. Search looks at all.
     @State private var rowLimit = Self.rowPage
     /// A sideways drag's pull, which shows the messages' times (iOS).
+    /// The pending save of the reply being written (see `.onChange(of: draft)`).
+    @State private var draftSave: Task<Void, Never>?
     @State private var timeReveal = MessageTimeReveal.Pull()
     // Rows shown at once ("Show earlier" adds more). Fewer on the Mac, where a wide window lays out
     // long rows and every one is measured.
@@ -147,8 +149,22 @@ struct ChatView: View {
         .scrollDismissesKeyboard(.interactively)
         #endif
         // A reply being written stays with its agent: switching away and back finds it again.
-        .onChange(of: draftKey, initial: true) { _, key in draft = ReplyDrafts.text(for: key) }
-        .onChange(of: draft) { _, text in ReplyDrafts.set(text, for: draftKey) }
+        .onChange(of: draftKey, initial: true) { old, key in
+            if old != key, draftSave != nil { draftSave?.cancel(); draftSave = nil; ReplyDrafts.set(draft, for: old) }
+            draft = ReplyDrafts.text(for: key)
+        }
+        // Saved once typing pauses, not per key: each save changed UserDefaults, which redrew every
+        // view reading @AppStorage (the whole agents list on the Mac), and typing lagged.
+        .onChange(of: draft) { _, text in
+            let key = draftKey
+            draftSave?.cancel()
+            draftSave = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled else { return }
+                draftSave = nil
+                ReplyDrafts.set(text, for: key)
+            }
+        }
         // A draft changed from elsewhere (a Shortcut, a notification reply that couldn't be typed).
         .onReceive(NotificationCenter.default.publisher(for: ReplyDrafts.changed)) { note in
             guard let key = draftKey, note.userInfo?["agent"] as? String == key else { return }
@@ -193,6 +209,7 @@ struct ChatView: View {
         }
         .background(palette.background)
         .onDisappear {
+            if draftSave != nil { draftSave?.cancel(); draftSave = nil; ReplyDrafts.set(draft, for: draftKey) }
             outbox.draftKey = draftKey
             outbox.cancelAll()
             // Undelivered replies went back into the draft: take it, so a later edit here keeps them.
@@ -759,6 +776,11 @@ struct ChatView: View {
                     .padding(.horizontal, 20)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let usage = feed.usage,
+               let reset = ScheduledSend.limitingReset(session: usage.session, weekly: usage.weekly) {
+                LimitBar(reset: reset, scheduler: limitScheduler, draft: $draft, palette: palette)
+                    .transition(arrival)
+            }
             if let terminal, terminal.isLive {
                 // Not while a question card is open: the cards answer it, and the screen-guessed
                 // buttons (Yes, No, Return, Esc) only showed without the question.
@@ -923,6 +945,15 @@ struct ChatView: View {
            lastUserMessage: feed.items.lastIndex { if case .user = $0.kind { return true }; return false })
     }
 
+    /// Has the agent's machine send a message later (the limit bar's "Continue Then").
+    private var limitScheduler: ScheduleRunner? {
+        guard let session, let terminal else { return nil }
+        return ScheduleRunner(
+            address: terminal.address, windows: session.isWindowsHost, machine: session.host.name,
+            helperReady: (PushRegistration.shared.helperVersion[session.host.id] ?? 0) >= ScheduledSend.minHelperVersion,
+            run: { command in try await session.commandOutput(command.command, input: command.input) })
+    }
+
     private func answerCodexQuestion(_ answer: String, title: String, id: String) {
         guard canType, questionPicks[id] == nil, !questionSending.contains(id) else { return }
         questionSending.insert(id)
@@ -931,13 +962,19 @@ struct ChatView: View {
         Task { @MainActor in
             defer { questionSending.remove(id) }
             await model.automate {
-                let sent = await CodexQuestionReply.send(answer, title: title, pendingCount: pending,
+                let result = await CodexQuestionReply.sendResult(answer, title: title, pendingCount: pending,
                     lines: { model.frame.textLines },
                     previous: { model.press(.left, modifiers: .shift) },
-                    paste: { model.paste($0) }, submit: { model.press(.enter) })
-                if sent {
+                    paste: { model.paste($0) }, submit: { model.press(.enter) },
+                    choose: { model.type(String($0)) },
+                    confirmed: { feed.questionInfo[id]?.answer != nil })
+                switch result {
+                case .sent:
                     questionPicks[id] = answer
-                } else {
+                case .unconfirmed:
+                    questionPicks[id] = answer
+                    sendError = "Choice sent, but confirmation hasn’t arrived. Check the terminal."
+                case .notSent:
                     sendError = "Couldn't select this Codex question. Your answer wasn't sent. Try again, or answer in the terminal."
                 }
             }
@@ -1784,6 +1821,7 @@ struct ToolRun: View {
     var waiting = false
     var summaries: ToolOutputSummaries = .shared
     @State private var open = false
+    @Environment(\.scenePhase) private var summaryScenePhase
     /// The tallest the live run's output box has been (lines): it doesn't shrink mid-run.
     @State private var outputLines = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1810,6 +1848,11 @@ struct ToolRun: View {
     }
 
     private var stepsKey: String { "steps|" + (steps.last?.id ?? "") }
+
+    /// Retry a missing summary when the app returns or the on-device model becomes available.
+    private func summaryRequestKey(_ key: String) -> String {
+        "\(key)|\(summaryScenePhase == .active)|\(OnDeviceText.isAvailable)"
+    }
 
     /// The step whose output the second line sums up, once the run is done: the last failed one
     /// (its output says what went wrong), else the newest with output; only when that output is long.
@@ -1969,8 +2012,8 @@ struct ToolRun: View {
                 .frame(minHeight: 28, alignment: .leading)
                 .contentTransition(.numericText())
                 // A few words on what the folded steps did (one line, so the run never grows by it).
-                .task(id: earlierKey(earlier)) {
-                    guard earlier > 1 else { return }
+                .task(id: summaryRequestKey(earlierKey(earlier))) {
+                    guard summaryScenePhase == .active, earlier > 1 else { return }
                     await summaries.requestSteps(id: earlierKey(earlier),
                                                  titles: steps.prefix(earlier).map { Self.title([$0]) })
                 }
@@ -2122,12 +2165,12 @@ struct ToolRun: View {
                 .transition(.opacity)
             }
         }
-        .task(id: digestStep.map { "\($0.id)" }) {
-            guard let step = digestStep, let output = step.output else { return }
+        .task(id: digestStep.map { summaryRequestKey("\($0.id)") }) {
+            guard summaryScenePhase == .active, let step = digestStep, let output = step.output else { return }
             await summaries.request(id: step.id, finished: true, name: step.name, command: step.summary, output: output)
         }
-        .task(id: running || waiting ? "" : stepsKey) {
-            guard !running, !waiting, steps.count > 1 else { return }
+        .task(id: running || waiting ? "" : summaryRequestKey(stepsKey)) {
+            guard summaryScenePhase == .active, !running, !waiting, steps.count > 1 else { return }
             await summaries.requestSteps(id: stepsKey, titles: steps.map { Self.title([$0]) })
         }
         .foregroundStyle(palette.secondary)
@@ -3002,7 +3045,16 @@ struct MessageTimeReveal: ViewModifier {
 
     /// The time on both sides, outside the row: the slide brings one into view. The row takes the
     /// full width first, so the times sit past the screen's edges and not just past a short row's.
-    func body(content: Content) -> some View {
+    @ViewBuilder func body(content: Content) -> some View {
+        #if os(macOS)
+        // No sideways drag on the Mac: and stretching the row there centered short messages.
+        content
+        #else
+        revealing(content)
+        #endif
+    }
+
+    private func revealing(_ content: Content) -> some View {
         content.frame(maxWidth: time == nil ? nil : .infinity, alignment: .leading).overlay {
             if let time {
                 let text = Self.label(time)

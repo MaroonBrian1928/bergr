@@ -17,12 +17,14 @@ public enum LocalMachine {
         }
     }
 
-    public static var localNames: [String] {
+    /// Looked up once: `Host.current()` resolves the names each call (slow), and the agents list
+    /// asked for every machine on every redraw, which made typing on the Mac lag.
+    public static let localNames: [String] = {
         #if os(macOS)
         [ProcessInfo.processInfo.hostName, Host.current().name, Host.current().localizedName]
             .compactMap { $0 }
         #else
         []
         #endif
-    }
+    }()
 }

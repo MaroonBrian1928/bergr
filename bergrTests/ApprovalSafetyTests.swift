@@ -92,6 +92,28 @@ struct ApprovalSafetyTests {
         #expect(log.sent.isEmpty && log.recorded == 0 && log.opened == 1)
     }
 
+    @MainActor @Test func replyToACodexQuestionSelectsItThenSends() async throws {
+        final class Log { var sent: [[PromptStep]] = []; var selected = false }
+        let log = Log()
+        let status = try JSONDecoder().decode(TerminalStatus.self,
+            from: Data(#"{"state":"blocked","app":"codex","kind":"question","msg":"Which branch?"}"#.utf8))
+        let flow = AnswerFlow(
+            screen: { _ in nil }, openChat: { _, _ in Issue.record("opened the chat") },
+            replyScreen: { _ in
+                AnswerFlow.Screen(status: status, lines: ["› "],
+                                  send: { steps in
+                                      log.sent.append(steps)
+                                      if steps == [.previousQuestion] { log.selected = true }
+                                  },
+                                  currentLines: { log.selected ? ["Re: Which branch?", "› "] : ["› "] },
+                                  record: { _, _ in }, close: {})
+            })
+        let outcome = await flow.reply(ReplyNotificationRequest(host: UUID(), address: "t1", text: "main",
+                                                                question: "Which branch?"))
+        #expect(outcome == .sent)
+        #expect(log.sent == [[.previousQuestion], [.text("main")], [.enter]])
+    }
+
     @Test func replyOpensTheChatWhenTheConnectionFails() async {
         final class Log { var opened: [String] = [] }
         let log = Log()
