@@ -133,6 +133,12 @@ extension FileLoader {
     static func imagePaths(in text: String) -> [String] {
         var out: [String] = []
         for match in text.matches(of: /(?:~\/|\/)[^\s`'"()<>\[\]]+\.(?i:png|jpe?g|gif|webp|heic)\b/) {
+            // Only a whole path: one that starts a word (after a space, quote, backtick or
+            // bracket), not the tail of a shortened one ("…/compare/badge.png").
+            if match.range.lowerBound > text.startIndex {
+                let before = text[text.index(before: match.range.lowerBound)]
+                guard before.isWhitespace || "`'\"(<[".contains(before) else { continue }
+            }
             let path = String(match.output)
             if !out.contains(path) { out.append(path) }
             if out.count == 4 { break }

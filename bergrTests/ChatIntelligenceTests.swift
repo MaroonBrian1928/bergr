@@ -298,6 +298,7 @@ struct NamedImageTests {
         let text = "Before: /private/tmp/a/badge.png and after: `/tmp/b/badge.PNG`, notes in /tmp/x.txt, ~/shots/c.jpeg"
         #expect(FileLoader.imagePaths(in: text) == ["/private/tmp/a/badge.png", "/tmp/b/badge.PNG", "~/shots/c.jpeg"])
         #expect(FileLoader.imagePaths(in: "no images here: /etc/hosts").isEmpty)
+        #expect(FileLoader.imagePaths(in: "shortened …/compare/check2/badge.png and x/y.png").isEmpty)
     }
 
     @Test func pathTravelsAsAQuotedArgument() {
