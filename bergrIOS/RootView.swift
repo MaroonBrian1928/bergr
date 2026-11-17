@@ -17,7 +17,9 @@ struct RootView: View {
     @State private var selectedTerminal: String? = RootView.restoredTerminal
     private static let restoreKey = "openTerminal"
     private static var restoredTerminal: String? {
-        UserDefaults.standard.string(forKey: restoreKey).flatMap { $0.isEmpty ? nil : $0 }
+        // Not for a demo launch (screenshots, UI tests): each starts at the agents list.
+        guard !UserDefaults.standard.bool(forKey: "bergr.demo") else { return nil }
+        return UserDefaults.standard.string(forKey: restoreKey).flatMap { $0.isEmpty ? nil : $0 }
     }
     @State private var columns = NavigationSplitViewVisibility.all
     /// On a phone (one column at a time): which column shows. Opening an agent moves to its chat.
