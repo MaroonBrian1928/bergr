@@ -94,6 +94,11 @@ import Foundation
 
     enum Result { case sent, notSent, unconfirmed }
 
+    /// Codex's own prompt is showing (its "›" composer line near the bottom).
+    static func atPrompt(_ lines: [String]) -> Bool {
+        lines.suffix(8).contains { $0.trimmingCharacters(in: .whitespaces).hasPrefix("›") }
+    }
+
     static func sendResult(_ answer: String, title: String, pendingCount: Int,
                      lines: () -> [String], previous: () async -> Void,
                      paste: (String) async -> Void, submit: () async -> Void,
@@ -114,17 +119,22 @@ import Foundation
                    let choose {
                     await choose(index)
                     let end = ContinuousClock.now + selectionWait
-                    // Taken when the next question shows, or when no panel is left (the last question
-                    // was answered and Codex is back at its prompt) for two reads in a row: one read
-                    // can be a frame mid-redraw.
-                    var gone = 0
+                    // Taken when the next question shows, or when the panel has stayed gone for
+                    // 600 ms with Codex's prompt on screen (the last question was answered). A
+                    // single redraw or a loading frame is neither.
+                    var goneSince: ContinuousClock.Instant?
                     repeat {
                         guard !Task.isCancelled else { return .unconfirmed }
                         if confirmed() { return .sent }
-                        let now = panel(lines: lines())
+                        let screen = lines()
+                        let now = panel(lines: screen)
                         if let next = now, next.heading != currentPanel.heading { return .sent }
-                        gone = now == nil ? gone + 1 : 0
-                        if gone >= 2 { return .sent }
+                        if now == nil, Self.atPrompt(screen) {
+                            goneSince = goneSince ?? .now
+                            if ContinuousClock.now - goneSince! >= .milliseconds(600) { return .sent }
+                        } else {
+                            goneSince = nil
+                        }
                         guard ContinuousClock.now < end else { break }
                         do { try await Task.sleep(for: .milliseconds(50)) } catch { return .unconfirmed }
                     } while true

@@ -203,8 +203,8 @@ struct ReplyEnvironment {
                     guard reply.epoch == epoch else { return }
                 }
                 env.terminal.press(.enter)
-                reply.entered = true
             }
+            Task { await self.confirmEntered(reply, epoch: epoch, env: env) }
             guard reply.epoch == epoch else { return }
             if reply.text.trimmingCharacters(in: .whitespacesAndNewlines) == "/clear", !reply.payload.hasImages {
                 await monitorClear(reply, epoch: epoch, conversation: conversation, env: env)
@@ -312,9 +312,10 @@ struct ReplyEnvironment {
             try? await Task.sleep(for: timing.enterDelay)
             guard reply.epoch == epoch else { return }
             terminal.press(.enter)
-            reply.entered = true
         }
         guard reply.epoch == epoch else { return }
+        // Alongside the rest: it only decides what goes back into the reply field on leaving.
+        Task { await confirmEntered(reply, epoch: epoch, env: env) }
         if reply.text.trimmingCharacters(in: .whitespacesAndNewlines) == "/clear", !reply.payload.hasImages {
             await monitorClear(reply, epoch: epoch, conversation: conversation, env: env)
             return
@@ -322,6 +323,23 @@ struct ReplyEnvironment {
         await confirmEnter(reply, epoch: epoch, message: message, env: env)
         guard reply.epoch == epoch else { return }
         await monitor(reply, epoch: epoch, since: reply.sentAt, env: env)
+    }
+
+    /// Marks the reply as in the agent's hands only once the machine shows it: the terminal echoes
+    /// it (in the prompt or the agent's queue) or it's in the transcript.
+    /// Return pressed here proves nothing when the connection dropped, and a reply lost that way
+    /// must go back into the reply field when the chat closes.
+    private func confirmEntered(_ reply: ReplyDelivery, epoch: Int, env: ReplyEnvironment) async {
+        let probe = String(reply.text.prefix(24))
+        let end = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < end, reply.epoch == epoch {
+            if reply.payload.arrived(in: env.feedItems())
+                || (!probe.isEmpty && env.terminal.frameLines.contains { $0.contains(probe) }) {
+                reply.entered = true
+                return
+            }
+            try? await Task.sleep(for: env.timing.poll)
+        }
     }
 
     private func monitorClear(_ reply: ReplyDelivery, epoch: Int, conversation: String?, env: ReplyEnvironment) async {

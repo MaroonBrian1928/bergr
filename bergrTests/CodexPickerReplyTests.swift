@@ -51,9 +51,17 @@ import Testing
         let result = await CodexQuestionReply.sendResult("Not sure", title: title, pendingCount: 1,
             lines: { screen }, previous: { actions.append("previous") }, paste: { _ in actions.append("paste") },
             submit: { actions.append("enter") }, choose: { actions.append(String($0)); screen = ["› ", ""] },
-            selectionWait: .milliseconds(500))
+            selectionWait: .seconds(2))
         #expect(result == .sent)
         #expect(actions == ["3"])
+    }
+
+    @Test func aBlankOrLoadingFrameIsNotConfirmation() async {
+        var screen = panel
+        let result = await CodexQuestionReply.sendResult("Not sure", title: title, pendingCount: 1,
+            lines: { screen }, previous: {}, paste: { _ in }, submit: {},
+            choose: { _ in screen = ["", "Loading…", ""] }, selectionWait: .seconds(1))
+        #expect(result == .unconfirmed)
     }
 
     @Test func wrongHeadingAndTimeoutNeverSendExtraKeys() async {

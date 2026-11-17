@@ -26,11 +26,22 @@ import Testing
     @Test func enteredQueuedReplyStaysOutOfTheDraft() async {
         let rig = rig()
         rig.state = "working"
+        rig.terminal.frameLines = ["  queued behind the step"]  // the agent shows it in its queue
         let reply = rig.send("queued behind the step")
         await rig.until { reply.entered }
         rig.outbox.cancelAll()
         #expect(ReplyDrafts.text(for: "m|a", in: d) == "")
         #expect(!ReplyDrafts.hasUnsent(for: "m|a", in: d))
+    }
+
+    @Test func returnPressedButNeverShownIsRestored() async {
+        let rig = rig()
+        rig.state = "working"
+        let reply = rig.send("lost on the way")
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(!reply.entered)
+        rig.outbox.cancelAll()
+        #expect(ReplyDrafts.text(for: "m|a", in: d) == "lost on the way")
     }
 
     @Test func failedIsRestored() async {

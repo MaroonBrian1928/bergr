@@ -168,6 +168,10 @@ final class KeyLibrary {
         return signing
     }
 
+    /// Whether `id` is unlocked now (not locked again since): a connection's own copy of a key
+    /// unlocked before the app went to the background mustn't be reused after.
+    func isUnlocked(_ id: UUID) -> Bool { unlocked[id] != nil }
+
     /// Locks the keys again (the app went to the background without staying connected).
     func forgetUnlocked() {
         AuthTrail.note("keys locked (app to background); \(unlocking.count) unlock(s) cancelled")

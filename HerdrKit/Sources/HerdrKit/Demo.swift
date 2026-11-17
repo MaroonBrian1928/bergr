@@ -213,6 +213,8 @@ private actor DemoEngine {
         if let name, terminals.contains(where: { $0.name == name && $0.state == "live" }) {
             throw DemoError(code: -32000, message: "a terminal named \(name) already runs", kind: "name_taken")
         }
+        // Skip addresses the script already uses (machines start with t11–t13 and others).
+        while terminals.contains(where: { $0.address == "t\(nextTerminal)" }) { nextTerminal += 1 }
         let address = "t\(nextTerminal)"
         nextTerminal += 1
         let cwd = params["cwd"] as? String ?? DemoScript.home

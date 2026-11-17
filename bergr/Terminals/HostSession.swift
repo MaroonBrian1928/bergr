@@ -305,7 +305,11 @@ final class HostSession {
             signingKey: { [weak self] in
                 guard let self else { throw CancellationError() }
                 guard let info = keys.key(id: self.host.keyID) else { throw SessionError.noKey }
-                if let key = self.signingKey { return key }
+                // Its own copy only while the key is still unlocked: after the app locked the keys
+                // (backgrounded), a Secure Enclave key's approval is gone, and every machine signing
+                // with it at once made iOS raise its own prompts, which cancelled each other
+                // ("Canceled by another authentication"). Ask the library: one Face ID for all.
+                if let key = self.signingKey, !info.requiresBiometry || keys.isUnlocked(info.id) { return key }
                 let key = try await keys.signingKey(for: info)
                 // A replaced attempt's unlock is still good, but only the current one may keep it.
                 if self.generation == generation, self.attempt != nil { self.signingKey = key }
