@@ -374,7 +374,10 @@ enum DemoChat {
             tool("d-t3", "apply_patch", "src/images/cache.ts"),
             tool("d-t4", "apply_patch", "src/routes/products.ts"),
             ["t": "question", "id": cacheQuestion, "title": DemoBeat.cacheQuestion,
-             "options": ["On disk", "In Redis"], "async": true, "group": idPrefix + "d-q", "index": 0, "count": 1],
+             "options": ["In Redis (Recommended)", "On disk"],
+             "details": ["Shared by all three servers, with a size limit so it can't push out sessions.",
+                         "Simple and survives restarts, but each server keeps its own copy."],
+             "header": "Image cache", "async": true, "group": idPrefix + "d-q", "index": 0, "count": 1],
         ], stages: [
             Stage(beat: DemoBeat.cacheRunning, after: nil, events: [
                 live(0.5, agent("d-a3", 0, "Going with that. I'll wire the cache in behind the interface and run the image tests.")),

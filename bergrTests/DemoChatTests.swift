@@ -150,7 +150,9 @@ struct DemoChatTests {
         let feed = feed(DemoChat.cache)
         guard case .question(let title, let options) = feed.items.last?.kind else { Issue.record("ends on the question"); return }
         #expect(title == DemoBeat.cacheQuestion)
-        #expect(options == ["On disk", "In Redis"])
+        #expect(options == ["In Redis (Recommended)", "On disk"])
+        #expect(feed.questionInfo[DemoChat.cacheQuestion]?.header == "Image cache")
+        #expect(feed.questionInfo[DemoChat.cacheQuestion]?.details.count == 2)
         #expect(feed.questionInfo[DemoChat.cacheQuestion]?.codexAsync == true)
         let open = CodexQuestionReply.open(
             items: feed.items.map { item in
