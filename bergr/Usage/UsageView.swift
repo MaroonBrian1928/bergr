@@ -66,8 +66,15 @@ struct UsageScreen: View {
 
     private func header(_ account: UsageAccount) -> String {
         guard let first = account.readings.first else { return "" }
-        if account.readings.count == 1 { return "\(first.agent.displayName) on \(first.machine)" }
-        return "\(first.agent.displayName) · \(account.readings.map(\.machine).joined(separator: ", "))"
+        return Self.header(agent: first.agent.displayName, machines: account.readings.map(\.machine))
+    }
+
+    /// "Claude on studio", or "Claude · studio, buildbox" for an account seen on several machines.
+    /// Two agents on one machine name it once.
+    static func header(agent: String, machines: [String]) -> String {
+        var seen: Set<String> = []
+        let unique = machines.filter { seen.insert($0).inserted }
+        return unique.count == 1 ? "\(agent) on \(unique[0])" : "\(agent) · \(unique.joined(separator: ", "))"
     }
 
     private func readingRow(_ reading: UsageReading) -> some View {

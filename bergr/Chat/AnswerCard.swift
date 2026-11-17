@@ -237,8 +237,12 @@ struct AnswerCard: View {
     @State private var explained: (command: String, text: String)?
     private let explainer = CommandExplainer(writer: OnDeviceText.shared)
 
+    /// On a demo machine: the explanation is the demo's fixed sentence, not the model's.
+    var demo = false
+
     init(status: TerminalStatus?, model: TerminalScreenModel, palette: ChatPalette,
-         scope: ApprovalScope? = nil, onAnswer: ((String, String) -> Void)? = nil) {
+         scope: ApprovalScope? = nil, demo: Bool = false, onAnswer: ((String, String) -> Void)? = nil) {
+        self.demo = demo
         self.status = status
         self.model = model
         self.palette = palette
@@ -357,7 +361,7 @@ struct AnswerCard: View {
     }
 
     private func explain(_ command: String) async {
-        let text = await explainer.explain(command)
+        let text = demo ? DemoChat.explanation(for: command) : await explainer.explain(command)
         explained = text.map { (command: command, text: $0) }
     }
 

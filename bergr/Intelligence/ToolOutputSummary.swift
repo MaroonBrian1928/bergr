@@ -90,6 +90,12 @@ final class ToolOutputSummaries {
 
     func summary(for id: String) -> String? { slot(id).text }
 
+    /// The demo's conversations bring their summaries with them (fixed text, so screenshots are
+    /// the same every time): shown at once, never saved, and never asked of the model.
+    func seedDemo(_ lines: [String: String]) {
+        for (id, text) in lines where DemoChat.isDemo(id) { slot(id).text = text }
+    }
+
     /// Whether the output's tail is long enough to summarize (more than four lines of text).
     static func isLong(_ output: String) -> Bool {
         let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -99,7 +105,7 @@ final class ToolOutputSummaries {
     /// Writes the summary for a finished tool, caching successes by id. Does nothing while the tool runs, when
     /// its output is short, or while a request for it is in flight.
     func request(id: String, finished: Bool, name: String, command: String, output: String) async {
-        guard finished, Self.isLong(output), !outputInFlight.contains(id), summary(for: id) == nil else { return }
+        guard finished, Self.isLong(output), !outputInFlight.contains(id), summary(for: id) == nil, !DemoChat.isDemo(id) else { return }
         outputInFlight.insert(id)
         // A row scrolled away cancels its request: forget it so it is asked again when it returns.
         guard await gate.acquire() else { outputInFlight.remove(id); return }
@@ -120,7 +126,7 @@ final class ToolOutputSummaries {
     /// What a run of steps was for, as a phrase ("fix the padding and rerun the tests"): a run's
     /// line reads "Ran 2 commands to …". Failed writes can be retried on a later request.
     func requestSteps(id: String, titles: [String]) async {
-        guard titles.count > 1, !stepsInFlight.contains(id), summary(for: id) == nil else { return }
+        guard titles.count > 1, !stepsInFlight.contains(id), summary(for: id) == nil, !DemoChat.isDemo(id) else { return }
         stepsInFlight.insert(id)
         guard await gate.acquire() else { stepsInFlight.remove(id); return }
         let prompt = "Commands:\n" + titles.suffix(20).map { "- " + OnDeviceText.truncate(Self.bare($0), to: 120) }.joined(separator: "\n")

@@ -509,10 +509,7 @@ final class ChatFeed {
                     newerAgent = event["installed"] as? String
                     modelsNeedingUpdate = event["needs"] as? [String] ?? []
                 case "commands":
-                    commands = (event["items"] as? [[String: Any]] ?? []).compactMap {
-                        guard let name = $0["name"] as? String else { return nil }
-                        return Command(name: name, description: $0["description"] as? String ?? "")
-                    }
+                    applyCommands(event)
                 case "msg", "tool", "toolout", "plan", "image", "question":
                     trace?.mark("first event")
                     apply(event, type: type, prepared: parsed)
@@ -576,6 +573,7 @@ final class ChatFeed {
         switch event["t"] as? String {
         case "usage": applyUsage(event)
         case "subagent": applySubagent(event)
+        case "commands": applyCommands(event)
         case let type?: apply(event, type: type)
         default: break
         }
@@ -601,6 +599,13 @@ final class ChatFeed {
             building = []
         }
         phase = .live
+    }
+
+    private func applyCommands(_ event: [String: Any]) {
+        commands = (event["items"] as? [[String: Any]] ?? []).compactMap {
+            guard let name = $0["name"] as? String else { return nil }
+            return Command(name: name, description: $0["description"] as? String ?? "")
+        }
     }
 
     /// Upserts a sub-agent's status (by id) in the side map.

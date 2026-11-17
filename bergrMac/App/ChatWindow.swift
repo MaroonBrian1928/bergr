@@ -162,12 +162,8 @@ private struct ChatWindowContent: View {
     }
 
     private func chatAgent(_ terminal: Terminal?) -> ChatAgent? {
-        #if DEBUG
-        // Profiling (`-bergr.demo YES -bergr.stress <turns>`): the demo machine's agents get a chat.
-        if session.host.isDemo, UserDefaults.standard.integer(forKey: "bergr.stress") > 0,
-           let terminal, terminal.foreground?.name == "agent" { return .claude }
-        #endif
-        return terminal.flatMap(ChatAgent.detect)
+        // The demo machines' agents are found like any other, by their program (`DemoChat`).
+        terminal.flatMap(ChatAgent.detect)
     }
 
     /// The machine this terminal runs on: a linked machine's name (`popos/t3`), or this connection's.

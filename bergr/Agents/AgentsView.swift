@@ -138,18 +138,14 @@ struct AgentsView: View {
         .modifier(SearchResultsSections.InfoAlert(hit: $searchModel.info))
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { digest.appDidLeave() }
-            if phase == .active {
-                digest.appDidReturn {
-                    machineLists.flatMap { list in
-                        list.ordered.map { t in
-                            AwayDigestModel.Candidate(
-                                host: list.host,
-                                machine: t.address.contains("/") ? String(t.address.prefix { $0 != "/" }) : list.host.name,
-                                terminal: t, lines: list.session.digestLines(address: t.address))
-                        }
-                    }
-                }
-            }
+            if phase == .active { digest.appDidReturn { awayCandidates } }
+        }
+        // `-bergr.demoAway YES` (screenshots): the card as after half an hour away, once the demo's
+        // agents are listed.
+        .task {
+            guard UserDefaults.standard.bool(forKey: "bergr.demoAway") else { return }
+            for _ in 0..<40 where awayCandidates.count < 5 { try? await Task.sleep(for: .milliseconds(250)) }
+            digest.build(since: .now.addingTimeInterval(-30 * 60), candidates: awayCandidates.filter(\.host.isDemo))
         }
         #if os(iOS)
         .toolbar {
@@ -764,6 +760,20 @@ struct MuteNotificationsButton: View {
             var prefs = Delivery.prefs
             prefs.setMuted(!muted, host: host, address: terminal.address, name: terminal.displayName)
             Delivery.prefs = prefs
+        }
+    }
+}
+
+extension AgentsView {
+    /// Every listed agent, for the "while you were away" card.
+    private var awayCandidates: [AwayDigestModel.Candidate] {
+        machineLists.flatMap { list in
+            list.ordered.map { t in
+                AwayDigestModel.Candidate(
+                    host: list.host,
+                    machine: t.address.contains("/") ? String(t.address.prefix { $0 != "/" }) : list.host.name,
+                    terminal: t, lines: list.session.digestLines(address: t.address))
+            }
         }
     }
 }

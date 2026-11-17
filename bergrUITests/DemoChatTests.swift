@@ -9,7 +9,7 @@ final class DemoChatTests: XCTestCase {
         app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                 "-bergr.demo", "YES", "-bergr.demoChat", "YES"]
         app.launch()
-        let row = app.staticTexts["Running tests"].firstMatch
+        let row = app.staticTexts["Add a dark mode toggle"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         row.tap()
         let reply = NSPredicate(format: "placeholderValue BEGINSWITH 'Reply'")

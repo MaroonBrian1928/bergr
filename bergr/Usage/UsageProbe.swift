@@ -107,8 +107,8 @@ final class UsageProbe {
 
     static let sshRunner: Runner = { target in
         guard let session = target.session else { throw UsageProbeError.unreachable }
-        // The demo machine has no transcripts: nothing to read.
-        if session.host.isDemo { return nil }
+        // The demo machines have no transcripts: their agents' numbers come with the demo.
+        if session.host.isDemo { return DemoChat.usage(address: String(target.id.split(separator: "/").last ?? ""), agent: target.agent) }
         guard session.canRunCommands else { throw UsageProbeError.unreachable }
         guard let script else { throw UsageProbeError.helperMissing }
         let plan = try launch(script: script, target: target, windows: session.isWindowsHost)

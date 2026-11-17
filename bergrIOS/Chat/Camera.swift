@@ -17,8 +17,10 @@ extension ChatAttachment {
 }
 
 enum CameraAvailability {
-    static var canTakePhoto: Bool { UIImagePickerController.isSourceTypeAvailable(.camera) }
-    static var canScan: Bool { VNDocumentCameraViewController.isSupported }
+    // `-bergr.demoAttach YES` (screenshots): the whole menu, as on a phone, even in the simulator.
+    private static var demo: Bool { UserDefaults.standard.bool(forKey: "bergr.demoAttach") }
+    static var canTakePhoto: Bool { demo || UIImagePickerController.isSourceTypeAvailable(.camera) }
+    static var canScan: Bool { demo || VNDocumentCameraViewController.isSupported }
 }
 
 /// The system camera, full screen. Calls `onImage` with the shot, or `onCancel`.

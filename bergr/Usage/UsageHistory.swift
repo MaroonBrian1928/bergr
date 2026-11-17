@@ -74,6 +74,8 @@ final class UsageHistory {
     }
 
     private(set) var entries: [Entry]
+    /// The demo machines' made-up history: shown like any other, never saved.
+    private var demoEntries: [Entry] = []
     private var lastTime: [String: Date] = [:]
     private let url: URL?
 
@@ -116,8 +118,15 @@ final class UsageHistory {
         entries.removeAll { $0.time < cutoff }
     }
 
+    /// Replaces the demo history for the keys in `seeded`.
+    func seedDemo(_ seeded: [Entry]) {
+        let keys = Set(seeded.map(\.key))
+        demoEntries.removeAll { keys.contains($0.key) }
+        demoEntries += seeded
+    }
+
     func entries(key: String, since: Date) -> [Entry] {
-        entries.filter { $0.key == key && $0.time >= since }.sorted { $0.time < $1.time }
+        (entries + demoEntries).filter { $0.key == key && $0.time >= since }.sorted { $0.time < $1.time }
     }
 
     /// The forecast for the window's current run (same reset time), counting the live reading.

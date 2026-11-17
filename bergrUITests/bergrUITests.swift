@@ -79,7 +79,7 @@ final class DemoTourTests: XCTestCase {
         shot(app, "readme-1-agents")
 
         // An agent's conversation: ask, and watch it work and answer.
-        let agent = app.staticTexts["Adding a dark mode toggle"].firstMatch
+        let agent = app.staticTexts["Add a dark mode toggle"].firstMatch
         XCTAssertTrue(agent.waitForExistence(timeout: 5))
         agent.tap()
         // The reply box: a text view or field, whichever SwiftUI made of it.
@@ -110,7 +110,8 @@ final class DemoTourTests: XCTestCase {
         blocked.tap()
         pause(2.5)
         shot(app, "readme-3-needs-you")
-        let yes = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Yes'")).firstMatch
+        // The card's first answer ("1, Yes"), not "Yes, and don't ask again".
+        let yes = app.buttons.matching(NSPredicate(format: "label ENDSWITH 'Yes'")).firstMatch
         XCTAssertTrue(yes.waitForExistence(timeout: 5), "the answer card shows")
         yes.tap()
         pause(4)
@@ -142,8 +143,8 @@ final class DemoTourTests: XCTestCase {
         // The blocked one: answer in a tap and watch it go.
         open(app, "t3")
         pause(2.5)
-        let yes = app.buttons["Yes"]
-        XCTAssertTrue(yes.waitForExistence(timeout: 5), "the needs-you bar shows")
+        let yes = app.buttons.matching(NSPredicate(format: "label ENDSWITH 'Yes'")).firstMatch
+        XCTAssertTrue(yes.waitForExistence(timeout: 5), "the answer card shows")
         yes.tap()
         pause(5)
         backIfStacked(app)
@@ -349,8 +350,8 @@ final class DemoTourTests: XCTestCase {
         for state in ["needsYou", "done", "working"] {
             XCTAssertTrue(section(state).waitForExistence(timeout: 5), "a \(state) section")
         }
-        let upgrade = app.descendants(matching: .any).matching(identifier: "t6").firstMatch
-        XCTAssertTrue(upgrade.exists, "the unread upgrade is under Done")
+        let upgrade = app.descendants(matching: .any).matching(identifier: "t1").firstMatch
+        XCTAssertTrue(upgrade.exists, "the unread dark mode turn is under Done")
         XCTAssertLessThan(blockedRow(app).frame.minY, upgrade.frame.minY, "what needs you comes first")
         shot(app, "status-0-agents")
 
@@ -364,7 +365,7 @@ final class DemoTourTests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
 
         // Looking at it reads it: it moves to Idle, which starts collapsed.
-        open(app, "t6")
+        open(app, "t1")
         sleep(2)
         back(app)
         let idle = section("idle")
@@ -420,7 +421,7 @@ final class DemoTourTests: XCTestCase {
         app.launch()
         startDemo(app)
         app.buttons["Terminals"].tap()
-        let infra = app.descendants(matching: .any).matching(identifier: "t6").firstMatch
+        let infra = app.descendants(matching: .any).matching(identifier: "t5").firstMatch
         let list = app.collectionViews.firstMatch
         for _ in 0..<4 where !(infra.exists && infra.isHittable) { list.swipeUp() }
         XCTAssertTrue(infra.isHittable, "scrolled down to the last terminal")
@@ -441,8 +442,8 @@ final class DemoTourTests: XCTestCase {
         startDemo(app)
         XCTAssertTrue(blockedRow(app).waitForExistence(timeout: 10), "the demo's terminals show")
         shot(app, "switcher-0-list")
-        // The title is a menu button: "Demo machine ⌄".
-        app.navigationBars.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Demo machine'")).firstMatch.tap()
+        // The title is a menu button: "studio ⌄".
+        app.navigationBars.buttons.matching(NSPredicate(format: "label BEGINSWITH 'studio'")).firstMatch.tap()
         let manage = app.buttons["Manage Machines…"]
         XCTAssertTrue(manage.waitForExistence(timeout: 5), "the title opens the switcher")
         shot(app, "switcher-1-menu")
@@ -530,7 +531,7 @@ final class DemoTourTests: XCTestCase {
     @MainActor
     private func openSettings(_ app: XCUIApplication) {
         startDemo(app)
-        app.navigationBars.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Demo machine'")).firstMatch.tap()
+        app.navigationBars.buttons.matching(NSPredicate(format: "label BEGINSWITH 'studio'")).firstMatch.tap()
         let settings = app.buttons["Settings…"]
         XCTAssertTrue(settings.waitForExistence(timeout: 5), "the title menu offers Settings")
         settings.tap()
@@ -549,7 +550,7 @@ final class DemoTourTests: XCTestCase {
     @MainActor
     private func back(_ app: XCUIApplication) {
         // The back button sits in a side rail on wide screens, in the navigation bar otherwise.
-        for candidate in [app.buttons["BackButton"], app.buttons["Demo machine"], app.buttons["Back"]] where candidate.exists {
+        for candidate in [app.buttons["BackButton"], app.buttons["studio"], app.buttons["Back"]] where candidate.exists {
             candidate.tap()
             return
         }

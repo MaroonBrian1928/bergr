@@ -198,7 +198,10 @@ final class HostSession {
         let feed = paused?.agent == agent ? paused!.feed : ChatFeed()
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
-            if self.host.isDemo { await feed.runDemo(agent: agent, cwd: cwd); return }
+            if self.host.isDemo {
+                await feed.runDemo(address: address, agent: agent) { [weak self] in self?.terminal(address)?.status }
+                return
+            }
             await feed.run(session: self, agent: agent, pid: pid, cwd: cwd, sessionHint: sessionHint)
         }
         feeds[address] = (agent, feed, task, .now)
@@ -229,7 +232,9 @@ final class HostSession {
     /// Sub-agents running under a terminal's agent, from its chat feed if one is being followed.
     @MainActor
     func runningSubagents(address: String) -> Int {
-        feeds[address]?.feed.runningSubagents ?? 0
+        if let feed = feeds[address]?.feed { return feed.runningSubagents }
+        // The demo's working agent shows its sub-agents in the list before its chat was opened.
+        return host.isDemo ? DemoChat.runningSubagents(address: address, status: terminal(address)?.status) : 0
     }
 
     /// The last chat items of a terminal's feed (live or paused), for the "while you were away"

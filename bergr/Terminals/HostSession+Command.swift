@@ -6,7 +6,9 @@ extension HostSession {
     /// Runs a short command on the machine and returns what it printed; gives up after
     /// `timeout` so a stuck channel can't hang the caller.
     func commandOutput(_ command: String, input: Data? = nil, timeout: Duration = .seconds(20)) async throws -> String {
-        try await withThrowingTaskGroup(of: String.self) { group in
+        // The demo machines answer the few git commands the app asks (a row's branch, the Changes sheet).
+        if host.isDemo { return try await MainActor.run { try DemoChat.commandOutput(command) } }
+        return try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask {
                 let pipe = try await self.openExec(command)
                 defer { pipe.close() }

@@ -6,10 +6,11 @@ import TerminalCore
 enum PromptBuilder {
     typealias Prompt = BergrActivityAttributes.Prompt
 
-    /// Blocked agents with a numbered question first (those can be answered precisely), then in
-    /// the order given. An agent whose screen isn't known yet is skipped.
+    /// Blocked agents with a numbered question first (those can be answered precisely), among
+    /// those a permission prompt before a free-form question, then in the order given. An agent
+    /// whose screen isn't known yet is skipped.
     static func prompt(machines: [LiveActivityMachine], screens: [String: [String]]) -> Prompt? {
-        var best: (prompt: Prompt, numbered: Bool)?
+        var best: (prompt: Prompt, rank: Int)?
         for machine in machines {
             for terminal in machine.terminals where terminal.isLive && terminal.status?.state == "blocked" {
                 guard let lines = screens[LiveActivityController.screenKey(host: machine.host, terminal: terminal)]
@@ -19,7 +20,8 @@ enum PromptBuilder {
                 let prompt = Prompt(
                     host: machine.host.uuidString, address: terminal.address, title: terminal.displayName,
                     question: reading.question, options: reading.options)
-                if best == nil || (reading.numbered && !best!.numbered) { best = (prompt, reading.numbered) }
+                let rank = (reading.numbered ? 2 : 0) + (terminal.status?.kind == "permission" ? 1 : 0)
+                if best == nil || rank > best!.rank { best = (prompt, rank) }
             }
         }
         return best?.prompt

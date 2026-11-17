@@ -41,10 +41,13 @@ struct HostConnector {
             }
             if host.isDemo {
                 context.progress("Starting the demo…")
-                let client = try await HerdrClient.connectDemo()
+                let machine = host.demoMachine ?? .studio
+                let client = try await HerdrClient.connectDemo(machine: machine)
+                DemoChat.seed(machine: host.name)
+                // Each demo machine is its own core: the same name would read as one machine added twice.
                 return HostConnection(
-                    client: client, ssh: nil, coreName: "Demo", coreVersion: await client.hello?.version,
-                    close: { await client.close() })
+                    client: client, ssh: nil, coreName: "Demo \(machine.name)", coreVersion: await client.hello?.version,
+                    isWindows: machine.isWindows, close: { await client.close() })
             }
             let ssh: SSHConnection
             #if os(macOS)

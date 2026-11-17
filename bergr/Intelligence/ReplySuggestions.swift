@@ -21,11 +21,16 @@ final class ReplySuggestions {
         self.writer = writer
     }
 
+    /// The demo's conversations bring their chips with them (fixed text; the model isn't asked).
+    func seedDemo(_ chips: [String: [String]]) {
+        for (id, texts) in chips where DemoChat.isDemo(id) && self.chips[id] != texts { self.chips[id] = texts }
+    }
+
     /// Writes the chips for an assistant message, once. Nothing while the agent works, and nothing
     /// when the model writes nothing usable (the reply bar then shows no chips). A model that gives
     /// no answer at all (not ready, or too slow) is asked once more next time.
     func request(messageID: String, text: String, working: Bool, context: String = "", userRequest: String = "") async {
-        guard !Task.isCancelled, !working, !asked.contains(messageID) else { return }
+        guard !Task.isCancelled, !working, !asked.contains(messageID), !DemoChat.isDemo(messageID) else { return }
         asked.insert(messageID)
         let prompt = Self.prompt(text: text, context: context, userRequest: userRequest)
         let reply = await writer.write(instructions: Self.instructions, prompt: prompt, timeout: Self.timeout)

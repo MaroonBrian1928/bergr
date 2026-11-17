@@ -31,6 +31,8 @@ struct Host: Identifiable, Codable, Hashable {
     }
 
     var isDemo: Bool { demo == true }
+    /// Which of the demo's machines this is.
+    var demoMachine: DemoMachine? { isDemo ? DemoMachine(target: target.host) ?? .studio : nil }
     var isLocal: Bool {
         #if os(macOS)
         !isDemo && (local == true || LocalMachine.matches(target.host))
@@ -49,8 +51,8 @@ struct Host: Identifiable, Codable, Hashable {
         Host(name: "This Mac", target: SSHTarget(host: "localhost", username: NSUserName()), local: true)
     }
 
-    static func makeDemo() -> Host {
-        Host(name: "Demo machine", target: SSHTarget(host: "demo", username: "demo"), demo: true)
+    static func makeDemo(_ machine: DemoMachine = .studio) -> Host {
+        Host(name: machine.name, target: SSHTarget(host: machine.target, username: "demo"), demo: true)
     }
 }
 
@@ -97,13 +99,13 @@ final class HostStore {
         return local
     }
 
-    /// Adds the demo machine (once) and returns it.
+    /// Adds the demo's machines (once) and returns the first, the one to open.
     @discardableResult
     func addDemo() -> Host {
-        if let existing = hosts.first(where: \.isDemo) { return existing }
-        let demo = Host.makeDemo()
-        save(demo)
-        return demo
+        for machine in DemoMachine.allCases where !hosts.contains(where: { $0.demoMachine == machine }) {
+            save(Host.makeDemo(machine))
+        }
+        return hosts.first { $0.demoMachine == .studio } ?? Host.makeDemo()
     }
 
     /// Reorders the machines (the agent list follows this order).

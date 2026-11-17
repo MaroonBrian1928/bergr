@@ -7,10 +7,10 @@ public final class DemoCore: ByteTransport {
     public let incoming: AsyncThrowingStream<Data, Error>
     private let engine: DemoEngine
 
-    public init() {
+    public init(machine: DemoMachine = .studio) {
         let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
         incoming = stream
-        engine = DemoEngine(output: continuation)
+        engine = DemoEngine(output: continuation, machine: machine)
     }
 
     public func send(_ data: Data) async throws {
@@ -24,8 +24,8 @@ public final class DemoCore: ByteTransport {
 
 extension HerdrClient {
     /// Connects to an in-app `DemoCore`.
-    public static func connectDemo() async throws -> HerdrClient {
-        try await connect(over: DemoCore())
+    public static func connectDemo(machine: DemoMachine = .studio) async throws -> HerdrClient {
+        try await connect(over: DemoCore(machine: machine))
     }
 }
 
@@ -37,8 +37,9 @@ private actor DemoEngine {
     private var framed = false
     private var closed = false
 
-    private var terminals = DemoScript.terminals()
-    private var roles = DemoScript.roles
+    private let machine: DemoMachine
+    private var terminals: [DemoTerminal]
+    private var roles: [String: DemoScript.Role]
     private var seq: UInt64 = 100
     private var nextChannel: UInt32 = 1
     private var nextTerminal = 8
@@ -47,6 +48,8 @@ private actor DemoEngine {
     private var views: [UInt32: View] = [:]
     private var tasks: [UInt32: Task<Void, Never>] = [:]
     private var clock: Task<Void, Never>?
+    /// What an agent does after an answer, by terminal: it goes on when nobody is looking.
+    private var flows: [String: Task<Void, Never>] = [:]
 
     /// One attached viewer.
     private struct View {
@@ -56,14 +59,18 @@ private actor DemoEngine {
         var line = ""
     }
 
-    init(output: AsyncThrowingStream<Data, Error>.Continuation) {
+    init(output: AsyncThrowingStream<Data, Error>.Continuation, machine: DemoMachine) {
         self.output = output
+        self.machine = machine
+        terminals = DemoScript.terminals(machine)
+        roles = DemoScript.roles(machine)
     }
 
     func shutdown() {
         closed = true
         clock?.cancel()
         for task in tasks.values { task.cancel() }
+        for task in flows.values { task.cancel() }
         tasks.removeAll()
         output.finish()
     }
@@ -131,14 +138,14 @@ private actor DemoEngine {
     private func answer(_ method: String, _ params: [String: Any]) throws -> (Data, (() -> Void)?) {
         switch method {
         case "hello":
-            return (try encode(Hello()), nil)
+            return (try encode(Hello(machine: machine)), nil)
 
         case "terminal.list":
             return (try encode(ListResult(terminals: terminals)), nil)
 
         case "doc.get":
             let name = params["name"] as? String
-            let value = name == HerdrAppLayout.documentName ? DemoScript.layout : "null"
+            let value = name == HerdrAppLayout.documentName ? DemoScript.layout(machine) : "null"
             let version = name == HerdrAppLayout.documentName ? 1 : 0
             return (Data(#"{"value":\#(value),"version":\#(version)}"#.utf8), nil)
 
@@ -293,13 +300,16 @@ private actor DemoEngine {
     /// What a viewer typed.
     private func typed(_ data: Data, on channel: UInt32) {
         guard var view = views[channel], let role = roles[view.address] else { return }
-        let text = String(decoding: data, as: UTF8.self)
+        var text = String(decoding: data, as: UTF8.self)
+        if case .agent = role {
+            text = text.replacingOccurrences(of: "\u{1b}[200~", with: "").replacingOccurrences(of: "\u{1b}[201~", with: "")
+        }
         switch role {
         case .stream:
             if text.contains("\u{03}") { write(channel, "^C\r\n" + DemoScript.dim("(this demo keeps running)") + "\r\n") }
             return
-        case .approval:
-            approve(view.address, yes: text.lowercased().hasPrefix("y"), channel: channel)
+        case .approval(let history, let prompt, let selected):
+            answer(text, to: prompt, history: history, selected: selected, address: view.address)
             return
         case .shell, .agent:
             break
@@ -352,37 +362,134 @@ private actor DemoEngine {
                 write(channel, role.prompt)
                 return
             }
+            if address == DemoBeat.cacheAgent, terminals.first(where: { $0.address == address })?.status?.state == "blocked" {
+                answerCacheQuestion(address, with: line.trimmingCharacters(in: .whitespaces))
+                return
+            }
             write(channel, DemoScript.agentReply + role.prompt)
         case .stream, .approval:
             break
         }
     }
 
-    /// The blocked agent: yes lets it finish its work, no stops it.
-    private func approve(_ address: String, yes: Bool, channel: UInt32) {
-        roles[address] = .agent(DemoScript.approvalPaint + (yes ? DemoScript.approved : DemoScript.denied))
-        write(channel, yes ? DemoScript.approved : DemoScript.denied)
-        guard yes else {
-            setStatus(address, .init(state: "idle", app: "agent", title: "Migration skipped", msg: nil))
-            write(channel, DemoScript.Role.agent("").prompt)
+    /// Keys at a permission prompt: the arrows move the cursor, Return picks the answer under it, a
+    /// digit picks that answer, Esc (or n) says no and y says yes.
+    private func answer(_ text: String, to prompt: DemoScript.Prompt, history: String, selected: Int, address: String) {
+        let last = prompt.options.count - 1
+        var at = selected
+        var rest = Substring(text)
+        while let first = rest.first {
+            if let arrow = ["\u{1b}[A", "\u{1b}OA", "\u{1b}[B", "\u{1b}OB"].first(where: { rest.hasPrefix($0) }) {
+                at = arrow.hasSuffix("A") ? max(0, at - 1) : min(last, at + 1)
+                rest = rest.dropFirst(arrow.count)
+                continue
+            }
+            rest = rest.dropFirst()
+            switch first {
+            case "\r", "\n", "\r\n": return decide(address, prompt: prompt, history: history, yes: at < last)
+            case "\u{1b}", "n", "N": return decide(address, prompt: prompt, history: history, yes: false)
+            case "y", "Y": return decide(address, prompt: prompt, history: history, yes: true)
+            default:
+                if let digit = first.wholeNumberValue, (1...prompt.options.count).contains(digit) {
+                    return decide(address, prompt: prompt, history: history, yes: digit - 1 < last)
+                }
+            }
+        }
+        guard at != selected else { return }
+        roles[address] = .approval(history: history, prompt: prompt, selected: at)
+        repaint(address)
+    }
+
+    /// Draws a terminal's screen again for everyone looking at it.
+    private func repaint(_ address: String) {
+        guard let role = roles[address] else { return }
+        for (channel, view) in views where view.address == address { write(channel, DemoScript.clear + role.paint) }
+    }
+
+    /// More output from an agent: kept (for whoever attaches later) and shown to who is looking.
+    private func print(_ text: String, on address: String) {
+        guard case .agent(let shown) = roles[address] else { return }
+        roles[address] = .agent(shown + text)
+        for (channel, view) in views where view.address == address { write(channel, text) }
+    }
+
+    /// The blocked agent got its answer. The migration: yes runs it and then asks about the old
+    /// table, no stops. The old table: either answer finishes the turn. It goes on whether or not
+    /// anyone is looking at the terminal.
+    private func decide(_ address: String, prompt: DemoScript.Prompt, history: String, yes: Bool) {
+        let app = terminals.first { $0.address == address }?.status?.app
+        func status(_ state: String, _ msg: String, progress: Int? = nil) -> DemoStatus {
+            .init(state: state, app: app, title: "Add order totals endpoint", msg: msg, progress: progress)
+        }
+        func end(_ text: String, _ status: DemoStatus) {
+            print(text, on: address)
+            for (channel, view) in views where view.address == address { write(channel, DemoScript.Role.agent("").prompt) }
+            setStatus(address, status)
+        }
+        roles[address] = .agent(history + prompt.paint(selected: yes ? 0 : prompt.options.count - 1))
+        repaint(address)
+        flows[address]?.cancel()
+        if prompt == DemoScript.dropPrompt {
+            guard yes else { return end(DemoScript.dropKept, status("done", DemoBeat.totalsDoneKept)) }
+            print(DemoScript.approved, on: address)
+            setStatus(address, status("working", DemoBeat.dropRunning, progress: 90))
+            flows[address] = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(1800))
+                guard !Task.isCancelled else { return }
+                await self?.finishDrop(address, status("done", DemoBeat.totalsDone))
+            }
             return
         }
-        setStatus(address, .init(state: "working", app: "agent", title: "Running the migration", msg: nil, progress: 40))
-        tasks[channel]?.cancel()
-        tasks[channel] = Task { [weak self] in
-            for line in DemoScript.migrationOutput {
-                try? await Task.sleep(for: .milliseconds(700))
-                await self?.write(channel, line)
+        guard yes else { return end(DemoScript.denied, status("idle", DemoBeat.migrationSkipped)) }
+        print(DemoScript.approved, on: address)
+        setStatus(address, status("working", DemoBeat.migrationRunning, progress: 40))
+        flows[address] = Task { [weak self] in
+            for line in DemoScript.migrationOutput + [DemoScript.migrationDone] {
+                try? await Task.sleep(for: .milliseconds(900))
+                guard !Task.isCancelled else { return }
+                await self?.print(line, on: address)
             }
-            await self?.setStatus(address, .init(state: "done", app: "agent", title: "Migration applied", msg: "orders.total_cents added"))
-            await self?.write(channel, DemoScript.migrationDone + DemoScript.Role.agent("").prompt)
-            await self?.becomeAgent(address, paint: DemoScript.approvalPaint + DemoScript.approved
-                + DemoScript.migrationOutput.joined() + DemoScript.migrationDone)
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled else { return }
+            await self?.ask(address, prompt: DemoScript.dropPrompt)
         }
     }
 
-    private func becomeAgent(_ address: String, paint: String) {
-        roles[address] = .agent(paint)
+    private func finishDrop(_ address: String, _ status: DemoStatus) {
+        print(DemoScript.dropDone, on: address)
+        for (channel, view) in views where view.address == address { write(channel, DemoScript.Role.agent("").prompt) }
+        setStatus(address, status)
+    }
+
+    /// The agent that asked where to cache images got its answer: it works on, and finishes.
+    private func answerCacheQuestion(_ address: String, with answer: String) {
+        func status(_ state: String, _ msg: String, progress: Int? = nil) -> DemoStatus {
+            .init(state: state, app: "codex", title: "Cache product images", msg: msg, progress: progress)
+        }
+        print(DemoScript.cacheAnswered(answer), on: address)
+        setStatus(address, status("working", DemoBeat.cacheRunning, progress: 60))
+        flows[address]?.cancel()
+        flows[address] = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(4500))
+            guard !Task.isCancelled else { return }
+            await self?.finishCache(address, status("done", DemoBeat.cacheDone))
+        }
+    }
+
+    private func finishCache(_ address: String, _ status: DemoStatus) {
+        print(DemoScript.cacheReady, on: address)
+        for (channel, view) in views where view.address == address { write(channel, DemoScript.Role.agent("").prompt) }
+        setStatus(address, status)
+    }
+
+    /// The agent stops at its next permission prompt.
+    private func ask(_ address: String, prompt: DemoScript.Prompt) {
+        guard case .agent(let shown) = roles[address] else { return }
+        roles[address] = .approval(history: shown, prompt: prompt, selected: 0)
+        repaint(address)
+        let app = terminals.first { $0.address == address }?.status?.app
+        setStatus(address, .init(state: "blocked", app: app, title: prompt.question,
+                                 msg: "Add order totals endpoint", kind: "permission"))
     }
 
     // MARK: Events
@@ -390,9 +497,9 @@ private actor DemoEngine {
     /// Things happen on their own, so the list is alive: tests finish, an agent works on.
     private func startClock() {
         guard clock == nil else { return }
-        clock = Task { [weak self] in
+        clock = Task { [weak self, machine] in
             var elapsed: Duration = .zero
-            var steps = DemoScript.timeline
+            var steps = DemoScript.timeline(machine)
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 elapsed += .seconds(1)
@@ -554,10 +661,14 @@ struct DemoTerminal: Encodable, Sendable {
 private struct Hello: Encodable {
     let generation = HerdrCore.generation
     let version = "demo"
-    let core = CoreInfo(id: "demo", name: "demo")
+    let core: CoreInfo
     let framed = true
     let methods = ["hello", "terminal.list", "terminal.attach", "terminal.run", "terminal.kill", "terminal.rm",
                    "terminal.label", "events.subscribe", "doc.get", "templates.list"]
+
+    init(machine: DemoMachine) {
+        core = CoreInfo(id: machine.target, name: machine.name)
+    }
     let features: [String] = []
 }
 

@@ -11,7 +11,10 @@ struct ChangesSheet: View {
     init(session: HostSession?, folder: String?, address: String? = nil, items: [ChatFeed.Item], toolOutput: [String: String]) {
         self.items = items
         self.toolOutput = toolOutput
-        _model = State(initialValue: ChangesModel(folder: folder ?? "", address: address, lastReply: ChangesSummary.lastReply(in: items)) { [weak session] command in
+        // On a demo machine the sentence on top is the demo's own (fixed text; the model isn't asked).
+        let writer: OnDeviceTextWriting = session?.host.isDemo == true
+            ? DemoChat.FixedText(reply: DemoChat.changesSummary(folder: folder ?? "")) : OnDeviceText.shared
+        _model = State(initialValue: ChangesModel(folder: folder ?? "", address: address, lastReply: ChangesSummary.lastReply(in: items), writer: writer) { [weak session] command in
             guard let session else { throw CocoaError(.fileNoSuchFile) }
             return try await session.commandOutput(command)
         })

@@ -198,8 +198,10 @@ final class AwayDigestModel {
         let contexts: [(Entry, DigestContext)] = changed.compactMap { c in
             guard let kind = DigestKind(c.terminal.agentState) else { return nil }
             let title = AgentsOrdering.title(c.terminal)
-            let entry = Entry(id: "\(c.host.id.uuidString)|\(c.terminal.address)", host: c.host.id,
+            var entry = Entry(id: "\(c.host.id.uuidString)|\(c.terminal.address)", host: c.host.id,
                               address: c.terminal.address, machine: c.machine, title: title, kind: kind)
+            // The demo's agents bring their sentence with them (fixed text; the model isn't asked).
+            if c.host.isDemo { entry.summary = DemoChat.digest[c.terminal.address] ?? c.terminal.status?.msg ?? "" }
             return (entry, DigestContext(title: title, kind: kind, lines: c.lines ?? [],
                                          statusMessage: c.terminal.status?.msg))
         }
@@ -207,7 +209,7 @@ final class AwayDigestModel {
         guard !contexts.isEmpty else { return }
         task?.cancel()
         let summarizer = summarizer
-        let items = contexts.map { (id: $0.0.id, context: $0.1) }
+        let items = contexts.filter { $0.0.summary == nil }.map { (id: $0.0.id, context: $0.1) }
         task = Task { [weak self] in
             await AwayDigest.summaries(items, summarizer: summarizer) { id, text in
                 await MainActor.run {

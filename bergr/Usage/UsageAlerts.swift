@@ -236,7 +236,8 @@ struct UsageAlertsHost: View {
 
     var body: some View {
         Color.clear
-            .modifier(UsageAlertsModifier(readings: UsageReadings.readings(hosts: hosts.hosts, sessions: sessions)))
+            // Not the demo machines: their made-up numbers never alert, reach the widget or the saved history.
+            .modifier(UsageAlertsModifier(readings: UsageReadings.readings(hosts: hosts.hosts.filter { !$0.isDemo }, sessions: sessions)))
             .accessibilityHidden(true)
             // While the app is active, read working agents without an open chat now and then; the
             // probe itself keeps each agent to one read per five minutes.

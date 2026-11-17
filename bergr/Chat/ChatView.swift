@@ -219,6 +219,15 @@ struct ChatView: View {
         // back when the chat shows again without having been rebuilt).
         .onAppear { rowStore.chat = self }
         .onDisappear { rowStore.chat = nil }
+        #if os(iOS)
+        // `-bergr.demoAttach YES` (screenshots): the demo's Codex question has a scanned sketch attached.
+        .task {
+            guard session?.host.isDemo == true, terminal?.address == DemoBeat.cacheAgent, attachments.isEmpty,
+                  UserDefaults.standard.bool(forKey: "bergr.demoAttach"),
+                  let sketch = ChatAttachment.make(from: DemoChat.sketch()) else { return }
+            attachments = [sketch]
+        }
+        #endif
         .onChange(of: state, initial: true) { _, now in workingSeen = now == "working" ? (workingSeen ?? .now) : nil }
         .toolbar { if pane == nil { chatToolbar } }
         .sheet(isPresented: $showingModels) {
@@ -790,8 +799,12 @@ struct ChatView: View {
                                       cwd: terminal.foreground?.cwd ?? terminal.cwd,
                                       agent: terminal.status?.app ?? terminal.displayName)
                     }
-                    AnswerSlot(terminal: terminal, model: model, blocked: state == "blocked" && !questionOpen, palette: palette,
-                               transition: arrival, scope: scope) { question, answer in
+                    // The demo's Codex question is answered from its card and the reply box: its
+                    // made-up terminal has no menu for the screen-read buttons to press.
+                    let demo = session?.host.isDemo == true
+                    AnswerSlot(terminal: terminal, model: model,
+                               blocked: state == "blocked" && !questionOpen && !(demo && openCodexQuestion != nil), palette: palette,
+                               transition: arrival, scope: scope, demo: demo) { question, answer in
                         feed.recordDecision(question: question, answer: answer)
                         ApprovalLog.record(
                             machine: session?.host.name ?? "", agent: terminal.status?.app ?? terminal.displayName,
@@ -950,7 +963,8 @@ struct ChatView: View {
         guard let session, let terminal else { return nil }
         return ScheduleRunner(
             address: terminal.address, windows: session.isWindowsHost, machine: session.host.name,
-            helperReady: (PushRegistration.shared.helperVersion[session.host.id] ?? 0) >= ScheduledSend.minHelperVersion,
+            helperReady: session.host.isDemo
+                || (PushRegistration.shared.helperVersion[session.host.id] ?? 0) >= ScheduledSend.minHelperVersion,
             run: { command in try await session.commandOutput(command.command, input: command.input) })
     }
 
@@ -2664,11 +2678,12 @@ private struct AnswerSlot: View {
     let palette: ChatPalette
     let transition: AnyTransition
     var scope: ApprovalScope? = nil
+    var demo = false
     let record: (String, String) -> Void
 
     var body: some View {
         if blocked || model.inLogin {
-            AnswerCard(status: terminal.status, model: model, palette: palette, scope: scope) { record($0, $1) }
+            AnswerCard(status: terminal.status, model: model, palette: palette, scope: scope, demo: demo) { record($0, $1) }
                 .transition(transition)
         } else if let offer = AlwaysAllowOffers.shared.current, offer.scope == scope {
             AlwaysAllowBanner(offer: offer, palette: palette).transition(transition)
