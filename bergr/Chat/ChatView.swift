@@ -1282,7 +1282,7 @@ struct ChatView: View {
             case .question(let title, let options):
                 if let info = key.info {
                     QuestionCard(title: title, options: options, details: info.details, header: info.header,
-                                 answer: key.answer, palette: palette,
+                                 numbered: !info.codexAsync, answer: key.answer, palette: palette,
                                  enabled: key.canType && !key.earlierOpen && !key.waiting,
                                  allowsText: info.codexAsync) { choice in
                         if info.codexAsync {
@@ -2589,6 +2589,20 @@ private struct NoteRow: View {
 }
 
 extension QuestionCard {
+    /// Sends the answer: the option says "Sending…" until it shows as answered, and a light
+    /// haptic confirms it went (only here, not on every tap).
+    func pick(_ choice: String) {
+        guard sending == nil else { return }
+        sending = choice
+        sent += 1
+        choose(choice)
+        // Not answered after a while (the send failed): the options take taps again.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(8))
+            if answer == nil { sending = nil }
+        }
+    }
+
     /// "Finish and ship (Recommended)" → ("Finish and ship", true): Claude marks its pick that way.
     static func recommendation(_ option: String) -> (String, Bool) {
         let marker = "(recommended)"
@@ -2605,21 +2619,26 @@ private struct QuestionCard: View {
     let options: [String]
     /// A line under each option (Claude's option descriptions), when there are any.
     var details: [String] = []
-    /// A short topic label shown above the question ("WORKERS").
+    /// A short topic label shown above the question ("Workers").
     var header = ""
+    /// 1, 2, 3 like Claude's menu in the terminal; A, B, C for Codex's questions.
+    var numbered = false
     let answer: String?
     let palette: ChatPalette
     let enabled: Bool
     var allowsText = false
     let choose: (String) -> Void
     @State private var response = ""
+    /// The option just tapped, until the answer shows: it says "Sending…" meanwhile.
+    @State private var sending: String?
+    /// Counts answers sent, for the haptic.
+    @State private var sent = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !header.isEmpty {
-                Text(header.uppercased())
-                    .font(.caption2.weight(.semibold))
-                    .tracking(0.6)
+                Text(header)
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(palette.secondary)
             }
             Label {
@@ -2628,10 +2647,11 @@ private struct QuestionCard: View {
                 Image(systemName: "questionmark.bubble.fill").foregroundStyle(palette.accent)
             }
             ForEach(Array(options.enumerated()), id: \.offset) { index, option in
-                let letter = String(UnicodeScalar(UInt8(65 + min(index, 25))))
+                let letter = numbered ? "\(index + 1)" : String(UnicodeScalar(UInt8(65 + min(index, 25))))
                 let picked = answer.map { Self.matches($0, option: option, letter: letter) } ?? false
+                let isSending = answer == nil && sending == option
                 let (label, recommended) = Self.recommendation(option)
-                Button { choose(option) } label: {
+                Button { pick(option) } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Text(letter).font(.footnote.weight(.semibold).monospaced())
                             .foregroundStyle(picked ? Color.white.opacity(0.8) : palette.secondary)
@@ -2654,7 +2674,11 @@ private struct QuestionCard: View {
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        if picked { Image(systemName: "checkmark") }
+                        if picked {
+                            Image(systemName: "checkmark")
+                        } else if isSending {
+                            ProgressView().controlSize(.small).accessibilityLabel("Sending")
+                        }
                     }
                     .foregroundStyle(picked ? Color.white : palette.text)
                     .padding(.horizontal, 14)
@@ -2665,26 +2689,42 @@ private struct QuestionCard: View {
                     .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 .buttonStyle(PressStyle())
-                .disabled(answer != nil || !enabled)
+                .disabled(answer != nil || !enabled || sending != nil)
                 .opacity(answer != nil && !picked ? 0.5 : 1)
             }
             if allowsText {
                 if let answer {
                     Text(answer).font(.callout).foregroundStyle(palette.secondary)
                 } else {
-                    TextField("Your answer", text: $response, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .lineLimit(1...5)
-                        .padding(10)
-                        .background(palette.field, in: RoundedRectangle(cornerRadius: 10))
-                        .accessibilityIdentifier("codex-question-answer")
-                    Button("Send Answer", systemImage: "arrow.up") { choose(response) }
-                        .disabled(!enabled || response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Text("Or answer in your own words")
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                        .padding(.top, 2)
+                    let empty = response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    HStack(alignment: .bottom, spacing: 8) {
+                        TextField("Your answer", text: $response, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .lineLimit(1...5)
+                            .accessibilityIdentifier("codex-question-answer")
+                        Button { pick(response) } label: {
+                            Image(systemName: "arrow.up")
+                                .font(.callout.weight(.bold))
+                                .frame(width: 30, height: 30)
+                                .foregroundStyle(empty ? palette.secondary : Color.white)
+                                .background(empty ? palette.bubble : palette.accent, in: Circle())
+                        }
+                        .buttonStyle(PressStyle())
+                        .disabled(!enabled || empty || sending != nil)
+                        .accessibilityLabel("Send Answer")
                         .accessibilityIdentifier("codex-question-send")
+                    }
+                    .padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 6)
+                    .background(palette.field, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
             }
         }
         .padding(12)
+        .sensoryFeedback(.impact(weight: .light), trigger: sent)
         .background(palette.codeBackground.opacity(0.6), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
