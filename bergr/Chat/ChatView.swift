@@ -1268,6 +1268,8 @@ struct ChatView: View {
                                     load: { await loader.loadImage($0) })
                     }
                 }
+                // Full width, leading: on the Mac's chat table a narrower stack was centered.
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .contextMenu {
                     copyButton(text)
                     Button("Read Aloud", systemImage: "speaker.wave.2") { SpeechReader.shared.toggle(text) }
