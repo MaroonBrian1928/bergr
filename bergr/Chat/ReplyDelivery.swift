@@ -98,6 +98,8 @@ struct ReplyEnvironment {
     var text: String { payload.text }
 
     @ObservationIgnored fileprivate var epoch = 0
+    /// Typed into the terminal and Return pressed: from then on it's in the agent's prompt or queue.
+    @ObservationIgnored fileprivate(set) var entered = false
     @ObservationIgnored fileprivate var driver: Task<Void, Never>?
 
     fileprivate init(payload: ReplyPayload, phase: Phase) {
@@ -201,6 +203,7 @@ struct ReplyEnvironment {
                     guard reply.epoch == epoch else { return }
                 }
                 env.terminal.press(.enter)
+                reply.entered = true
             }
             guard reply.epoch == epoch else { return }
             if reply.text.trimmingCharacters(in: .whitespacesAndNewlines) == "/clear", !reply.payload.hasImages {
@@ -230,7 +233,13 @@ struct ReplyEnvironment {
     /// (a duplicate is better than a lost instruction). Images aren't kept, only the words.
     func cancelAll() {
         let items = environment?.feedItems() ?? []
-        let lost = replies.filter { !$0.payload.arrived(in: items) }.map(\.payload.typed)
+        // Only what never reached the terminal goes back into the reply field. A queued or pushed
+        // reply is already typed into the agent's prompt and will be read after this step: putting
+        // it back (marked "not sent") made it look failed when it was waiting, and sending it again
+        // would duplicate it.
+        let lost = replies.filter { reply in
+            !reply.payload.arrived(in: items) && (!reply.entered || reply.phase == .failed)
+        }.map(\.payload.typed)
         ReplyDrafts.restore(lost, for: draftKey, in: defaults)
         for reply in replies { _ = restart(reply) }
         replies = []
@@ -303,6 +312,7 @@ struct ReplyEnvironment {
             try? await Task.sleep(for: timing.enterDelay)
             guard reply.epoch == epoch else { return }
             terminal.press(.enter)
+            reply.entered = true
         }
         guard reply.epoch == epoch else { return }
         if reply.text.trimmingCharacters(in: .whitespacesAndNewlines) == "/clear", !reply.payload.hasImages {
