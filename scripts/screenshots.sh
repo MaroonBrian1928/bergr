@@ -1,45 +1,68 @@
 #!/usr/bin/env bash
 # Modified for Bergr, 2026, from Hirte (Apache-2.0). See the git history for all changes.
-# App Store screenshots: runs the demo UI test on a clean simulator and frames each capture
-# with a caption, at the device's own screenshot size (iPhone 17 Pro: 1206×2622, the slot App Store
-# Connect requires; 17 Pro Max: 1320×2868; iPhone Duo outer display: 1398×2034).
-# Output: .build/screenshots/<device>/{raw,appstore}/*.png
+# App Store screenshots: runs the demo's shot test (bergrUITests/DemoShotsTests) on a clean simulator,
+# draws the Lock Screen and Home Screen frames from the real widget code (scripts/widget-render), and
+# frames each with a caption at the device's own screenshot size (iPhone 17 Pro: 1206×2622, the slot
+# App Store Connect requires; 17 Pro Max: 1320×2868; iPhone Duo outer display: 1398×2034).
+# Output: .build/screenshots/<device>-<appearance>/{raw,appstore}/*.png
 #
-#   scripts/screenshots.sh [light|dark] [device type]     (default: dark, "iPhone 17 Pro")
+#   scripts/screenshots.sh [dark|light] [device type]     (default: dark, "iPhone 17 Pro")
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 appearance="${1:-dark}"
 device_type="${2:-iPhone 17 Pro}"
-sim_name="Bergr Screenshots ($device_type)"
-out=".build/screenshots/$(echo "$device_type" | tr 'A-Z ' 'a-z-')"
+# BERGR_SIM_NAME / BERGR_DERIVED: another simulator / derived data folder.
+sim_name="${BERGR_SIM_NAME:-Bergr Screenshots ($device_type)}"
+derived="${BERGR_DERIVED:-.build/xcode}"
+out=".build/screenshots/$(echo "$device_type" | tr 'A-Z ' 'a-z-')-$appearance"
 raw="$out/raw"
 final="$out/appstore"
 
-# Captions, in the order the shots should appear in the App Store.
-shots=(1-terminals 2-agent 3-needs-you 4-shell)
-titles=("All your agents" "Chat with any agent" "Answer when it matters" "Powered by Ghostty")
-subtitles=("Every machine, sorted by what needs you." "Its conversation, live, as it works." "Blocked agents come first. Reply in a tap." "A real terminal, built on libghostty.")
+# The App Store set, in order (plans/screenshot-shotlist.md, frames 1 to 8): output name, raw frame
+# (DemoShotsTests' name, or widget-render's), caption (six words at most), subcaption.
+shots=(
+  "1-agents|01-agents|Your whole herd, one list|Every machine, sorted by what needs you."
+  "2-summaries|02-chat-summaries|Summaries written on your iPhone|Apple Intelligence, on device. Nothing leaves it."
+  "3-answer|03-answer-card|Answer in one tap|Questions become buttons."
+  "4-risky|04-dangerous-command|Know what you're approving|One sentence on what the command does."
+  "5-lock-screen|lock-live-activity|Answer from the Lock Screen|No need to open the app."
+  "6-usage|06-usage|See the limit coming|Session, weekly and context, with a forecast."
+  "7-reply|07-codex-reply|Talk, scan or paste|A reply doesn't need a keyboard."
+  "8-widgets|home-widgets|Always in view|Widgets, Live Activity, encrypted alerts."
+)
 
 # A clean, dedicated simulator (sets $device).
 source scripts/simulator.sh
 
 rm -rf "$out"
 mkdir -p "$raw" "$final"
-# Terminal font: as large as fits ~44 columns (the Duo's outer display is narrower).
-case "$device_type" in
-    "iPhone Duo") font=14 ;;
-    "iPhone 17 Pro" | "iPhone 17") font=15 ;;
-    *) font=17 ;;
-esac
-TEST_RUNNER_BERGR_SHOTS="$PWD/$raw" TEST_RUNNER_BERGR_SHOT_FONT="$font" xcodebuild -project bergr.xcodeproj -scheme bergr -derivedDataPath .build/xcode \
-    ${BERGR_TEAM:+DEVELOPMENT_TEAM=$BERGR_TEAM} BERGR_BUNDLE_ID_PREFIX="${BERGR_BUNDLE_ID_PREFIX:-com.pavelzw}" \
-    -destination "id=$device" -only-testing:bergrUITests/DemoTourTests/testDemoTour test | xcbeautify --quiet
+signing=(BERGR_BUNDLE_ID_PREFIX="${BERGR_BUNDLE_ID_PREFIX:-com.pavelzw}")
+[ -n "${BERGR_TEAM:-}" ] && signing+=(DEVELOPMENT_TEAM="$BERGR_TEAM")
+# A flaky tap now and then: one retry.
+for attempt in 1 2; do
+  if TEST_RUNNER_BERGR_SHOTS="$PWD/$raw" TEST_RUNNER_BERGR_SHOT_APPEARANCE="$appearance" xcodebuild test \
+       -project bergr.xcodeproj -scheme bergr -derivedDataPath "$derived" "${signing[@]}" -destination "id=$device" \
+       -only-testing:bergrUITests/DemoShotsTests \
+       -skip-testing:bergrUITests/DemoShotsTests/testLockScreenLiveActivity | xcbeautify --quiet; then
+    break
+  fi
+  [ "$attempt" = 2 ] && { echo "the shot test failed twice" >&2; exit 1; }
+  echo "retrying the shot test"
+done
+xcrun simctl status_bar "$device" clear
+
+# Lock Screen and Home Screen: the simulator can't show the Live Activity or widgets from the demo,
+# so they're drawn from the widget code (iPhone 17 Pro geometry; other devices get it scaled).
+widgets="$out/widgets"
+scripts/widget-render/render.sh "$widgets"
+for name in lock-live-activity home-widgets; do cp "$widgets/$name-$appearance.png" "$raw/$name.png"; done
+rm -rf "$widgets"
 
 # Frame: caption on Bergr's charcoal, the screenshot below with rounded corners. The output has
 # the capture's size (what App Store Connect expects for that device); the layout was designed
 # at 1320×2868 and scales with the width (f, in thousandths).
-read W H < <(sips -g pixelWidth -g pixelHeight "$raw/${shots[0]}.png" | awk '/pixel/ {printf "%s ", $2} END {print ""}')
+read -r W H < <(sips -g pixelWidth -g pixelHeight "$raw/01-agents.png" | awk '/pixel/ {printf "%s ", $2} END {print ""}')
 f=$((W * 1000 / 1320))
 BG="#303438" FG="#d9dad8" ACCENT="#9da1a6"
 bold=/Library/Fonts/SF-Pro-Display-Bold.otf
@@ -50,25 +73,29 @@ top=$((470 * f / 1000))
 shot_h=$((H - top - 95 * f / 1000))
 shot_w=$((shot_h * W / H))
 radius=$((72 * f / 1000))
-for i in "${!shots[@]}"; do
-    name="${shots[$i]}"
-    src="$raw/$name.png"
-    [ -f "$src" ] || { echo "missing $src" >&2; exit 1; }
-    magick "$src" -resize "${shot_w}x${shot_h}!" \
-        \( +clone -alpha extract -fill black -colorize 100 -fill white \
-           -draw "roundrectangle 0,0,$((shot_w - 1)),$((shot_h - 1)),$radius,$radius" \) \
-        -alpha off -compose CopyOpacity -composite "$out/$name-rounded.png"
-    magick -size "${W}x${H}" "xc:$BG" \
-        -font "$bold" -fill "$FG" -pointsize $((104 * f / 1000)) -gravity north -annotate +0+$((190 * f / 1000)) "${titles[$i]}" \
-        -font "$regular" -fill "$ACCENT" -pointsize $((50 * f / 1000)) -gravity north -annotate +0+$((330 * f / 1000)) "${subtitles[$i]}" \
-        "$out/$name-rounded.png" -gravity north -geometry +0+$top -composite \
-        -alpha off "$final/$name.png"
-    rm "$out/$name-rounded.png"
+for entry in "${shots[@]}"; do
+  IFS='|' read -r name frame title subtitle <<<"$entry"
+  src="$raw/$frame.png"
+  [ -f "$src" ] || { echo "missing $src" >&2; exit 1; }
+  magick "$src" -resize "${shot_w}x${shot_h}!" \
+    \( +clone -alpha extract -fill black -colorize 100 -fill white \
+       -draw "roundrectangle 0,0,$((shot_w - 1)),$((shot_h - 1)),$radius,$radius" \) \
+    -alpha off -compose CopyOpacity -composite "$out/$name-rounded.png"
+  # Title and subtitle shrink to fit 90 % of the width (a long caption would run off the edge).
+  magick -background none -font "$bold" -fill "$FG" -pointsize $((104 * f / 1000)) label:"$title" \
+    -resize "$((W * 9 / 10))x>" "$out/$name-title.png"
+  magick -background none -font "$regular" -fill "$ACCENT" -pointsize $((50 * f / 1000)) label:"$subtitle" \
+    -resize "$((W * 9 / 10))x>" "$out/$name-subtitle.png"
+  magick -size "${W}x${H}" "xc:$BG" \
+    "$out/$name-title.png" -gravity north -geometry +0+$((190 * f / 1000)) -composite \
+    "$out/$name-subtitle.png" -gravity north -geometry +0+$((330 * f / 1000)) -composite \
+    "$out/$name-rounded.png" -gravity north -geometry +0+$top -composite \
+    -alpha off "$final/$name.png"
+  rm "$out/$name-rounded.png" "$out/$name-title.png" "$out/$name-subtitle.png"
 done
 
-xcrun simctl status_bar "$device" clear
 for f in "$final"/*.png; do
-    size="$(sips -g pixelWidth -g pixelHeight "$f" | awk '/pixel/ {print $2}' | paste -sd x -)"
-    [ "$size" = "${W}x${H}" ] || { echo "$f is $size, expected ${W}x${H}" >&2; exit 1; }
+  size="$(sips -g pixelWidth -g pixelHeight "$f" | awk '/pixel/ {print $2}' | paste -sd x -)"
+  [ "$size" = "${W}x${H}" ] || { echo "$f is $size, expected ${W}x${H}" >&2; exit 1; }
 done
 echo "App Store screenshots ($device_type, $appearance, ${W}×${H}): $final"
