@@ -240,7 +240,7 @@ struct DemoChatTests {
         let first = store.addDemo()
         #expect(first.demoMachine == .studio)
         #expect(store.addDemo().id == first.id)
-        #expect(store.hosts.map(\.name) == ["studio", "buildbox", "winbook"])
+        #expect(store.hosts.map(\.name) == ["studio", "buildbox", "winbox"])
         #expect(store.hosts.filter(\.isDemo).count == 3)
     }
 

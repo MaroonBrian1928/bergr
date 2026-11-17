@@ -11,7 +11,7 @@ set, with a light pass of frames 1 to 3 for the README.
 ## What the demo needs, in general
 
 - **Three machines**, so "your machines" reads at a glance: `studio` (a Mac), `buildbox` (Linux),
-  `winbook` (Windows). Today's demo has one.
+  `winbox` (Windows). Today's demo has one.
 - **Named agents with their logos**: two Claude Code, two Codex, one Antigravity. Today's demo
   rows are a generic "agent".
 - **Fixed on-device text.** Tool summaries, reply suggestions, titles, the command explanation,
@@ -32,7 +32,7 @@ set, with a light pass of frames 1 to 3 for the README.
 | B | studio | Claude Code | ~/projects/website | Add a dark mode toggle | done, 20 files changed |
 | C | buildbox | Codex | ~/projects/infra | Upgrade Postgres to 18 | working, "Running pg_upgrade checks", 2 sub-agents |
 | D | buildbox | Codex | ~/projects/shop-api (worktree `codex/cache-images`) | Cache product images | blocked on a Codex question |
-| E | winbook | Antigravity | projects\website | Fix flaky checkout test | idle |
+| E | winbox | Antigravity | projects\website | Fix flaky checkout test | idle |
 
 ## Frames
 

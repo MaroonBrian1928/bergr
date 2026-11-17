@@ -4,7 +4,7 @@ import Foundation
 /// One of the demo's machines. The first is the one "Try the Demo" opens; the others make the
 /// agents list read as several machines.
 public enum DemoMachine: String, CaseIterable, Sendable {
-    case studio, buildbox, winbook
+    case studio, buildbox, winbox
 
     /// The name the machine shows under.
     public var name: String { rawValue }
@@ -17,7 +17,7 @@ public enum DemoMachine: String, CaseIterable, Sendable {
         self = found
     }
 
-    public var isWindows: Bool { self == .winbook }
+    public var isWindows: Bool { self == .winbox }
 }
 
 /// The demo's agents and the status lines that change while it runs. The app's demo conversations
@@ -82,7 +82,7 @@ enum DemoScript {
         switch machine {
         case .studio: studioTerminals
         case .buildbox: buildboxTerminals
-        case .winbook: winbookTerminals
+        case .winbox: winboxTerminals
         }
     }
 
@@ -139,7 +139,7 @@ enum DemoScript {
         ]
     }
 
-    private static var winbookTerminals: [DemoTerminal] {
+    private static var winboxTerminals: [DemoTerminal] {
         [
             DemoTerminal(
                 address: "t21", argv: ["agy"], cwd: DemoBeat.windowsWebsite, title: "agy",
@@ -169,7 +169,7 @@ enum DemoScript {
             {"id":"spdemocache","name":"shop-api","folder":"\(cacheWorktree)","tabs":[\
             {"id":"tbdemo5","name":"cache","root":{"content":{"terminal":"t12"}}}]}]}
             """
-        case .winbook: #"""
+        case .winbox: #"""
             {"spaces":[{"id":"spdemowin","name":"website","folder":"C:\\Users\\demo\\projects\\website","tabs":[{"id":"tbdemo6","name":"","root":{"content":{"terminal":"t21"}}}]}]}
             """#
         }
@@ -270,7 +270,7 @@ enum DemoScript {
             "t12": .agent(cacheAgent),
             "t13": .shell(history: "", cwd: infra),
         ]
-        case .winbook: ["t21": .agent(flakyAgent)]
+        case .winbox: ["t21": .agent(flakyAgent)]
         }
     }
 
