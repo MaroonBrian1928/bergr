@@ -115,6 +115,11 @@ Bergr now reads along with you, on your device.
 
 Primary: Developer Tools. Secondary: Productivity.
 
+## In-app purchases
+
+Three optional tips (consumables `<bundle id>.tip.small|medium|large`), created with
+`scripts/asc-create-tips.mjs`. For App Review: the tips are optional consumables that unlock nothing.
+
 ## Age rating
 
 No objectionable content in the app itself. Answer "No" to everything, except: "Unrestricted Web
