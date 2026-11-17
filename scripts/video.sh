@@ -10,7 +10,9 @@ cd "$(dirname "$0")/.."
 
 appearance="${1:-dark}"
 device_type="${2:-iPhone 17 Pro}"
-sim_name="Bergr Screenshots ($device_type)"
+# BERGR_SIM_NAME / BERGR_DERIVED: another simulator / derived data folder (scripts/site-video.sh).
+sim_name="${BERGR_SIM_NAME:-Bergr Screenshots ($device_type)}"
+derived="${BERGR_DERIVED:-.build/xcode}"
 out=".build/video/$(echo "$device_type" | tr 'A-Z ' 'a-z-')"
 
 # A clean, dedicated simulator (sets $device).
@@ -23,7 +25,7 @@ case "$device_type" in
     "iPhone 17 Pro" | "iPhone 17") font=15 ;;
     *) font=17 ;;
 esac
-xcodebuild=(xcodebuild -project bergr.xcodeproj -scheme bergr -derivedDataPath .build/xcode
+xcodebuild=(xcodebuild -project bergr.xcodeproj -scheme bergr -derivedDataPath "$derived"
     ${BERGR_TEAM:+DEVELOPMENT_TEAM=$BERGR_TEAM} BERGR_BUNDLE_ID_PREFIX="${BERGR_BUNDLE_ID_PREFIX:-com.pavelzw}"
     -destination "id=$device" -only-testing:bergrUITests/DemoTourTests/testVideoTour)
 # Build first, so the recording doesn't wait for the compiler.
