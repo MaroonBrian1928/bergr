@@ -198,16 +198,33 @@ archive upload="false":
         echo "$version ($build) exported to .build/export (just archive true uploads it)"
     fi
 
-# App Store screenshots of the demo, framed with captions, into .build/screenshots/<device>
-# (iPhone 17 Pro by default, App Store Connect's required size; also "iPhone Duo", "iPhone 17 Pro Max")
+# Captioned App Store screenshots of the demo into .build/screenshots/<device>-<appearance>/appstore (also "iPhone Duo", "iPhone 17 Pro Max")
+appstore-shots appearance="dark" device="iPhone 17 Pro":
+    scripts/screenshots.sh {{appearance}} "{{device}}"
+
+# Same as appstore-shots (the old name)
 screenshots appearance="dark" device="iPhone 17 Pro":
     scripts/screenshots.sh {{appearance}} "{{device}}"
 
-# The README video of the demo, framed, into .build/video/<device> (bergr.mp4 and bergr.gif)
 # Re-take the marketing site's screenshots from the demo into the site repo (default ../bergr-site)
 site-shots site="":
     scripts/site-shots.sh {{site}}
 
+# Re-draw the site's widget, Home Screen and Lock Screen pictures from the widget code
+site-widgets site="":
+    scripts/site-widgets.sh {{site}}
+
+# Re-record the site's demo video (demo.mp4, demo-poster.jpg)
+site-video site="":
+    scripts/site-video.sh {{site}}
+
+# All of the site's media: site-shots, site-widgets, site-video (stops at the first failure)
+site-media site="":
+    scripts/site-shots.sh {{site}}
+    scripts/site-widgets.sh {{site}}
+    scripts/site-video.sh {{site}}
+
+# The README video of the demo, framed, into .build/video/<device> (bergr.mp4 and bergr.gif)
 video appearance="dark" device="iPhone 17 Pro":
     scripts/video.sh {{appearance}} "{{device}}"
 
