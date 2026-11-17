@@ -946,6 +946,50 @@ struct ChatView: View {
         }
     }
 
+    /// Claude's question waiting in the terminal (AskUserQuestion), unanswered, while the agent is
+    /// stopped on it.
+    private var openClaudeQuestion: (id: String, info: ChatFeed.QuestionInfo)? {
+        guard state == "blocked",
+              let last = feed.items.last(where: { if case .question = $0.kind { return true }; return false }),
+              let info = feed.questionInfo[last.id], info.keys, !info.codexAsync, info.answer == nil,
+              questionPicks[last.id] == nil else { return nil }
+        let after = feed.items.drop { $0.id != last.id }.dropFirst()
+        guard !after.contains(where: { if case .user = $0.kind { return true }; return false }) else { return nil }
+        return (last.id, info)
+    }
+
+    /// Answers Claude's open question with your own words: picks its "Type something." option
+    /// (by the number the screen shows), types the text there and sends it. Never types into the
+    /// menu itself.
+    private func answerClaudeInOwnWords(_ text: String, question id: String, info: ChatFeed.QuestionInfo) {
+        guard canType else { return }
+        if model.watching { model.setWatching(false) }
+        let last = info.index == info.count - 1
+        Task { @MainActor in
+            await model.automate {
+                guard let own = AnswerParser.choices(in: model.frame.textLines)
+                    .first(where: { $0.label.lowercased().hasPrefix("type something") }) else {
+                    sendError = "Couldn't find Claude's “Type something” option. Answer in the terminal."
+                    draft = text
+                    return
+                }
+                questionPicks[id] = text
+                model.type(String(own.number))
+                try? await Task.sleep(for: .milliseconds(300))
+                model.paste(text)
+                try? await Task.sleep(for: .milliseconds(150))
+                model.press(.enter)
+                guard last else { return }
+                await waitForScreen(upTo: .seconds(3)) { lines in
+                    lines.contains { $0.contains("Ready to submit your answers?") }
+                }
+                if model.frame.textLines.contains(where: { $0.contains("Ready to submit your answers?") }) {
+                    model.press(.enter)
+                }
+            }
+        }
+    }
+
     /// Codex's newest unanswered async question, which a reply should answer (a plain message
     /// would be queued as a new instruction instead).
     private var openCodexQuestion: (id: String, title: String)? {
@@ -1295,11 +1339,13 @@ struct ChatView: View {
                     QuestionCard(title: title, options: options, details: info.details, header: info.header,
                                  numbered: !info.codexAsync, answer: key.answer, palette: palette,
                                  enabled: key.canType && !key.earlierOpen && !key.waiting,
-                                 allowsText: info.codexAsync) { choice in
+                                 allowsText: true) { choice in
                         if info.codexAsync {
                             answerCodexQuestion(choice, title: title, id: item.id)
-                        } else {
+                        } else if options.contains(choice) {
                             pick(choice, in: options, question: item.id, info: info)
+                        } else {
+                            answerClaudeInOwnWords(choice, question: item.id, info: info)
                         }
                     }
                 } else {
@@ -1682,6 +1728,16 @@ struct ChatView: View {
             draft = ""
             sendError = nil
             answerCodexQuestion(text, title: open.title, id: open.id)
+            return
+        }
+        // A Claude question is open in the terminal: typed text would land in its menu (where
+        // letters like j/k move the highlight and Return picks an option). Answer it in your own
+        // words instead, through its "Type something." option.
+        if CodexQuestionReply.answersQuestion(text: text, hasImages: !images.isEmpty, sendAsNew: false),
+           let open = openClaudeQuestion {
+            draft = ""
+            sendError = nil
+            answerClaudeInOwnWords(text, question: open.id, info: open.info)
             return
         }
         sendAsNewMessage = false
