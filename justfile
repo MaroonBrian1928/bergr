@@ -204,6 +204,10 @@ screenshots appearance="dark" device="iPhone 17 Pro":
     scripts/screenshots.sh {{appearance}} "{{device}}"
 
 # The README video of the demo, framed, into .build/video/<device> (bergr.mp4 and bergr.gif)
+# Re-take the marketing site's screenshots from the demo into the site repo (default ../bergr-site)
+site-shots site="":
+    scripts/site-shots.sh {{site}}
+
 video appearance="dark" device="iPhone 17 Pro":
     scripts/video.sh {{appearance}} "{{device}}"
 
