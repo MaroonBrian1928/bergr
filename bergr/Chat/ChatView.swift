@@ -2662,12 +2662,6 @@ private struct QuestionCard: View {
                     .frame(minHeight: PlatformMetrics.controlHeight)
                     .background(picked ? palette.accent : palette.bubble,
                                 in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay {
-                        if recommended, !picked, answer == nil {
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .strokeBorder(palette.accent.opacity(0.6), lineWidth: 1)
-                        }
-                    }
                     .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 .buttonStyle(PressStyle())

@@ -116,6 +116,13 @@ enum AnswerParser {
                 if c.number == 1 { break }
             } else {
                 let text = clean(lines[i])
+                // A rule inside the menu (Claude's questions put one above "4. Chat about this")
+                // separates options; it doesn't end the list.
+                if !found.isEmpty, text.isEmpty, wrapped.isEmpty,
+                   lines[i].contains(where: { $0 == "─" || $0 == "━" }) {
+                    i -= 1
+                    continue
+                }
                 guard !found.isEmpty, !text.isEmpty, wrapped.count < 3 else { break }
                 wrapped.append(text)
             }

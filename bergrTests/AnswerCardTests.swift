@@ -25,6 +25,27 @@ struct AnswerCardTests {
         "    3. No, and tell Codex what to do differently (esc)",
     ]
 
+    @Test func claudeAskUserQuestionWithRuleAndDescriptions() {
+        let lines = [
+            " ☐ Screen test",
+            "",
+            "│ Test question so I can capture how it looks on screen.",
+            "",
+            "❯ 1. Done (Recommended)",
+            "     The capture has had time to run.",
+            "  2. Other choice",
+            "     Also fine; any answer works.",
+            "  3. Type something.",
+            "────────────────────────────────────────",
+            "  4. Chat about this",
+            "",
+            "Enter to select · ↑/↓ to navigate · Esc to cancel",
+        ]
+        let choices = AnswerParser.choices(in: lines)
+        #expect(choices.map(\.number) == [1, 2, 3, 4])
+        #expect(choices.first?.selected == true)
+    }
+
     @Test func claudePrompt() {
         let c = AnswerParser.choices(in: Self.claude)
         #expect(c.map(\.number) == [1, 2, 3])
