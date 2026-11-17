@@ -1252,11 +1252,20 @@ struct ChatView: View {
                     }
                 }
             case .assistant(let text, let blocks):
-                Group {
-                    if !key.reduceMotion, let since = key.reveal {
-                        RevealingMarkdown(blocks: blocks, palette: palette, since: since)
-                    } else {
-                        MarkdownView(blocks: blocks, palette: palette)
+                VStack(alignment: .leading, spacing: 10) {
+                    Group {
+                        if !key.reduceMotion, let since = key.reveal {
+                            RevealingMarkdown(blocks: blocks, palette: palette, since: since)
+                        } else {
+                            MarkdownView(blocks: blocks, palette: palette)
+                        }
+                    }
+                    let images = FileLoader.imagePaths(in: text)
+                    if !images.isEmpty, let session, !session.host.isDemo {
+                        NamedImages(paths: images, palette: palette) { path in
+                            await FileLoader(windows: session.isWindowsHost) { try await session.commandOutput($0) }
+                                .loadImage(path)
+                        }
                     }
                 }
                 .contextMenu {

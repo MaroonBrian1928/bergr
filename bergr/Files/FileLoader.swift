@@ -109,3 +109,67 @@ nonisolated struct FileLoader: Sendable {
         return .text(lines: lines, truncated: truncated)
     }
 }
+
+// MARK: Images named in a message
+
+/// An image a message names by path ("/tmp/shots/after.png"), shown only when tapped. Safety:
+/// the path reaches the machine as a quoted argument (`sh -c … sh <path>`), never as part of the
+/// command; only files whose first bytes are PNG, JPEG, GIF, WebP or HEIC are read, and only up
+/// to `imageCap`; the bytes are decoded on the device by ImageIO.
+extension FileLoader {
+    static let imageCap = 10 * 1_048_576
+    static let tooBigMarker = "BERGR:toobig"
+    static let notImageMarker = "BERGR:notimage"
+
+    enum ImageResult: Equatable, Sendable {
+        case image(Data)
+        case notFound, tooBig, notImage
+        case failed(String)
+    }
+
+    /// Absolute or home-relative paths ending in an image extension, in order, at most four.
+    static func imagePaths(in text: String) -> [String] {
+        var out: [String] = []
+        for match in text.matches(of: /(?:~\/|\/)[^\s`'"()<>\[\]]+\.(?i:png|jpe?g|gif|webp|heic)\b/) {
+            let path = String(match.output)
+            if !out.contains(path) { out.append(path) }
+            if out.count == 4 { break }
+        }
+        return out
+    }
+
+    static func posixImageCommand(_ path: String) -> String {
+        let script = """
+        f=$1; case "$f" in "~/"*) f="$HOME/${f#"~/"}";; esac; \
+        if [ ! -f "$f" ]; then echo \(notFoundMarker); exit 0; fi; \
+        n=$(wc -c < "$f" | tr -d ' '); if [ "$n" -gt \(imageCap) ]; then echo \(tooBigMarker); exit 0; fi; \
+        m=$(head -c 12 "$f" | od -An -tx1 | tr -d ' \\n'); \
+        case "$m" in 89504e47*|ffd8ff*|47494638*|52494646????????57454250|????????66747970*) ;; \
+        *) echo \(notImageMarker); exit 0;; esac; \
+        echo \(okMarker); base64 < "$f"
+        """
+        return "sh -c \(quote(script)) sh \(quote(path))"
+    }
+
+    func loadImage(_ path: String) async -> ImageResult {
+        guard !windows else { return .failed("Images from Windows machines aren't shown yet.") }
+        let output: String
+        do { output = try await run(Self.posixImageCommand(path)) } catch { return .failed(error.localizedDescription) }
+        return Self.parseImage(output)
+    }
+
+    static func parseImage(_ output: String) -> ImageResult {
+        let lines = output.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+        switch lines.first.map({ $0.trimmingCharacters(in: .whitespaces) }) ?? "" {
+        case notFoundMarker: return .notFound
+        case tooBigMarker: return .tooBig
+        case notImageMarker: return .notImage
+        case okMarker:
+            guard lines.count == 2,
+                  let data = Data(base64Encoded: String(lines[1]), options: .ignoreUnknownCharacters),
+                  !data.isEmpty, data.count <= imageCap else { return .failed("The image didn't come through.") }
+            return .image(data)
+        default: return .failed(output.isEmpty ? "The machine sent nothing back." : String(output.prefix(120)))
+        }
+    }
+}

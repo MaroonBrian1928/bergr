@@ -253,3 +253,66 @@ struct ImagePlaceholder: View {
             .accessibilityLabel(fetch == nil ? "Image, loading" : fetching ? "Image, loading" : "Image, tap to load")
     }
 }
+
+/// Images a message names by path ("/tmp/shots/after.png"): a "Show image" button for each,
+/// fetched from the agent's machine only when tapped (see `FileLoader.loadImage`).
+struct NamedImages: View {
+    let paths: [String]
+    let palette: ChatPalette
+    let load: (String) async -> FileLoader.ImageResult
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(paths, id: \.self) { NamedImage(path: $0, palette: palette, load: load) }
+        }
+    }
+}
+
+private struct NamedImage: View {
+    let path: String
+    let palette: ChatPalette
+    let load: (String) async -> FileLoader.ImageResult
+    @State private var state: Phase = .idle
+    enum Phase: Equatable { case idle, loading, shown(Data), failed(String) }
+
+    var body: some View {
+        switch state {
+        case .shown(let data):
+            ImageBubble(data: data, fromUser: false, palette: palette)
+        default:
+            Button {
+                guard state != .loading else { return }
+                state = .loading
+                Task {
+                    switch await load(path) {
+                    case .image(let data): state = .shown(data)
+                    case .notFound: state = .failed("Not found on the machine")
+                    case .tooBig: state = .failed("Larger than 10 MB")
+                    case .notImage: state = .failed("Not an image")
+                    case .failed(let why): state = .failed(why)
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    if state == .loading {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "photo")
+                    }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Show image").font(.footnote.weight(.semibold))
+                        Text(failure ?? (path as NSString).lastPathComponent)
+                            .font(.caption).foregroundStyle(palette.secondary).lineLimit(1).truncationMode(.middle)
+                    }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(palette.bubble, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(PressStyle())
+            .foregroundStyle(palette.text)
+            .accessibilityHint("Loads \(path) from the machine")
+        }
+    }
+
+    private var failure: String? { if case .failed(let why) = state { why } else { nil } }
+}
