@@ -279,3 +279,16 @@ struct ScheduledSendTests {
                 == "List container image status")
     }
 }
+
+struct LimitMessageTests {
+    @Test func readsTheResetFromTheAgentsMessage() throws {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "America/Chicago")!
+        let now = c.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 22, minute: 55))!
+        let claude = try #require(ScheduledSend.resetFromMessage("You've hit your 5-hour limit · resets 11pm (America/Chicago)", now: now))
+        #expect(c.dateComponents([.hour, .minute, .day], from: claude) == DateComponents(day: 16, hour: 23, minute: 0))
+        let codex = try #require(ScheduledSend.resetFromMessage("You've hit your usage limit. Try again at 3:05 PM.", now: now))
+        #expect(codex > now)
+        #expect(ScheduledSend.resetFromMessage("The build resets at 3pm", now: now) == nil)
+    }
+}

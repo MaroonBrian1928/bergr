@@ -785,8 +785,7 @@ struct ChatView: View {
                     .padding(.horizontal, 20)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if let usage = feed.usage,
-               let reset = ScheduledSend.limitingReset(session: usage.session, weekly: usage.weekly) {
+            if let reset = limitReset {
                 LimitBar(reset: reset, scheduler: limitScheduler, draft: $draft, palette: palette)
                     .transition(arrival)
             }
@@ -956,6 +955,22 @@ struct ChatView: View {
         }, info: { id in feed.questionInfo[id].map { ($0.codexAsync, $0.answer != nil) } },
            picked: { questionPicks[$0] != nil || questionSending.contains($0) },
            lastUserMessage: feed.items.lastIndex { if case .user = $0.kind { return true }; return false })
+    }
+
+    /// When the agent can go on, if it's out of usage: from the plan numbers when a window is full,
+    /// else from its own "You've hit your limit · resets 11pm" message among the latest ones (the
+    /// numbers can lag behind, or be missing).
+    private var limitReset: Date? {
+        if let usage = feed.usage, let reset = ScheduledSend.limitingReset(session: usage.session, weekly: usage.weekly) {
+            return reset
+        }
+        for item in feed.items.suffix(4).reversed() {
+            if case .user = item.kind { return nil }
+            if case .assistant(let text, _) = item.kind, let reset = ScheduledSend.resetFromMessage(text) {
+                return reset
+            }
+        }
+        return nil
     }
 
     /// Has the agent's machine send a message later (the limit bar's "Continue Then").

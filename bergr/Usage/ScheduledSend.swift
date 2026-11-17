@@ -29,6 +29,25 @@ nonisolated enum ScheduledSend {
             .max()
     }
 
+    /// The reset time in an agent's own "out of usage" message, e.g. Claude's "You've hit your
+    /// 5-hour limit · resets 11pm (America/Chicago)" or "… resets 3:30pm", or Codex's "… try again
+    /// at 3:05 PM": the next such time after `now`, in the named time zone if there is one.
+    static func resetFromMessage(_ text: String, now: Date = .now) -> Date? {
+        let lower = text.lowercased()
+        guard lower.contains("limit") || lower.contains("usage") else { return nil }
+        guard let m = text.firstMatch(of: /(?i)(?:resets?|try again)(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)(?:\s*\(([A-Za-z_]+\/[A-Za-z_]+)\))?/)
+        else { return nil }
+        guard var hour = Int(m.output.1), (1...12).contains(hour) else { return nil }
+        let minute = m.output.2.flatMap { Int($0) } ?? 0
+        let pm = m.output.3.lowercased().hasPrefix("p")
+        if hour == 12 { hour = 0 }
+        if pm { hour += 12 }
+        var calendar = Calendar(identifier: .gregorian)
+        if let zone = m.output.4.flatMap({ TimeZone(identifier: String($0)) }) { calendar.timeZone = zone }
+        return calendar.nextDate(after: now, matching: DateComponents(hour: hour, minute: minute, second: 0),
+                                 matchingPolicy: .nextTime)
+    }
+
     /// Adds `entry` to scheduled.json beside push.json (the helper's folder), replacing an earlier
     /// one for the same terminal; or, with `remove`, takes the terminal's entry out. Prints the list.
     static let script = """
