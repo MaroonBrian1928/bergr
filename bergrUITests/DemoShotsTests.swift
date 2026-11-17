@@ -134,6 +134,13 @@ final class DemoShotsTests: XCTestCase {
                       "with the staged explanation")
         pause(1)
         shot(app, "04-dangerous-command")
+        back(app)
+
+        // The question card on its own: an empty reply field (no attachment in this launch).
+        row(app, "t12").tap()
+        XCTAssertTrue(text(app, "In Redis").waitForExistence(timeout: 10), "the question card")
+        pause(1.5)
+        shot(app, "07q-question-card")
     }
 
     /// Frame 7 and the live run: Codex's question with the "Answers: …" composer and a scanned

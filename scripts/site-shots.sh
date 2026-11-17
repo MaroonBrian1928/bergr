@@ -22,6 +22,7 @@ shots=(
   risky-command:04-dangerous-command
   usage:06-usage
   codex-question:07a-codex-question
+  question-card:07q-question-card
   suggestions:10b-codex-finished
   changes:09-changes
 )
