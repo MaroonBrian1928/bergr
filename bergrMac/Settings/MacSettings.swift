@@ -7,6 +7,7 @@ struct MacSettings: View {
     @Environment(HostStore.self) private var hosts
     @Environment(KeyLibrary.self) private var keys
     @State private var showingLicenses = false
+    @State private var showingTips = false
     @State private var editing: Host?
     @State private var creatingKey = false
     @State private var importingKey = false
@@ -32,6 +33,7 @@ struct MacSettings: View {
                     LabeledContent("Version", value: SettingsView.version)
                     Link("Source Code", destination: URL(string: "https://github.com/MaroonBrian1928/bergr")!)
                     Button("Open-Source Licenses…") { showingLicenses = true }
+                    Button("Support Bergr…", systemImage: "heart") { showingTips = true }
                 }
             }
             .modifier(SettingsPane())
@@ -132,6 +134,13 @@ struct MacSettings: View {
         // Width only: each tab is as tall as its content, like a Mac settings window.
         .frame(width: 600)
         .sheet(isPresented: $showingLicenses) { MacLicensesSheet() }
+        .sheet(isPresented: $showingTips) {
+            NavigationStack {
+                TipJarView()
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingTips = false } } }
+            }
+            .frame(minWidth: 420, minHeight: 320)
+        }
         .sheet(item: $editing) { HostEditor(host: $0, setupSession: sessions.existing($0.id)).frame(width: 620, height: 640) }
     }
 }

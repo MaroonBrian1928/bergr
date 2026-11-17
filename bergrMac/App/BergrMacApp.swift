@@ -36,6 +36,7 @@ struct BergrMacApp: App {
         let keys = KeyLibrary()
         _keys = State(initialValue: keys)
         MacNotifications.shared.start(sessions: sessions, hosts: hosts, keys: keys)
+        Store.shared.start()
     }
 
     var body: some Scene {

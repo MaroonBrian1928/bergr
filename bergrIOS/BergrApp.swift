@@ -15,6 +15,7 @@ struct BergrApp: App {
         UNUserNotificationCenter.current().delegate = notificationDelegate
         AnswerCategory.register()
         AnswerNotifications.install()
+        Store.shared.start()
     }
 
     var body: some Scene {

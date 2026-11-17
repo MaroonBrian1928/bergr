@@ -356,6 +356,17 @@ struct SettingsView: View {
                     .frame(minHeight: 44)
                 }
                 NavigationLink {
+                    TipJarView()
+                } label: {
+                    Label {
+                        Text("Support Bergr")
+                    } icon: {
+                        SettingsIcon("heart.fill", color: .pink)
+                    }
+                    .frame(minHeight: 44)
+                }
+                .accessibilityIdentifier("support-bergr")
+                NavigationLink {
                     LicensesView()
                 } label: {
                     Label {

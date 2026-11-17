@@ -1,0 +1,36 @@
+{
+  "identifier" : "6F1E2B7A",
+  "nonRenewingSubscriptions" : [ ],
+  "products" : [
+    {
+      "displayPrice" : "2.99",
+      "familyShareable" : false,
+      "internalID" : "6F1E2B71",
+      "localizations" : [ { "description" : "A small tip. It unlocks nothing; thank you!", "displayName" : "Small tip", "locale" : "en_US" } ],
+      "productID" : "com.pavelzw.bergr.tip.small",
+      "referenceName" : "Tip small",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "4.99",
+      "familyShareable" : false,
+      "internalID" : "6F1E2B72",
+      "localizations" : [ { "description" : "A medium tip. It unlocks nothing; thank you!", "displayName" : "Medium tip", "locale" : "en_US" } ],
+      "productID" : "com.pavelzw.bergr.tip.medium",
+      "referenceName" : "Tip medium",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "9.99",
+      "familyShareable" : false,
+      "internalID" : "6F1E2B73",
+      "localizations" : [ { "description" : "A large tip. It unlocks nothing; thank you!", "displayName" : "Large tip", "locale" : "en_US" } ],
+      "productID" : "com.pavelzw.bergr.tip.large",
+      "referenceName" : "Tip large",
+      "type" : "Consumable"
+    }
+  ],
+  "settings" : { "_failTransactionsEnabled" : false, "_locale" : "en_US", "_storefront" : "USA" },
+  "subscriptionGroups" : [ ],
+  "version" : { "major" : 4, "minor" : 0 }
+}
