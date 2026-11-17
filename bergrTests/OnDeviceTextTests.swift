@@ -97,7 +97,10 @@ struct OnDeviceTextTests {
         #expect(OnDeviceText.title("Add dark mode to settings") == "Add dark mode to settings")
     }
 
-    @Test func raceReturnsAtTheDeadlineWhenWorkIgnoresCancellation() async {
+    /// The work only ends once the latch opens, and that happens after `race` returns: if `race` waited
+    /// for the work it would never return (the time limit fails the test). No wall-clock upper bound,
+    /// which a loaded test machine can blow through.
+    @Test(.timeLimit(.minutes(1))) func raceReturnsAtTheDeadlineWhenWorkIgnoresCancellation() async {
         let latch = TestLatch()
         let start = ContinuousClock.now
         let result: String? = await OnDeviceText.race(timeout: .milliseconds(100)) {
@@ -107,7 +110,7 @@ struct OnDeviceTextTests {
         let elapsed = ContinuousClock.now - start
         latch.release()
         #expect(result == nil)
-        #expect(elapsed < .seconds(3))
+        #expect(elapsed >= .milliseconds(100))
     }
 
     @Test func raceReturnsTheAnswerInTime() async {

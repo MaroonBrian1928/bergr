@@ -22,9 +22,11 @@ private struct SlowSummarizer: DigestSummarizing {
     }
 }
 
+/// Never answers until released, and ignores cancellation: only the timeout can end its turn.
 private struct HangingSummarizer: DigestSummarizing {
+    let latch: TestLatch
     func summarize(_ context: DigestContext) async -> String? {
-        try? await Task.sleep(for: .seconds(60))
+        await latch.wait()
         return "never"
     }
 }
@@ -46,13 +48,15 @@ struct DigestDeliveryTests {
         #expect(await gauge.results["a3"] == "summary of agent 3")
     }
 
-    @Test func slowSummarizerFallsBackAtTimeout() async {
+    @Test(.timeLimit(.minutes(1))) func slowSummarizerFallsBackAtTimeout() async {
         let gauge = Gauge()
         let items = [(id: "x", context: context("slow"))]
-        let started = ContinuousClock.now
-        await AwayDigest.summaries(items, summarizer: HangingSummarizer(), maxConcurrent: 2,
+        let latch = TestLatch()
+        // The summarizer is released only after `summaries` returns, so getting here proves the
+        // timeout fell back without waiting for it (a hang fails on the time limit).
+        await AwayDigest.summaries(items, summarizer: HangingSummarizer(latch: latch), maxConcurrent: 2,
                                    timeout: .milliseconds(100)) { id, text in await gauge.record(id, text) }
-        #expect(ContinuousClock.now - started < .seconds(5))
+        latch.release()
         #expect(await gauge.results["x"] == "All green.")
     }
 

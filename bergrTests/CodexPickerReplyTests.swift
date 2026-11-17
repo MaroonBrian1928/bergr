@@ -40,8 +40,11 @@ import Testing
             lines: { reads += 1; return reads < 4 ? ["update \(reads)"] : (actions.contains("3") ? ["Next question?", "", "› 1. Yes", "  2. No", "", "enter submit  ^] skip  ⇧→ main prompt"] : panel) },
             previous: { actions.append("previous") }, paste: { _ in actions.append("paste") },
             submit: { actions.append("enter") }, choose: { actions.append(String($0)) },
-            selectionWait: .milliseconds(300))
+            // Polling ends as soon as the panel shows; the long window only keeps a loaded machine
+            // (slow 50 ms sleeps) from running out of time before the fourth frame.
+            selectionWait: .seconds(10))
         #expect(sent)
+        #expect(reads >= 4)
         #expect(actions == ["previous", "3"])
     }
 

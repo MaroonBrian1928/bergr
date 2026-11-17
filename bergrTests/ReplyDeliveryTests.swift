@@ -11,6 +11,8 @@ import UIKit
     var frameLines: [String] = []
     var log: [String] = []
     var held = false
+    /// Runs as Return is pressed, as the machine would react to it (no wall-clock race with the test).
+    var onEnter: (@MainActor () -> Void)?
     private var tail: Task<Void, Never>?
 
     func automate(_ steps: @escaping @MainActor () async -> Void) async {
@@ -26,7 +28,10 @@ import UIKit
 
     func type(_ text: String) { log.append("type:\(text)") }
     func paste(_ text: String) { log.append("paste:\(text)") }
-    func press(_ key: TerminalKey) { log.append(key == .enter ? "enter" : key == .escape ? "escape" : "key") }
+    func press(_ key: TerminalKey) {
+        log.append(key == .enter ? "enter" : key == .escape ? "escape" : "key")
+        if key == .enter { onEnter?() }
+    }
 
     func count(_ entry: String) -> Int { log.filter { $0 == entry }.count }
 }
@@ -81,9 +86,9 @@ import UIKit
 @MainActor struct ReplyDeliveryTests {
     @Test func clearConfirmedBySessionChangeWithoutTranscriptMessage() async {
         let rig = ReplyRig()
+        // The session changes as Return lands; the monitor's give-up window can't race the test.
+        rig.terminal.onEnter = { rig.conversationID = "new" }
         let reply = rig.send("/clear")
-        await rig.until { rig.terminal.count("enter") == 1 }
-        rig.conversationID = "new"
         await rig.until { rig.outbox.replies.isEmpty }
         #expect(reply.phase == .confirmed)
         #expect(rig.terminal.count("enter") == 1)
@@ -93,9 +98,8 @@ import UIKit
         let rig = ReplyRig()
         let reply = rig.send("/clear")
         await rig.until { reply.phase == .failed }
+        rig.terminal.onEnter = { rig.conversationID = "new" }
         rig.outbox.retry(reply.id)
-        await rig.until { rig.terminal.count("enter") == 2 }
-        rig.conversationID = "new"
         await rig.until { rig.outbox.replies.isEmpty }
         #expect(reply.phase == .confirmed)
     }
