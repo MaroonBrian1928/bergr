@@ -964,13 +964,20 @@ struct ChatView: View {
         if let usage = feed.usage, let reset = ScheduledSend.limitingReset(session: usage.session, weekly: usage.weekly) {
             return reset
         }
-        for item in feed.items.suffix(4).reversed() {
-            if case .user = item.kind { return nil }
-            if case .assistant(let text, _) = item.kind, let reset = ScheduledSend.resetFromMessage(text) {
-                return reset
-            }
-        }
-        return nil
+        // Only the agent's latest message counts, and only while it isn't working: once it answers
+        // again (the limit reset), the old message no longer applies. The reset is the next such
+        // time after the message was written; one already past means the limit is over.
+        guard state != "working",
+              let last = feed.items.last(where: {
+                  if case .assistant = $0.kind { return true }
+                  if case .user = $0.kind { return true }
+                  return false
+              }),
+              case .assistant(let text, _) = last.kind,
+              let reset = ScheduledSend.resetFromMessage(text, now: feed.sentAt[last.id] ?? .now),
+              reset > .now
+        else { return nil }
+        return reset
     }
 
     /// Has the agent's machine send a message later (the limit bar's "Continue Then").
