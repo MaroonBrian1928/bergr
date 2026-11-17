@@ -98,13 +98,13 @@ final class DemoShotsTests: XCTestCase {
         }
         back(app)
 
-        // Usage, seven days.
+        // Usage, the last 24 hours: each 5-hour window reads as a climb and a reset (at 7 days they
+        // squeeze into spikes).
         app.buttons["Settings"].firstMatch.tap()
         let usage = app.staticTexts["Usage"].firstMatch
         for _ in 0..<3 where !(usage.exists && usage.isHittable) { app.swipeUp() }
         usage.tap()
         XCTAssertTrue(text(app, "Current session").waitForExistence(timeout: 10), "plan windows show")
-        app.buttons["7 days"].firstMatch.tap()
         pause(1.5)
         shot(app, "06-usage")
         app.swipeUp()

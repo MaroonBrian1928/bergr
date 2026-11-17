@@ -72,51 +72,54 @@ final class DemoTourTests: XCTestCase {
         app.launch()
 
         // Every agent at a glance; the one that needs you sits on top.
-        XCTAssertTrue(blockedRow(app).waitForExistence(timeout: 15), "the demo's agents show")
+        let row = { (address: String) in app.descendants(matching: .any).matching(identifier: address).firstMatch }
+        let text = { (part: String) in app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", part)).firstMatch }
+        XCTAssertTrue(row("t3").waitForExistence(timeout: 15), "the demo's agents show")
         pause(1)
         mark(marks, "start")
         pause(2.5)
         shot(app, "readme-1-agents")
 
-        // An agent's conversation: ask, and watch it work and answer.
-        let agent = app.staticTexts["Add a dark mode toggle"].firstMatch
-        XCTAssertTrue(agent.waitForExistence(timeout: 5))
-        agent.tap()
-        // The reply box: a text view or field, whichever SwiftUI made of it.
-        let view = app.textViews.matching(NSPredicate(format: "identifier != 'terminal-screen'")).firstMatch
-        let field = view.waitForExistence(timeout: 10) ? view : app.textFields.firstMatch
-        XCTAssertTrue(field.exists, "the chat's reply box shows")
-        pause(2)
-        field.tap()
-        let hint = app.buttons["Continue"]
-        if hint.waitForExistence(timeout: 2) { hint.tap() }
-        for character in "check the deploy" {
-            field.typeText(String(character))
-            pause(0.06)
-        }
-        pause(0.5)
-        // The reply bar's button (a hidden ⌘↩ shortcut button is also called Send).
-        app.buttons["send-button"].tap()
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'roll'")).firstMatch
-            .waitForExistence(timeout: 20), "the agent answers")
-        pause(3)
+        // Claude's finished turn: each tool run summed up in one line.
+        row("t1").tap()
+        XCTAssertTrue(text("Dark mode toggle is ready").waitForExistence(timeout: 10))
+        pause(3.5)
         shot(app, "readme-2-chat")
-        backIfStacked(app)
-        pause(1.5)
+        back(app)
+        pause(1)
 
         // The blocked one: answer it from its card.
-        let blocked = app.staticTexts["Run the database migration?"].firstMatch
-        XCTAssertTrue(blocked.waitForExistence(timeout: 5))
-        blocked.tap()
+        row("t3").tap()
+        let yes = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Yes' AND NOT label CONTAINS 'ask'")).firstMatch
+        XCTAssertTrue(yes.waitForExistence(timeout: 10), "the answer card shows")
         pause(2.5)
         shot(app, "readme-3-needs-you")
-        // The card's first answer ("1, Yes"), not "Yes, and don't ask again".
-        let yes = app.buttons.matching(NSPredicate(format: "label ENDSWITH 'Yes'")).firstMatch
-        XCTAssertTrue(yes.waitForExistence(timeout: 5), "the answer card shows")
         yes.tap()
-        pause(4)
-        backIfStacked(app)
-        pause(2.5)
+        pause(3)
+        back(app)
+        pause(1)
+
+        // Usage over seven days.
+        app.buttons["Settings"].firstMatch.tap()
+        let usage = app.staticTexts["Usage"].firstMatch
+        for _ in 0..<3 where !(usage.waitForExistence(timeout: 2) && usage.isHittable) { app.swipeUp() }
+        usage.tap()
+        XCTAssertTrue(text("Current session").waitForExistence(timeout: 10), "plan windows show")
+        pause(1)
+        app.buttons["7 days"].firstMatch.tap()
+        pause(3)
+        shot(app, "readme-4-usage")
+        back(app)
+        pause(0.8)
+        if app.buttons["Done"].firstMatch.exists { app.buttons["Done"].firstMatch.tap() }
+        pause(1.2)
+
+        // Codex asks where product images should be cached.
+        XCTAssertTrue(row("t12").waitForExistence(timeout: 5))
+        row("t12").tap()
+        XCTAssertTrue(text("In Redis").waitForExistence(timeout: 10), "the question card")
+        pause(3.5)
+        shot(app, "readme-5-codex")
         mark(marks, "end")
     }
 

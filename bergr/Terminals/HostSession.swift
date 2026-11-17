@@ -491,6 +491,9 @@ final class HostSession {
         }
         let ns = error as NSError
         if ns.domain == "com.apple.LocalAuthentication", [-2, -4, -9].contains(ns.code) {
+            Task { @MainActor in
+                AuthTrail.note("connection to \(name) failed: \(KeyLibrary.describe(ns)) — \(String(describing: error).prefix(160))")
+            }
             return "Unlocking your key was canceled. Tap Retry to unlock it."
         }
         // The Network framework (how Bergr connects on iOS) reports POSIX and DNS failures as NWError.
