@@ -746,6 +746,7 @@ class Claude:
                     asked.append({"t": "question", "id": f"{block.get('id') or bid}-q{qi}", "title": q["question"],
                                   "options": [o["label"] for o in opts],
                                   "details": [o.get("description") or "" for o in opts],
+                                  "header": q.get("header") if isinstance(q.get("header"), str) else "",
                                   "keys": True, "multi": bool(q.get("multiSelect")),
                                   "group": block.get("id") or bid, "index": qi, "count": len(block["input"]["questions"])})
                 if not hasattr(self, "asked"):
@@ -1172,8 +1173,15 @@ class Codex:
                     if isinstance(q, dict) and (q.get("question") or q.get("title")):
                         opts = [o if isinstance(o, str) else (o.get("label") or o.get("title") or "")
                                 for o in q.get("options") or []]
+                        details = [("" if isinstance(o, str) else (o.get("description") or ""))
+                                   for o in q.get("options") or []
+                                   if (o if isinstance(o, str) else (o.get("label") or o.get("title")))]
                         event = {"t": "question", "id": f"{pid}-q{i}",
                                  "title": q.get("question") or q["title"], "options": [o for o in opts if o]}
+                        if any(details):
+                            event["details"] = details
+                        if isinstance(q.get("header"), str) and q["header"]:
+                            event["header"] = q["header"]
                         if question_tool.endswith("_async"):
                             event.update({"async": True, "group": pid, "index": i, "count": len(qs)})
                             self.__dict__.setdefault("questions", {})[(p.get("call_id") or pid, i)] = event

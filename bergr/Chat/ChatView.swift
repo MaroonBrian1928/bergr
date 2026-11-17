@@ -1281,7 +1281,7 @@ struct ChatView: View {
                 NoteRow(text: text, palette: palette)
             case .question(let title, let options):
                 if let info = key.info {
-                    QuestionCard(title: title, options: options, details: info.details,
+                    QuestionCard(title: title, options: options, details: info.details, header: info.header,
                                  answer: key.answer, palette: palette,
                                  enabled: key.canType && !key.earlierOpen && !key.waiting,
                                  allowsText: info.codexAsync) { choice in
@@ -2588,6 +2588,16 @@ private struct NoteRow: View {
     }
 }
 
+extension QuestionCard {
+    /// "Finish and ship (Recommended)" → ("Finish and ship", true): Claude marks its pick that way.
+    static func recommendation(_ option: String) -> (String, Bool) {
+        let marker = "(recommended)"
+        let trimmed = option.trimmingCharacters(in: .whitespaces)
+        guard trimmed.lowercased().hasSuffix(marker) else { return (option, false) }
+        return (String(trimmed.dropLast(marker.count)).trimmingCharacters(in: .whitespaces), true)
+    }
+}
+
 /// An agent's multiple-choice question (Codex's request_user_input): tap an option to send it as
 /// the reply. Once answered, it shows the reply and the options go quiet.
 private struct QuestionCard: View {
@@ -2595,6 +2605,8 @@ private struct QuestionCard: View {
     let options: [String]
     /// A line under each option (Claude's option descriptions), when there are any.
     var details: [String] = []
+    /// A short topic label shown above the question ("WORKERS").
+    var header = ""
     let answer: String?
     let palette: ChatPalette
     let enabled: Bool
@@ -2604,6 +2616,12 @@ private struct QuestionCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if !header.isEmpty {
+                Text(header.uppercased())
+                    .font(.caption2.weight(.semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(palette.secondary)
+            }
             Label {
                 Text(title).font(.callout.weight(.semibold)).foregroundStyle(palette.text)
             } icon: {
@@ -2612,12 +2630,22 @@ private struct QuestionCard: View {
             ForEach(Array(options.enumerated()), id: \.offset) { index, option in
                 let letter = String(UnicodeScalar(UInt8(65 + min(index, 25))))
                 let picked = answer.map { Self.matches($0, option: option, letter: letter) } ?? false
+                let (label, recommended) = Self.recommendation(option)
                 Button { choose(option) } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Text(letter).font(.footnote.weight(.semibold).monospaced())
                             .foregroundStyle(picked ? Color.white.opacity(0.8) : palette.secondary)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(option).font(.callout).multilineTextAlignment(.leading)
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(label).font(.callout).multilineTextAlignment(.leading)
+                                if recommended {
+                                    Text("Recommended")
+                                        .font(.caption2.weight(.semibold))
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .foregroundStyle(picked ? Color.white : palette.accent)
+                                        .background((picked ? Color.white : palette.accent).opacity(0.15), in: Capsule())
+                                }
+                            }
                             if index < details.count, !details[index].isEmpty {
                                 Text(details[index])
                                     .font(.footnote)
@@ -2634,6 +2662,12 @@ private struct QuestionCard: View {
                     .frame(minHeight: PlatformMetrics.controlHeight)
                     .background(picked ? palette.accent : palette.bubble,
                                 in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay {
+                        if recommended, !picked, answer == nil {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .strokeBorder(palette.accent.opacity(0.6), lineWidth: 1)
+                        }
+                    }
                     .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 .buttonStyle(PressStyle())

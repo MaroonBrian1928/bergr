@@ -195,6 +195,8 @@ final class ChatFeed {
     /// asked together, and the answer once given.
     struct QuestionInfo: Equatable {
         var details: [String] = []
+        /// The question's short topic label (Claude's AskUserQuestion "header"), e.g. "WORKERS".
+        var header = ""
         var keys = false
         var group: String?
         var index = 0
@@ -705,6 +707,7 @@ final class ChatFeed {
             if event["keys"] as? Bool == true || event["async"] as? Bool == true || event["answer"] != nil {
                 var info = questionInfo[id] ?? QuestionInfo()
                 if let d = event["details"] as? [String] { info.details = d }
+                if let h = event["header"] as? String { info.header = h }
                 if let k = event["keys"] as? Bool { info.keys = k }
                 if let g = event["group"] as? String { info.group = g }
                 if let i = event["index"] as? Int { info.index = i }
