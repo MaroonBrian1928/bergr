@@ -2656,12 +2656,14 @@ private struct QuestionCard: View {
                         Text(letter).font(.footnote.weight(.semibold).monospaced())
                             .foregroundStyle(picked ? Color.white.opacity(0.8) : palette.secondary)
                         VStack(alignment: .leading, spacing: 2) {
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            // Centered on the title, not on its baseline: by baseline the pill's
+                            // padding hung below the line and crowded the description.
+                            HStack(alignment: .center, spacing: 8) {
                                 Text(label).font(.callout).multilineTextAlignment(.leading)
                                 if recommended {
                                     Text("Recommended")
                                         .font(.caption2.weight(.semibold))
-                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .padding(.horizontal, 7).padding(.vertical, 2)
                                         .foregroundStyle(picked ? Color.white : palette.accent)
                                         .background((picked ? Color.white : palette.accent).opacity(0.15), in: Capsule())
                                 }
