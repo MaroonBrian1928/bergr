@@ -287,6 +287,7 @@ private struct NamedImage: View {
                     switch await load(path) {
                     case .image(let data): state = .shown(data)
                     case .notFound: state = .failed("Not found on the machine")
+                    case .notFoundAt(let where_): state = .failed("Not found: \(where_)")
                     case .tooBig: state = .failed("Larger than 10 MB")
                     case .notImage: state = .failed("Not an image")
                     case .failed(let why): state = .failed(why)

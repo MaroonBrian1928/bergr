@@ -124,6 +124,8 @@ extension FileLoader {
     enum ImageResult: Equatable, Sendable {
         case image(Data)
         case notFound, tooBig, notImage
+        /// Not found, and where it looked: "user@host /the/path".
+        case notFoundAt(String)
         case failed(String)
     }
 
@@ -141,7 +143,7 @@ extension FileLoader {
     static func posixImageCommand(_ path: String) -> String {
         let script = """
         f=$1; case "$f" in "~/"*) f="$HOME/${f#"~/"}";; esac; \
-        if [ ! -f "$f" ]; then echo \(notFoundMarker); exit 0; fi; \
+        if [ ! -f "$f" ]; then echo "\(notFoundMarker) $(id -un)@$(hostname -s) $f"; exit 0; fi; \
         n=$(wc -c < "$f" | tr -d ' '); if [ "$n" -gt \(imageCap) ]; then echo \(tooBigMarker); exit 0; fi; \
         m=$(head -c 12 "$f" | od -An -tx1 | tr -d ' \\n'); \
         case "$m" in 89504e47*|ffd8ff*|47494638*|52494646????????57454250|????????66747970*) ;; \
@@ -161,6 +163,8 @@ extension FileLoader {
     static func parseImage(_ output: String) -> ImageResult {
         let lines = output.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
         switch lines.first.map({ $0.trimmingCharacters(in: .whitespaces) }) ?? "" {
+        case let first where first.hasPrefix(notFoundMarker + " "):
+            return .notFoundAt(String(first.dropFirst(notFoundMarker.count + 1)))
         case notFoundMarker: return .notFound
         case tooBigMarker: return .tooBig
         case notImageMarker: return .notImage
