@@ -171,7 +171,8 @@ private struct RowsList: View {
     }
 }
 
-private struct LockScreenView: View {
+/// Internal (not private): `scripts/site-widgets.sh` renders it for the site.
+struct LockScreenView: View {
     let state: AgentState
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

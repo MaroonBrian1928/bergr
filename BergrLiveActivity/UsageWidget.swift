@@ -35,9 +35,18 @@ struct UsageWidget: Widget {
     }
 }
 
-private struct UsageWidgetView: View {
+/// Internal (not private) and with an optional `family`, so `scripts/site-widgets.sh` can render it
+/// outside WidgetKit, where the environment's family can't be set.
+struct UsageWidgetView: View {
     let snapshot: UsageSnapshot
-    @Environment(\.widgetFamily) private var family
+    var familyOverride: WidgetFamily?
+    @Environment(\.widgetFamily) private var environmentFamily
+    private var family: WidgetFamily { familyOverride ?? environmentFamily }
+
+    init(snapshot: UsageSnapshot, family: WidgetFamily? = nil) {
+        self.snapshot = snapshot
+        familyOverride = family
+    }
 
     var body: some View {
         if let top = snapshot.highest {
@@ -94,11 +103,29 @@ private struct UsageWidgetView: View {
                 .contentTransition(.numericText())
                 .minimumScaleFactor(0.7)
                 .foregroundStyle(window.percent >= 80 ? Color.red : Color.primary)
-            ProgressView(value: min(1, window.percent / 100)).tint(window.percent >= 80 ? .red : .blue)
+            UsageBar(fraction: min(1, window.percent / 100), color: window.percent >= 80 ? .red : .blue)
             if !window.detail.isEmpty {
                 Text(window.detail).font(.caption).lineLimit(2)
             }
             Spacer(minLength: 0)
         }
+    }
+}
+
+/// A thin capsule bar: looks like a linear ProgressView, but also draws in ImageRenderer (the site's
+/// widget pictures), which leaves ProgressView empty.
+private struct UsageBar: View {
+    let fraction: Double
+    let color: Color
+
+    var body: some View {
+        Capsule().fill(Color.secondary.opacity(0.25))
+            .overlay(alignment: .leading) {
+                GeometryReader { g in Capsule().fill(color).frame(width: g.size.width * max(0, fraction)) }
+            }
+            .frame(height: 4)
+            .padding(.vertical, 4)
+            .accessibilityElement()
+            .accessibilityValue("\(Int((fraction * 100).rounded())) percent")
     }
 }

@@ -35,9 +35,18 @@ struct AgentsWidget: Widget {
     }
 }
 
-private struct AgentsWidgetView: View {
+/// Internal (not private) and with an optional `family`, so `scripts/site-widgets.sh` can render it
+/// outside WidgetKit, where the environment's family can't be set.
+struct AgentsWidgetView: View {
     let snapshot: AgentsSnapshot
-    @Environment(\.widgetFamily) private var family
+    var familyOverride: WidgetFamily?
+    @Environment(\.widgetFamily) private var environmentFamily
+    private var family: WidgetFamily { familyOverride ?? environmentFamily }
+
+    init(snapshot: AgentsSnapshot, family: WidgetFamily? = nil) {
+        self.snapshot = snapshot
+        familyOverride = family
+    }
 
     var body: some View {
         if family == .accessoryCircular {
