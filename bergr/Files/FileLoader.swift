@@ -159,6 +159,23 @@ extension FileLoader {
         return "sh -c \(quote(script)) sh \(quote(path))"
     }
 
+    /// Which of `paths` exist as files on the machine: one command for all of them, each passed
+    /// as its own quoted argument. Prints the ones found, one per line.
+    static func posixExistsCommand(_ paths: [String]) -> String {
+        let script = """
+        for p in "$@"; do f=$p; case "$f" in "~/"*) f="$HOME/${f#"~/"}";; esac; \
+        [ -f "$f" ] && printf '%s\\n' "$p"; done; true
+        """
+        return "sh -c \(quote(script)) sh " + paths.map(quote).joined(separator: " ")
+    }
+
+    func existing(_ paths: [String]) async -> [String] {
+        guard !windows, !paths.isEmpty,
+              let out = try? await run(Self.posixExistsCommand(paths)) else { return [] }
+        let found = Set(out.split(separator: "\n").map(String.init))
+        return paths.filter(found.contains)
+    }
+
     func loadImage(_ path: String) async -> ImageResult {
         guard !windows else { return .failed("Images from Windows machines aren't shown yet.") }
         let output: String

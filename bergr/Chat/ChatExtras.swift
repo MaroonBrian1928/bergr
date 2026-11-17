@@ -259,11 +259,27 @@ struct ImagePlaceholder: View {
 struct NamedImages: View {
     let paths: [String]
     let palette: ChatPalette
+    /// Which of the paths exist on the machine (one check per message).
+    let exists: ([String]) async -> [String]
     let load: (String) async -> FileLoader.ImageResult
+    @State private var found: [String]?
+
+    /// Answers already had, by path: scrolling back past a message doesn't ask again.
+    @MainActor static var known: [String: Bool] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(paths, id: \.self) { NamedImage(path: $0, palette: palette, load: load) }
+            // Only files that are there: an example path in a message ("/tmp/shots/after.png")
+            // gets no button.
+            ForEach(found ?? [], id: \.self) { NamedImage(path: $0, palette: palette, load: load) }
+        }
+        .task(id: paths) {
+            let unknown = paths.filter { Self.known[$0] == nil }
+            if !unknown.isEmpty {
+                let there = Set(await exists(unknown))
+                for p in unknown { Self.known[p] = there.contains(p) }
+            }
+            found = paths.filter { Self.known[$0] == true }
         }
     }
 }

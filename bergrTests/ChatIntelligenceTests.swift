@@ -307,6 +307,11 @@ struct NamedImageTests {
         #expect(command.hasSuffix(#" sh '/tmp/x.png'\''; rm -rf ~; echo '\'''"#))
     }
 
+    @Test func existenceCheckQuotesEveryPath() {
+        let command = FileLoader.posixExistsCommand(["/tmp/a.png", "/tmp/b'; rm -rf ~; '.png"])
+        #expect(command.hasSuffix(#" sh '/tmp/a.png' '/tmp/b'\''; rm -rf ~; '\''.png'"#))
+    }
+
     @Test func parsesTheHelpersAnswers() {
         let png = Data([0x89, 0x50, 0x4E, 0x47, 1, 2, 3])
         #expect(FileLoader.parseImage("BERGR:ok\n" + png.base64EncodedString()) == .image(png))

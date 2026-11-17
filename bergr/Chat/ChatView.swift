@@ -1262,10 +1262,10 @@ struct ChatView: View {
                     }
                     let images = FileLoader.imagePaths(in: text)
                     if !images.isEmpty, let session, !session.host.isDemo {
-                        NamedImages(paths: images, palette: palette) { path in
-                            await FileLoader(windows: session.isWindowsHost) { try await session.commandOutput($0) }
-                                .loadImage(path)
-                        }
+                        let loader = FileLoader(windows: session.isWindowsHost) { try await session.commandOutput($0) }
+                        NamedImages(paths: images, palette: palette,
+                                    exists: { await loader.existing($0) },
+                                    load: { await loader.loadImage($0) })
                     }
                 }
                 .contextMenu {
