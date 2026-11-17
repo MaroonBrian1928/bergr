@@ -125,6 +125,12 @@ final class UsageHistory {
         demoEntries += seeded
     }
 
+    /// How far back the readings go, across every window (demo ones too).
+    var span: TimeInterval {
+        guard let oldest = (entries + demoEntries).map(\.time).min() else { return 0 }
+        return Date.now.timeIntervalSince(oldest)
+    }
+
     func entries(key: String, since: Date) -> [Entry] {
         (entries + demoEntries).filter { $0.key == key && $0.time >= since }.sorted { $0.time < $1.time }
     }

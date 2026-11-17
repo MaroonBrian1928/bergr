@@ -206,14 +206,16 @@ struct DemoChatTests {
         }
     }
 
-    @Test func usageHistoryDrawsTwoResetsAndForecastsTheLimit() {
+    @Test func usageHistoryLooksLikeAWeekOfUseAndForecastsTheLimit() {
         let history = UsageHistory(url: nil)
         history.seedDemo(DemoChat.history(machine: "studio", agent: .claude) + DemoChat.history(machine: "buildbox", agent: .codex))
         history.seedDemo(DemoChat.history(machine: "studio", agent: .claude))
         #expect(history.entries.isEmpty, "the made-up history is never among what is saved")
         let key = UsageHistory.key(machine: "studio", agent: "claude", kind: "session")
         let week = history.entries(key: key, since: DemoChat.start.addingTimeInterval(-7 * 86_400))
-        #expect(UsageHistoryChart.resets(week).count == 2)
+        // A week of 5-hour windows: many resets, some windows sitting at 100%.
+        #expect(UsageHistoryChart.resets(week).count >= 8)
+        #expect(week.contains { $0.percent == 100 })
         #expect(history.entries(key: key, since: DemoChat.start.addingTimeInterval(-86_400)).count >= 2)
         let window = ChatFeed.Usage.Window(percent: DemoChat.claudeSession,
                                            resetsAt: Date(timeIntervalSince1970: DemoChat.claudeSessionReset))
@@ -224,7 +226,8 @@ struct DemoChatTests {
         #expect(at > DemoChat.start && at < Date(timeIntervalSince1970: DemoChat.claudeSessionReset))
         let weekly = history.entries(key: UsageHistory.key(machine: "studio", agent: "claude", kind: "weekly"),
                                      since: DemoChat.start.addingTimeInterval(-7 * 86_400))
-        #expect(UsageHistoryChart.resets(weekly).count == 1)
+        #expect(UsageHistoryChart.resets(weekly).isEmpty, "the week only climbs")
+        #expect(weekly.last?.percent == DemoChat.claudeWeekly)
         #expect(weekly.allSatisfy { (0...100).contains($0.percent) })
     }
 

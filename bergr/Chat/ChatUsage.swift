@@ -102,7 +102,7 @@ struct UsageSheet: View {
                     Section("Plan usage") {
                         if machine != nil {
                             Picker("History", selection: $range) {
-                                ForEach(UsageScreen.HistoryRange.allCases) { Text($0.rawValue).tag($0) }
+                                ForEach(UsageScreen.HistoryRange.offered(span: UsageHistory.shared.span)) { Text($0.rawValue).tag($0) }
                             }
                             .pickerStyle(.segmented)
                             .labelsHidden()

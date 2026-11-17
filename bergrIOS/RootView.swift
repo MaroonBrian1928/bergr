@@ -12,10 +12,16 @@ struct RootView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// The machine shown in the sidebar, remembered across launches.
     @AppStorage("selectedHost") private var storedHost = ""
-    @State private var selectedTerminal: String?
+    /// The open conversation. Remembered (with `restoreKey`) so coming back after iOS ended the app
+    /// in the background reopens it instead of the agents list.
+    @State private var selectedTerminal: String? = RootView.restoredTerminal
+    private static let restoreKey = "openTerminal"
+    private static var restoredTerminal: String? {
+        UserDefaults.standard.string(forKey: restoreKey).flatMap { $0.isEmpty ? nil : $0 }
+    }
     @State private var columns = NavigationSplitViewVisibility.all
     /// On a phone (one column at a time): which column shows. Opening an agent moves to its chat.
-    @State private var compactColumn = NavigationSplitViewColumn.sidebar
+    @State private var compactColumn: NavigationSplitViewColumn = RootView.restoredTerminal == nil ? .sidebar : .detail
     @State private var showingSettings = false
     @State private var showingNewSession = false
     /// Set by an intent ("Start session") for the New Session sheet it opens.
@@ -186,6 +192,13 @@ struct RootView: View {
         // The chat on screen doesn't alert about itself.
         .onChange(of: selectedTerminal, initial: true) { _, address in
             notifier?.focusedAddress = selectedHost.wrappedValue.flatMap { host in address.map { (host, $0) } }
+            UserDefaults.standard.set(address ?? "", forKey: Self.restoreKey)
+        }
+        // Back at the list on a phone: nothing to reopen next launch.
+        .onChange(of: compactColumn) { _, column in
+            if horizontalSizeClass == .compact, column == .sidebar {
+                UserDefaults.standard.set("", forKey: Self.restoreKey)
+            }
         }
         // A tapped alert opens its terminal.
         // initial: also when a tap launched the app from scratch, before this view existed.

@@ -591,23 +591,76 @@ enum DemoChat {
         }
         switch agent {
         case .claude:
-            // The last hour: 0.25 points a minute, so 62% now reaches the limit in about 2.5 hours.
-            let recent = [55.0, 30, 5].map { minutes in
-                UsageHistory.Entry(key: UsageHistory.key(machine: machine, agent: agent.rawValue, kind: "session"),
-                                   time: now.addingTimeInterval(-minutes * 60), percent: claudeSession - minutes * 0.25,
-                                   resetsAt: Date(timeIntervalSince1970: claudeSessionReset))
+            // A week of real-looking use: 5-hour session windows in the day (climbing in uneven
+            // steps, some hitting 100% and sitting there until the reset), quiet nights, and a
+            // weekly window that steps up with them. The current window ends at `claudeSession`.
+            let windows: [(start: Double, peak: Double)] = [
+                (158, 64), (153, 100), (134, 48), (129, 92), (110, 100), (105, 37), (86, 71), (81, 100),
+                (62, 55), (57, 100), (38, 83), (33, 44), (14, 100), (9, 58)]
+            var session: [UsageHistory.Entry] = []
+            for (n, w) in windows.enumerated() {
+                session += window(machine: machine, agent: agent, now: now, startHoursAgo: w.start, peak: w.peak, seed: n)
             }
-            return run("session", from: 6, to: 71, startHoursAgo: 150, hours: 4.5, resetsAt: nil, points: 10)
-                + run("session", from: 9, to: 88, startHoursAgo: 78, hours: 5, resetsAt: nil, points: 11)
-                + run("session", from: 12, to: 46, startHoursAgo: 1.8, hours: 0.8, resetsAt: nil, points: 4)
-                + recent
-                + run("weekly", from: 58, to: 93, startHoursAgo: 167, hours: 40, resetsAt: nil, points: 9)
-                + run("weekly", from: 3, to: claudeWeekly, startHoursAgo: 96, hours: 96, resetsAt: weeklyReset, points: 20)
+            session += window(machine: machine, agent: agent, now: now, startHoursAgo: 3, peak: claudeSession,
+                              seed: 99, until: 0, resetsAt: claudeSessionReset)
+            return session + weekly(machine: machine, agent: agent, sessions: session, now: now,
+                                    to: claudeWeekly, resetsAt: weeklyReset)
         case .codex:
-            return run("session", from: 4, to: 64, startHoursAgo: 54, hours: 4, resetsAt: nil, points: 9)
-                + run("session", from: 2, to: codexSession, startHoursAgo: 1.2, hours: 1.2, resetsAt: codexSessionReset, points: 6)
+            var session: [UsageHistory.Entry] = []
+            for (n, w) in [(100.0, 40.0), (76, 100), (52, 66), (28, 81)].enumerated() {
+                session += window(machine: machine, agent: agent, now: now, startHoursAgo: w.0, peak: w.1, seed: 50 + n)
+            }
+            return session + window(machine: machine, agent: agent, now: now, startHoursAgo: 1.2, peak: codexSession,
+                                    seed: 77, until: 0, resetsAt: codexSessionReset)
         case .antigravity:
             return []
+        }
+    }
+
+    /// One session window's readings, every 15 minutes: bursts of work and pauses, up to `peak`;
+    /// at 100% it stays there until the window's 5 hours are up. `until` cuts it off (hours ago).
+    private static func window(machine: String, agent: ChatAgent, now: Date, startHoursAgo: Double, peak: Double,
+                               seed: Int, until: Double? = nil, resetsAt: Double? = nil) -> [UsageHistory.Entry] {
+        let key = UsageHistory.key(machine: machine, agent: agent.rawValue, kind: "session")
+        var rng = UInt64(seed &* 2_654_435_761 &+ 1)
+        func next() -> Double { rng = rng &* 6364136223846793005 &+ 1442695040888963407; return Double(rng >> 33) / Double(1 << 31) }
+        let end = max(until ?? (startHoursAgo - 5), startHoursAgo - 5)
+        let climb = peak >= 100 ? 3.0 + next() * 1.2 : startHoursAgo - end
+        var steps: [Double] = []
+        var t = 0.0
+        while t <= startHoursAgo - end + 0.001 { steps.append(t); t += 0.25 }
+        // Uneven growth: each step adds a random share, some steps (pauses) nothing.
+        let weights = steps.map { _ in next() < 0.3 ? 0 : 0.3 + next() }
+        let climbing = steps.filter { $0 <= climb }.count
+        let total = max(0.001, weights.prefix(climbing).reduce(0, +))
+        var used = 1 + next() * 4, out: [UsageHistory.Entry] = []
+        for (i, h) in steps.enumerated() {
+            if h <= climb { used += (min(peak, 100) - 5) * weights[i] / total }
+            let percent = h <= climb ? min(used, peak) : min(100, peak)
+            out.append(UsageHistory.Entry(key: key, time: now.addingTimeInterval(-(startHoursAgo - h) * 3600),
+                                          percent: percent.rounded(),
+                                          resetsAt: resetsAt.map { Date(timeIntervalSince1970: $0) }))
+        }
+        if let last = out.indices.last, until != nil { out[last].percent = peak }
+        return out
+    }
+
+    /// The weekly window, rising in step with the session windows' use and ending at `to` now.
+    private static func weekly(machine: String, agent: ChatAgent, sessions: [UsageHistory.Entry], now: Date,
+                               to: Double, resetsAt: Double) -> [UsageHistory.Entry] {
+        let key = UsageHistory.key(machine: machine, agent: agent.rawValue, kind: "weekly")
+        var spent = 0.0, last = 0.0, points: [(Date, Double)] = []
+        for e in sessions.sorted(by: { $0.time < $1.time }) {
+            spent += max(0, e.percent - last)
+            last = e.percent
+            points.append((e.time, spent))
+        }
+        guard let total = points.last?.1, total > 0 else { return [] }
+        return points.enumerated().compactMap { i, p in
+            i % 2 == 0 || i == points.count - 1
+                ? UsageHistory.Entry(key: key, time: p.0, percent: (to * p.1 / total).rounded(),
+                                     resetsAt: Date(timeIntervalSince1970: resetsAt))
+                : nil
         }
     }
 

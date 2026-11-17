@@ -164,7 +164,13 @@ final class AwayDigestModel {
     }
 
     private(set) var entries: [Entry] = []
-    private var left: Date?
+    /// When the app went to the background, kept in UserDefaults: iOS often ends the app while
+    /// it's away, and the card never came after a relaunch when this lived only in memory.
+    private var left: Date? {
+        get { UserDefaults.standard.object(forKey: Self.leftKey) as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: Self.leftKey) }
+    }
+    private static let leftKey = "bergr.away.left"
     private var task: Task<Void, Never>?
     private let summarizer: DigestSummarizing
 
@@ -181,6 +187,12 @@ final class AwayDigestModel {
         task?.cancel()
         task = Task { [weak self] in
             try? await Task.sleep(for: settle)
+            // After a relaunch the machines still have to connect (and Face ID to pass): wait for
+            // their agents, up to 20 s more.
+            for _ in 0..<40 where candidates().isEmpty {
+                guard !Task.isCancelled else { return }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
             guard !Task.isCancelled else { return }
             self?.build(since: left, candidates: candidates())
         }

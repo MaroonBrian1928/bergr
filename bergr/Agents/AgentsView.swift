@@ -136,7 +136,8 @@ struct AgentsView: View {
         }
         .onChange(of: searchText) { if searchText.isEmpty { searchModel.clear() } }
         .modifier(SearchResultsSections.InfoAlert(hit: $searchModel.info))
-        .onChange(of: scenePhase) { _, phase in
+        // initial: a relaunch (iOS ended the app while it was away) starts active, with no change.
+        .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .background { digest.appDidLeave() }
             if phase == .active { digest.appDidReturn { awayCandidates } }
         }

@@ -10,6 +10,10 @@ struct UsageScreen: View {
     enum HistoryRange: String, CaseIterable, Identifiable {
         case day = "24 hours", week = "7 days", month = "30 days"
         var id: String { rawValue }
+        /// The ranges worth offering: 30 days only once there's a week of readings to show in it.
+        static func offered(span: TimeInterval) -> [HistoryRange] {
+            span >= 7 * 24 * 3600 ? allCases : [.day, .week]
+        }
         var seconds: TimeInterval {
             switch self {
             case .day: 24 * 3600
@@ -32,7 +36,7 @@ struct UsageScreen: View {
             if accounts.contains(where: { $0.session != nil || $0.weekly != nil }) {
                 Section {
                     Picker("History", selection: $range) {
-                        ForEach(HistoryRange.allCases) { Text($0.rawValue).tag($0) }
+                        ForEach(HistoryRange.offered(span: UsageHistory.shared.span)) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
