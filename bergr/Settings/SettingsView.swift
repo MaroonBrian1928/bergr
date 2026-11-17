@@ -346,6 +346,16 @@ struct SettingsView: View {
                     .frame(minHeight: 44)
                 }
                 NavigationLink {
+                    AuthTrailView()
+                } label: {
+                    Label {
+                        Text("Face ID Log")
+                    } icon: {
+                        SettingsIcon("faceid", color: .green)
+                    }
+                    .frame(minHeight: 44)
+                }
+                NavigationLink {
                     LicensesView()
                 } label: {
                     Label {

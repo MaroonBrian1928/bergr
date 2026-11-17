@@ -31,7 +31,7 @@ struct UsageWidget: Widget {
         }
         .configurationDisplayName("Usage")
         .description("The plan limit closest to running out, and when it will.")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        .supportedFamilies([.systemSmall, .systemMedium, .accessoryCircular, .accessoryRectangular])
     }
 }
 
@@ -41,7 +41,30 @@ private struct UsageWidgetView: View {
 
     var body: some View {
         if let top = snapshot.highest {
-            if family == .systemMedium {
+            if family == .accessoryCircular {
+                // Lock Screen: the closest limit as a ring, its percent inside.
+                Gauge(value: min(100, top.percent), in: 0...100) {
+                    Image(systemName: "gauge.with.dots.needle.50percent")
+                } currentValueLabel: {
+                    Text("\(Int(top.percent.rounded()))").font(.title3.bold().monospacedDigit())
+                        .contentTransition(.numericText())
+                }
+                .gaugeStyle(.accessoryCircularCapacity)
+                .accessibilityLabel("\(top.title) \(Int(top.percent.rounded())) percent used")
+            } else if family == .accessoryRectangular {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text(top.title).lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text("\(Int(top.percent.rounded()))%").monospacedDigit()
+                    }
+                    .font(.headline)
+                    .widgetAccentable()
+                    Gauge(value: min(100, top.percent), in: 0...100) { EmptyView() }
+                        .gaugeStyle(.accessoryLinearCapacity)
+                    if !top.detail.isEmpty { Text(top.detail).font(.caption).lineLimit(1) }
+                }
+            } else if family == .systemMedium {
                 HStack(alignment: .top, spacing: 16) {
                     headline(top)
                     VStack(alignment: .leading, spacing: 6) {
@@ -68,6 +91,8 @@ private struct UsageWidgetView: View {
             Text(window.title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             Text("\(Int(window.percent.rounded()))%")
                 .font(.system(size: 40, weight: .bold, design: .rounded).monospacedDigit())
+                .contentTransition(.numericText())
+                .minimumScaleFactor(0.7)
                 .foregroundStyle(window.percent >= 80 ? Color.red : Color.primary)
             ProgressView(value: min(1, window.percent / 100)).tint(window.percent >= 80 ? .red : .blue)
             if !window.detail.isEmpty {

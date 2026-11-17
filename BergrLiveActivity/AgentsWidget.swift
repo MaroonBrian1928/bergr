@@ -41,10 +41,13 @@ private struct AgentsWidgetView: View {
 
     var body: some View {
         if family == .accessoryCircular {
-            Gauge(value: 0, in: 0...1) {
+            // The ring fills with the share of running agents that need you (it was always empty).
+            let total = max(1, snapshot.needsYou + snapshot.working + snapshot.done)
+            Gauge(value: Double(snapshot.needsYou), in: 0...Double(total)) {
                 Image(systemName: "exclamationmark.bubble.fill")
             } currentValueLabel: {
                 Text("\(snapshot.needsYou)").font(.title3.bold().monospacedDigit())
+                    .contentTransition(.numericText())
             }
             .gaugeStyle(.accessoryCircularCapacity)
             .accessibilityLabel("\(snapshot.needsYou) agents need you")
@@ -145,7 +148,7 @@ private struct AgentsWidgetView: View {
     private func count(_ n: Int, _ symbol: String, _ word: String, _ tint: Color) -> some View {
         HStack(spacing: 6) {
             Image(systemName: symbol).foregroundStyle(tint).frame(width: 18)
-            Text("\(n)").font(.callout.bold().monospacedDigit())
+            Text("\(n)").font(.callout.bold().monospacedDigit()).contentTransition(.numericText())
             Text(word).font(.caption).foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .combine)

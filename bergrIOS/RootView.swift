@@ -212,6 +212,7 @@ struct RootView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
+            AuthTrail.note("scene \(phase)")
             switch phase {
             case .background:
                 wasInBackground = true

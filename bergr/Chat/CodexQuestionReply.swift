@@ -114,10 +114,17 @@ import Foundation
                    let choose {
                     await choose(index)
                     let end = ContinuousClock.now + selectionWait
+                    // Taken when the next question shows, or when no panel is left (the last question
+                    // was answered and Codex is back at its prompt) for two reads in a row: one read
+                    // can be a frame mid-redraw.
+                    var gone = 0
                     repeat {
                         guard !Task.isCancelled else { return .unconfirmed }
                         if confirmed() { return .sent }
-                        if let next = panel(lines: lines()), next.heading != currentPanel.heading { return .sent }
+                        let now = panel(lines: lines())
+                        if let next = now, next.heading != currentPanel.heading { return .sent }
+                        gone = now == nil ? gone + 1 : 0
+                        if gone >= 2 { return .sent }
                         guard ContinuousClock.now < end else { break }
                         do { try await Task.sleep(for: .milliseconds(50)) } catch { return .unconfirmed }
                     } while true

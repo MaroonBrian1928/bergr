@@ -236,41 +236,50 @@ private struct PromptView: View {
     let prompt: BergrActivityAttributes.Prompt
     let compact: Bool
 
+    /// The Lock Screen gives a Live Activity about 160 pt: the question and its agent share a line,
+    /// three answers are tight rows, and there's no Open link (tapping the activity opens the chat).
+    /// Two answers stand side by side.
+    private var tight: Bool { compact || prompt.options.count > 2 }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 6 : 8) {
-            Label {
-                Text(prompt.question).lineLimit(compact ? 2 : 3)
-            } icon: {
+        VStack(alignment: .leading, spacing: tight ? 5 : 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "hand.raised.fill").foregroundStyle(Color.needsYou)
+                Text(prompt.question).lineLimit(tight ? 1 : 2)
+                Spacer(minLength: 4)
+                Text(prompt.title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            .font(compact ? .footnote.weight(.semibold) : .subheadline.weight(.semibold))
-            Text(prompt.title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            ForEach(Array(prompt.options.enumerated()), id: \.offset) { index, option in
-                Button(intent: AnswerPromptIntent(
-                    host: prompt.host, address: prompt.address, question: prompt.question, option: option)
-                ) {
-                    HStack(spacing: 8) {
-                        if option.number > 0 {
-                            Text("\(option.number)").font(.caption.monospacedDigit().weight(.bold)).opacity(0.7)
-                        } else {
-                            Image(systemName: symbol(option)).font(.caption.weight(.bold))
-                        }
-                        Text(option.label).font(compact ? .footnote : .subheadline).lineLimit(1)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: .infinity, minHeight: compact ? 28 : 32, alignment: .leading)
-                    .foregroundStyle(index == 0 ? Color(red: 0x30 / 255, green: 0x34 / 255, blue: 0x38 / 255) : .white)
-                    .background(index == 0 ? Color.needsYou : Color.white.opacity(0.18), in: Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-            Link(destination: URL(string: "bergr://terminal?host=\(prompt.host)&address=\(prompt.address)")
-                ?? URL(string: "bergr://terminal")!) {
-                Label("Open", systemImage: "arrow.up.forward.app").font(.caption).foregroundStyle(.secondary)
+            .font(tight ? .footnote.weight(.semibold) : .subheadline.weight(.semibold))
+            if prompt.options.count == 2 {
+                HStack(spacing: 8) { options }
+            } else {
+                options
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var options: some View {
+        ForEach(Array(prompt.options.enumerated()), id: \.offset) { index, option in
+            Button(intent: AnswerPromptIntent(
+                host: prompt.host, address: prompt.address, question: prompt.question, option: option)
+            ) {
+                HStack(spacing: 8) {
+                    if option.number > 0 {
+                        Text("\(option.number)").font(.caption.monospacedDigit().weight(.bold)).opacity(0.7)
+                    } else {
+                        Image(systemName: symbol(option)).font(.caption.weight(.bold))
+                    }
+                    Text(option.label).font(tight ? .footnote : .subheadline).lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, minHeight: tight ? 28 : 34, alignment: .leading)
+                .foregroundStyle(index == 0 ? Color(red: 0x30 / 255, green: 0x34 / 255, blue: 0x38 / 255) : .white)
+                .background(index == 0 ? Color.needsYou : Color.white.opacity(0.18), in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     private func symbol(_ option: BergrActivityAttributes.Option) -> String {

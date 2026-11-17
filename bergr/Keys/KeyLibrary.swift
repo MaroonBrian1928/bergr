@@ -135,9 +135,15 @@ final class KeyLibrary {
     // Retain the tail across a lock until the old operation actually exits.
     @ObservationIgnored private var unlockTail: Task<Void, Never>?
     @ObservationIgnored private var lockGeneration = 0
+    /// The last Face ID that succeeded, shared by keys unlocked soon after (see `unlock`).
+    @ObservationIgnored private var recentAuth: (context: LAContext, at: Date, generation: Int)?
+    static let authReuse: TimeInterval = 30
 
     func signingKey(for key: SSHKeyInfo) async throws -> SigningKey {
         if let ready = unlocked[key.id] { return ready }
+        if key.requiresBiometry {
+            AuthTrail.note("asked for \(key.label) (gen \(lockGeneration), \(unlocking[key.id] == nil ? "new" : "joins running"))")
+        }
         let generation = lockGeneration
         let task: Task<SigningKey, Error>
         if let running = unlocking[key.id] {
@@ -154,14 +160,19 @@ final class KeyLibrary {
         }
         defer { if unlocking[key.id] == task { unlocking[key.id] = nil } }
         let signing = try await task.value
-        guard generation == lockGeneration else { throw CancellationError() }
+        guard generation == lockGeneration else {
+            AuthTrail.note("result for \(key.label) dropped: locked meanwhile (gen \(generation) → \(lockGeneration))")
+            throw CancellationError()
+        }
         unlocked[key.id] = signing
         return signing
     }
 
     /// Locks the keys again (the app went to the background without staying connected).
     func forgetUnlocked() {
+        AuthTrail.note("keys locked (app to background); \(unlocking.count) unlock(s) cancelled")
         lockGeneration += 1
+        recentAuth = nil
         for task in unlocking.values { task.cancel() }
         unlocked = [:]
         unlocking = [:]
@@ -172,7 +183,19 @@ final class KeyLibrary {
         if key.requiresBiometry {
             try await waitUntilActive()
             try Task.checkCancellation()
-            context = try await authorize(key)
+            // One Face ID for every key unlocked together: coming back reconnects all machines,
+            // and machines with different keys each asked again, back to back.
+            if let recent = recentAuth, recent.generation == lockGeneration,
+               Date.now.timeIntervalSince(recent.at) < Self.authReuse {
+                context = recent.context
+                AuthTrail.note("reused recent Face ID for \(key.label)")
+            } else {
+                let generation = lockGeneration
+                context = try await authorize(key)
+                if let context, generation == lockGeneration {
+                    recentAuth = (context, .now, generation)
+                }
+            }
         }
         try Task.checkCancellation()
         return try load(key.id, context)
@@ -180,21 +203,58 @@ final class KeyLibrary {
 
     private static let authLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "bergr", category: "authentication")
 
+    /// LAError codes by name, for the Face ID log.
+    nonisolated static func describe(_ error: NSError) -> String {
+        guard error.domain == LAErrorDomain, let code = LAError.Code(rawValue: error.code) else {
+            return "\(error.domain) \(error.code)"
+        }
+        switch code {
+        case .userCancel: return "you cancelled (userCancel)"
+        case .systemCancel: return "iOS cancelled it (systemCancel)"
+        case .appCancel: return "Bergr cancelled it (appCancel)"
+        case .userFallback: return "passcode chosen (userFallback)"
+        case .authenticationFailed: return "face not recognized"
+        case .biometryLockout: return "Face ID locked out"
+        case .notInteractive: return "not allowed to show UI (notInteractive)"
+        default: return "LAError \(error.code)"
+        }
+    }
+
     private static func waitForActivation() async throws {
         #if os(iOS)
+        var waited = false
         if UIApplication.shared.applicationState != .active { authLog.info("Waiting for app activation") }
         while UIApplication.shared.applicationState != .active {
+            waited = true
             try await Task.sleep(for: .milliseconds(50))
         }
+        // Just come to the front (from the background or a notification): iOS cancels a Face ID
+        // prompt shown while the switch is still finishing, so let it settle first.
+        if waited { try await Task.sleep(for: .milliseconds(600)) }
         #endif
         try Task.checkCancellation()
     }
 
+    /// Asks for Face ID; when iOS itself cancels the prompt (the app was still coming to the front),
+    /// asks once more on its own instead of leaving "Unlocking was canceled" and a Retry.
     private static func authorizeKey(_ key: SSHKeyInfo) async throws -> LAContext? {
+        do {
+            return try await authorizeOnce(key)
+        } catch let error as LAError where error.code == .systemCancel && !Task.isCancelled {
+            authLog.info("Authentication cancelled by the system; asking again")
+            await AuthTrail.note("cancelled by iOS (systemCancel); asking again")
+            try await Task.sleep(for: .milliseconds(600))
+            try await waitForActivation()
+            return try await authorizeOnce(key)
+        }
+    }
+
+    private static func authorizeOnce(_ key: SSHKeyInfo) async throws -> LAContext? {
         let context = LAContext()
         let cancellableContext = CancellableAuthContext(context)
         let log = authLog
         log.info("Authentication started")
+        await AuthTrail.note("Face ID prompt for \(key.label)")
         do {
             try await withTaskCancellationHandler {
                 try Task.checkCancellation()
@@ -204,12 +264,15 @@ final class KeyLibrary {
                 try Task.checkCancellation()
             } onCancel: {
                 log.info("Authentication cancelled")
+                Task { @MainActor in AuthTrail.note("prompt cancelled by Bergr (task cancelled)") }
                 cancellableContext.invalidate()
             }
             log.info("Authentication succeeded")
+            await AuthTrail.note("Face ID succeeded")
         } catch {
             let nsError = error as NSError
             authLog.info("Authentication failed: domain=\(nsError.domain, privacy: .public) code=\(nsError.code)")
+            await AuthTrail.note("Face ID failed: \(Self.describe(nsError))")
             throw error
         }
         return context

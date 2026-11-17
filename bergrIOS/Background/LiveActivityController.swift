@@ -213,7 +213,15 @@ final class LiveActivityController {
         !KeepAlive.shared.enabled && Self.pushEnabled && PushRegistration.shared.relaySecret != nil
     }
 
+    /// Only the built-in demo machine is added: the app shows its agents itself, with the question
+    /// and buttons, whatever the push settings (nothing real to keep private, no helper to push).
+    private var demoOnly: Bool {
+        let hosts = sessions.ids.compactMap { sessions.existing($0)?.host }
+        return !hosts.isEmpty && hosts.allSatisfy(\.isDemo)
+    }
+
     private func current() -> State? {
+        if demoOnly { return Self.content(machines: machines(), screens: screens) }
         // Settings → Live Activity, whichever way updates come.
         guard Self.pushEnabled else { return nil }
         if KeepAlive.shared.enabled { return Self.content(machines: machines(), screens: screens) }
@@ -284,7 +292,7 @@ final class LiveActivityController {
     }
 
     private func reconcile() {
-        if inBackground, KeepAlive.shared.enabled { prefetchScreens() }
+        if inBackground, KeepAlive.shared.enabled || demoOnly { prefetchScreens() }
         // Updated by push: once started it belongs to the machines and the relay (the session
         // ignores us). The app lets go of its machines in the background (they'd look empty).
         guard inBackground else {

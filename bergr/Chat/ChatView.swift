@@ -589,7 +589,7 @@ struct ChatView: View {
                 .transition(.identity)
             }
         }
-        if search == nil, state == "working" {
+        if search == nil, state == "working", !waitingOnQuestion {
             // herdr's status is mostly the agent's description of its current tool, which
             // the live tool run above already shows; it only adds something between tools.
             WorkingRow(agent: agent,
@@ -1048,6 +1048,16 @@ struct ChatView: View {
     }
 
     /// One of Claude's question cards is waiting for an answer.
+    /// The agent stopped on a question card that isn't answered yet (Codex's async questions don't
+    /// stop it): no "working" line under the card then, even if the status still says working.
+    private var waitingOnQuestion: Bool {
+        guard let last = feed.items.last(where: { if case .question = $0.kind { return true }; return false }),
+              let info = feed.questionInfo[last.id] else { return false }
+        let after = feed.items.drop { $0.id != last.id }.dropFirst()
+        let moved = after.contains { if case .user = $0.kind { return true }; if case .assistant = $0.kind { return true }; return false }
+        return !info.codexAsync && info.answer == nil && questionPicks[last.id] == nil && !moved
+    }
+
     private var questionOpen: Bool {
         feed.items.suffix(12).contains { item in
             guard case .question = item.kind, let info = feed.questionInfo[item.id], info.keys else { return false }

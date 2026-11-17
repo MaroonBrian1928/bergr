@@ -45,6 +45,17 @@ import Testing
         #expect(actions == ["previous", "3"])
     }
 
+    @Test func lastQuestionAnsweredCountsWhenThePanelCloses() async {
+        var actions: [String] = []
+        var screen = panel
+        let result = await CodexQuestionReply.sendResult("Not sure", title: title, pendingCount: 1,
+            lines: { screen }, previous: { actions.append("previous") }, paste: { _ in actions.append("paste") },
+            submit: { actions.append("enter") }, choose: { actions.append(String($0)); screen = ["› ", ""] },
+            selectionWait: .milliseconds(500))
+        #expect(result == .sent)
+        #expect(actions == ["3"])
+    }
+
     @Test func wrongHeadingAndTimeoutNeverSendExtraKeys() async {
         var actions: [String] = []
         let wrong = await CodexQuestionReply.send("Not sure", title: "Different question?", pendingCount: 1,
