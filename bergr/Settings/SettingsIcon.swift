@@ -5,14 +5,23 @@ struct SettingsIcon: View {
     let systemName: String
     let color: Color
 
+    /// The symbol's box: about 60% of the 29 pt tile, Apple's Settings proportion.
+    static let glyph: CGFloat = 18
+
     init(_ systemName: String, color: Color) {
         self.systemName = systemName
         self.color = color
     }
 
     var body: some View {
+        // Fitted into a fixed box inside the tile, so a wide or tall symbol (three connected
+        // points, a phone with waves) keeps the same margin as a round one instead of reaching the edge.
         Image(systemName: systemName)
-            .font(.system(size: 15, weight: .semibold))
+            .resizable()
+            .symbolRenderingMode(.monochrome)
+            .fontWeight(.semibold)
+            .scaledToFit()
+            .frame(width: Self.glyph, height: Self.glyph)
             .foregroundStyle(.white)
             .frame(width: 29, height: 29)
             .background(color.gradient, in: RoundedRectangle(cornerRadius: 7, style: .continuous))

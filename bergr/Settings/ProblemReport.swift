@@ -61,15 +61,16 @@ nonisolated enum ProblemReport {
     }
 }
 
-/// "Report a Problem" in Diagnostics.
-struct ProblemReportSection: View {
-    let lines: [String]
-    @State private var description = ""
-    @State private var mailing = false
-    @State private var warningPublic = false
-    @Environment(\.openURL) private var openURL
+/// What the report form is doing; owned by the screen, so its sheet and alert hang off the list
+/// itself (attached to a row inside a List, a sheet closed again at once).
+@Observable final class ProblemReportForm {
+    var description = ""
+    var mailing = false
+    var warningPublic = false
+}
 
-    private var environment: String {
+extension ProblemReportForm {
+    static var environment: String {
         let info = Bundle.main.infoDictionary
         let version = "\(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"))"
         #if os(iOS)
@@ -82,12 +83,39 @@ struct ProblemReportSection: View {
         return ProblemReport.environment(version: version, system: system, device: device)
     }
 
+    func sendEmail(lines: [String], openURL: OpenURLAction) {
+        #if os(iOS)
+        if MFMailComposeViewController.canSendMail() { mailing = true; return }
+        #endif
+        let body = ProblemReport.body(description: description, environment: Self.environment, log: lines)
+        var c = URLComponents()
+        c.scheme = "mailto"
+        c.path = ProblemReport.email
+        c.queryItems = [URLQueryItem(name: "subject", value: ProblemReport.subject(description)),
+                        URLQueryItem(name: "body", value: body)]
+        if let url = c.url { openURL(url) }
+    }
+
+    func openIssue(lines: [String], openURL: OpenURLAction) {
+        Pasteboard.copy(lines.joined(separator: "\n"))
+        if let url = ProblemReport.issueURL(description: description, environment: Self.environment, log: lines) {
+            openURL(url)
+        }
+    }
+}
+
+/// "Report a Problem" in Diagnostics: the rows. The sheet and alert: `problemReportPresentation`.
+struct ProblemReportSection: View {
+    @Bindable var form: ProblemReportForm
+    let lines: [String]
+    @Environment(\.openURL) private var openURL
+
     var body: some View {
         Section {
-            TextField("What went wrong?", text: $description, axis: .vertical)
+            TextField("What went wrong?", text: $form.description, axis: .vertical)
                 .lineLimit(3...8)
-            Button("Send by Email", systemImage: "envelope") { sendEmail() }
-            Button("Open a GitHub Issue", systemImage: "exclamationmark.bubble") { warningPublic = true }
+            Button("Send by Email", systemImage: "envelope") { form.sendEmail(lines: lines, openURL: openURL) }
+            Button("Open a GitHub Issue", systemImage: "exclamationmark.bubble") { form.warningPublic = true }
             Label {
                 Text("GitHub issues are **public**. Anyone on the internet can read the log you post there: machine names, folders, file names and bits of messages. Email is private.")
             } icon: {
@@ -103,40 +131,39 @@ struct ProblemReportSection: View {
         } footer: {
             Text("Includes the log below, the app version and the device type. For GitHub, the whole log is copied for you to paste in.")
         }
-        .alert("This will be public", isPresented: $warningPublic) {
-            Button("Send by Email Instead") { sendEmail() }
-            Button("Open Public Issue", role: .destructive) { openIssue() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Anyone on the internet can read a GitHub issue, including the log: machine names, folders, file names and bits of your agents' messages. Check it and remove anything private before you post. Email goes only to the developer.")
-        }
-        #if os(iOS)
-        .sheet(isPresented: $mailing) {
-            MailComposer(subject: ProblemReport.subject(description), body: description + "\n\n" + environment,
-                         attachment: ProblemReport.body(description: description, environment: environment, log: lines))
-                .ignoresSafeArea()
-        }
-        #endif
     }
+}
 
-    private func sendEmail() {
-        #if os(iOS)
-        if MFMailComposeViewController.canSendMail() { mailing = true; return }
-        #endif
-        let body = ProblemReport.body(description: description, environment: environment, log: lines)
-        var c = URLComponents()
-        c.scheme = "mailto"
-        c.path = ProblemReport.email
-        c.queryItems = [URLQueryItem(name: "subject", value: ProblemReport.subject(description)),
-                        URLQueryItem(name: "body", value: body)]
-        if let url = c.url { openURL(url) }
+private struct ProblemReportPresentation: ViewModifier {
+    @Bindable var form: ProblemReportForm
+    let lines: [String]
+    @Environment(\.openURL) private var openURL
+
+    func body(content: Content) -> some View {
+        content
+            .alert("This will be public", isPresented: $form.warningPublic) {
+                Button("Send by Email Instead") { form.sendEmail(lines: lines, openURL: openURL) }
+                Button("Open Public Issue", role: .destructive) { form.openIssue(lines: lines, openURL: openURL) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Anyone on the internet can read a GitHub issue, including the log: machine names, folders, file names and bits of your agents' messages. Check it and remove anything private before you post. Email goes only to the developer.")
+            }
+            #if os(iOS)
+            .sheet(isPresented: $form.mailing) {
+                MailComposer(subject: ProblemReport.subject(form.description),
+                             body: form.description + "\n\n" + ProblemReportForm.environment,
+                             attachment: ProblemReport.body(description: form.description,
+                                                            environment: ProblemReportForm.environment, log: lines),
+                             onDone: { form.mailing = false })
+                    .ignoresSafeArea()
+            }
+            #endif
     }
+}
 
-    private func openIssue() {
-        Pasteboard.copy(lines.joined(separator: "\n"))
-        if let url = ProblemReport.issueURL(description: description, environment: environment, log: lines) {
-            openURL(url)
-        }
+extension View {
+    func problemReportPresentation(_ form: ProblemReportForm, lines: [String]) -> some View {
+        modifier(ProblemReportPresentation(form: form, lines: lines))
     }
 }
 
@@ -146,7 +173,7 @@ private struct MailComposer: UIViewControllerRepresentable {
     let subject: String
     let body: String
     let attachment: String
-    @Environment(\.dismiss) private var dismiss
+    let onDone: () -> Void
 
     func makeUIViewController(context: Context) -> MFMailComposeViewController {
         let vc = MFMailComposeViewController()
@@ -159,14 +186,14 @@ private struct MailComposer: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ vc: MFMailComposeViewController, context: Context) {}
-    func makeCoordinator() -> Coordinator { Coordinator(dismiss: dismiss) }
+    func makeCoordinator() -> Coordinator { Coordinator(onDone: onDone) }
 
     final class Coordinator: NSObject, MFMailComposeViewControllerDelegate {
-        let dismiss: DismissAction
-        init(dismiss: DismissAction) { self.dismiss = dismiss }
+        let onDone: () -> Void
+        init(onDone: @escaping () -> Void) { self.onDone = onDone }
         func mailComposeController(_ controller: MFMailComposeViewController,
                                    didFinishWith result: MFMailComposeResult, error: Error?) {
-            dismiss()
+            onDone()
         }
     }
 }

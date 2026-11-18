@@ -35,6 +35,7 @@ enum AuthTrail {
 
 struct AuthTrailView: View {
     @State private var lines = AuthTrail.lines
+    @State private var report = ProblemReportForm()
     /// Opened by shaking the phone: the switch for that is at the top, so it can be turned off here.
     var shakeToggle = false
     @AppStorage("bergr.shakeForDiagnostics") private var shakeForDiagnostics = true
@@ -48,7 +49,7 @@ struct AuthTrailView: View {
                     Text("Also in Settings → About.")
                 }
             }
-            ProblemReportSection(lines: lines)
+            ProblemReportSection(form: report, lines: lines)
             if lines.isEmpty {
                 Text("Nothing yet. Face ID unlocks and app problems appear here.").foregroundStyle(.secondary)
             }
@@ -56,6 +57,7 @@ struct AuthTrailView: View {
                 Text(line).font(.footnote.monospaced()).textSelection(.enabled)
             }
         }
+        .problemReportPresentation(report, lines: lines)
         .navigationTitle("Diagnostics")
         .toolbar {
             ToolbarItem {

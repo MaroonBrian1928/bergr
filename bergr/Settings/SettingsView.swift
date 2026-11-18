@@ -114,7 +114,7 @@ struct SettingsView: View {
                     Label {
                         Text("Usage")
                     } icon: {
-                        SettingsIcon("gauge.with.dots.needle.50percent", color: .green)
+                        SettingsIcon("gauge.with.dots.needle.50percent", color: .teal)
                     }
                     .frame(minHeight: 44)
                 }
@@ -129,7 +129,7 @@ struct SettingsView: View {
                     Label {
                         Text("Hide finished agents after")
                     } icon: {
-                        SettingsIcon("clock.arrow.circlepath", color: .gray)
+                        SettingsIcon("clock.fill", color: .orange)
                     }
                 }
                 .pickerStyle(.menu)
@@ -143,7 +143,7 @@ struct SettingsView: View {
                     Label {
                         Text("Show machines linked through another")
                     } icon: {
-                        SettingsIcon("point.3.connected.trianglepath.dotted", color: .gray)
+                        SettingsIcon("point.3.connected.trianglepath.dotted", color: .cyan)
                     }
                 }
                 .frame(minHeight: 44)
@@ -186,7 +186,7 @@ struct SettingsView: View {
                     Label {
                         Text("Notifications")
                     } icon: {
-                        SettingsIcon("app.badge.fill", color: .orange)
+                        SettingsIcon("bell.badge.fill", color: .red)
                     }
                 }
                 .frame(minHeight: 44)
@@ -195,7 +195,7 @@ struct SettingsView: View {
                     Label {
                         Text("Live Activity")
                     } icon: {
-                        SettingsIcon("platter.filled.top.iphone", color: .green)
+                        SettingsIcon("platter.filled.top.iphone", color: .indigo)
                     }
                 }
                 .frame(minHeight: 44)
@@ -207,7 +207,7 @@ struct SettingsView: View {
                         Label {
                             Text("Show")
                         } icon: {
-                            SettingsIcon("list.bullet", color: .gray)
+                            SettingsIcon("list.bullet.rectangle.fill", color: .blue)
                         }
                     }
                     .pickerStyle(.menu)
@@ -316,7 +316,7 @@ struct SettingsView: View {
                     Label {
                         LabeledContent("Size", value: "\(fontSize.formatted(.number.precision(.fractionLength(0...1)))) pt")
                     } icon: {
-                        SettingsIcon("textformat.size", color: .teal)
+                        SettingsIcon("textformat.size", color: .gray)
                     }
                 }
                 .frame(minHeight: 44)
@@ -327,23 +327,13 @@ struct SettingsView: View {
             }
 
             Section {
-                LabeledContent("Version", value: Self.version)
-                    .frame(minHeight: 44)
-                Link(destination: Self.sourceCode) {
-                    Label {
-                        Text("Source Code").foregroundStyle(.primary)
-                    } icon: {
-                        SettingsIcon("chevron.left.forwardslash.chevron.right", color: .gray)
-                    }
-                    .frame(minHeight: 44)
-                }
                 NavigationLink {
                     ApprovalsView()
                 } label: {
                     Label {
                         Text("Approvals")
                     } icon: {
-                        SettingsIcon("checkmark.shield.fill", color: .green)
+                        SettingsIcon("checkmark.shield.fill", color: .blue)
                     }
                     .frame(minHeight: 44)
                 }
@@ -353,20 +343,32 @@ struct SettingsView: View {
                     Label {
                         Text("Diagnostics")
                     } icon: {
-                        SettingsIcon("stethoscope", color: .gray)
+                        SettingsIcon("waveform.path.ecg", color: .red)
                     }
                     .frame(minHeight: 44)
                 }
                 #if os(iOS)
+                // Last in its section: a switch row's separator doesn't line up with the titles.
                 Toggle(isOn: $shakeForDiagnostics) {
                     Label {
                         Text("Shake for Diagnostics")
                     } icon: {
-                        SettingsIcon("iphone.radiowaves.left.and.right", color: .gray)
+                        SettingsIcon("iphone.radiowaves.left.and.right", color: .red)
                     }
                 }
                 .frame(minHeight: 44)
                 #endif
+            } header: {
+                Text("Help")
+            } footer: {
+                #if os(iOS)
+                Text("Shake your phone anywhere in Bergr to open Diagnostics and report a problem.")
+                #else
+                Text("Diagnostics keeps recent connection and Face ID events, and sends a problem report.")
+                #endif
+            }
+
+            Section {
                 NavigationLink {
                     TipJarView()
                 } label: {
@@ -378,6 +380,35 @@ struct SettingsView: View {
                     .frame(minHeight: 44)
                 }
                 .accessibilityIdentifier("support-bergr")
+            }
+
+            Section {
+                LabeledContent {
+                    Text(Self.version)
+                } label: {
+                    Label {
+                        Text("Version")
+                    } icon: {
+                        SettingsIcon("info.circle.fill", color: .gray)
+                    }
+                }
+                .frame(minHeight: 44)
+                Link(destination: Self.sourceCode) {
+                    LabeledContent {
+                        // Leaves the app: the arrow says so, as in Apple's own lists.
+                        Image(systemName: "arrow.up.forward")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    } label: {
+                        Label {
+                            Text("Source Code")
+                        } icon: {
+                            SettingsIcon("chevron.left.forwardslash.chevron.right", color: .gray)
+                        }
+                    }
+                    .frame(minHeight: 44)
+                }
+                .tint(.primary)
                 NavigationLink {
                     LicensesView()
                 } label: {
