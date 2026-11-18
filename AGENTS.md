@@ -47,6 +47,11 @@ App tests: `xcodebuild … -only-testing:bergrTests test` (unit) or `-only-testi
 - **Build numbers**: `CURRENT_PROJECT_VERSION`, 1, 2, 3… per `MARKETING_VERSION`. Reset all targets
   to build 1 when the marketing version changes. A successful `just archive true` raises the next
   build number; commit and push that update as part of the same release batch.
+- **TestFlight notes**: every upload gets "What to Test" notes. Write `appstore/testflight/<version>.md`
+  (what's new, then what to test; plain language, at most 4000 characters, no private machine or
+  person names), then after `just archive true` run
+  `node scripts/testflight-notes.mjs <version> <build> appstore/testflight/<version>.md` (it waits for
+  processing). Commit the notes file with the release batch.
 - **Generated files**: `bergr/Licenses/licenses.json` (`just licenses`, after changing Swift packages,
   bundled fonts or the Ghostty pin; it fails if a package has no license entry),
   `bergr/Settings/themes.json` (`just themes`), the app icons (`just icon` from `assets/logo-*.png`).
