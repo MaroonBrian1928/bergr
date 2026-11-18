@@ -89,9 +89,9 @@ first="$raw/$(echo "${shots[0]}" | cut -d'|' -f2).png"
 # doesn't): apply the tag first, so the frames get the picture upright.
 for entry in "${shots[@]}"; do
   src="$raw/$(echo "$entry" | cut -d'|' -f2).png"
-  [ -f "$src" ] && magick "$src" -auto-orient "$src"
+  if [ -f "$src" ]; then magick "$src" -auto-orient "$src"; fi
 done
-read -r W H < <(magick identify -format '%w %h' "$first")
+read -r W H < <(magick identify -format '%w %h\n' "$first")
 # Landscape iPad: the layout is scaled from the height instead (the width would make it huge).
 if [ "$W" -gt "$H" ]; then f=$((H * 1000 / 2000)); else f=$((W * 1000 / 1320)); fi
 BG="#303438" FG="#d9dad8" ACCENT="#9da1a6"
