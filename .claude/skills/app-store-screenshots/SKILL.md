@@ -1,6 +1,6 @@
 ---
 name: app-store-screenshots
-description: Make, check and update Bergr's App Store screenshots (iPhone 6.3" and iPhone Duo, captioned, from the demo; `just appstore-shots`). Use when asked for App Store / marketing screenshots, when screens or the demo changed and the screenshots need redoing, or when changing screenshot captions, look or devices.
+description: Make, check and update Bergr's App Store screenshots (iPhone 6.3", iPhone Duo and iPad 13", captioned, from the demo; `just appstore-shots`). Use when asked for App Store / marketing screenshots, when screens or the demo changed and the screenshots need redoing, or when changing screenshot captions, look or devices.
 ---
 
 # App Store screenshots for Bergr
@@ -15,6 +15,7 @@ just appstore-shots                             # iPhone 17 Pro (6.3"), dark: th
 just appstore-shots light                       # light mode (look at it after UI changes)
 just appstore-shots dark "iPhone Duo"           # iPhone Duo, outer display
 just appstore-shots dark "iPhone 17 Pro Max"    # 6.9", if a 6.9" slot is ever needed
+just appstore-shots dark "iPad Pro 13-inch (M5)" # iPad 13", landscape, its own six frames
 ```
 
 (`just screenshots` is the same, under its old name.) Source `.envrc.local` first for signing.
@@ -34,6 +35,13 @@ This runs `scripts/screenshots.sh`, which:
    width), the screenshot below with rounded corners. Output:
    `.build/screenshots/<device>-<appearance>/appstore/{1-agents,2-summaries,3-answer,4-risky,5-lock-screen,6-usage,7-reply,8-widgets}.png`
    at the capture's own size: **1206×2622** (17 Pro), **1320×2868** (Pro Max), **1398×2034** (Duo).
+
+**iPad** (any device type starting with "iPad"): runs `bergrUITests/DemoPadShotsTests` instead, in
+landscape so the list and the chat show side by side, and frames six shots: `1-agents` (list +
+summaries), `2-answer`, `3-risky`, `4-side-by-side` (Open Beside: two chats next to the list),
+`5-usage`, `6-reply`. The drawn Lock Screen and widget frames are iPhone-only and left out. Output is
+**2752×2064** (13" landscape, one of the two sizes App Store Connect takes for iPad 13": 2064×2752 or
+2752×2064). The captions sit higher and the layout scales from the height in landscape.
 
 The store set is dark. It takes several minutes (a full build plus the shot test). Run it outside
 the sandbox (simulator control needs it).
@@ -80,5 +88,8 @@ off the outer display (`simctl io <device> screenConfig --display=<outer> power 
 one black and crashes the simulator's SpringBoard. Don't try it again. If the simulator can be unfolded
 by hand (Xcode's device window), the script works unchanged: the captures then have the inner size,
 and the framing follows.
+
+**iPad:** the **iPad 13-inch display** slot; upload
+`.build/screenshots/ipad-pro-13-inch-(m5)-dark/appstore/*.png`.
 
 Outputs live in `.build/` (gitignored); they're regenerated, never committed.

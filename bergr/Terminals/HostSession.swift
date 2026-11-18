@@ -560,6 +560,7 @@ extension HostSession: ConnectionAttemptOwner {
 
     func attempt(_ a: ConnectionAttempt, progress: String) {
         guard isCurrent(a) else { return }
+        if state == .connected { AuthTrail.note("Connection: \(host.name) dropped, reconnecting") }
         state = .connecting(progress)
     }
 
@@ -614,6 +615,7 @@ extension HostSession: ConnectionAttemptOwner {
     func attempt(_ a: ConnectionAttempt, failed error: Error, retrying: Bool) {
         guard isCurrent(a) else { return }
         stopFeeds()
+        AuthTrail.note("Connection: \(host.name) failed: \(Self.describe(error, host: host))")
         state = .failed(Self.describe(error, host: host), retrying: retrying)
     }
 

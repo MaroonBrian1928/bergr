@@ -564,8 +564,29 @@ class SubTrack:
 # ~/.claude/projects/<project>/<sessionId>.jsonl
 
 
+def load_meta(path):
+    """A session file's JSON, ignoring trailing junk (a full disk once left an extra "}")."""
+    with open(path, encoding="utf-8") as fh:
+        return json.JSONDecoder().raw_decode(fh.read().strip())[0]
+
+
 class Claude:
     project = None
+
+
+    def unqueue(self, text):
+        """A queued message the agent took in (as a user message or a queued-command attachment):
+        out of the queue. A dequeue record names no text and its own notices are often taken without
+        one, so a plain pop could drop the wrong entry and leave a sent message "queued" for good."""
+        q = self.__dict__.get("queue")
+        if not q or not isinstance(text, str):
+            return
+        t = text.strip()
+        hit = next((x for x in q if x.strip() == t or (t and x.strip().endswith(t)) or (x.strip() and t.endswith(x.strip()))), None)
+        if hit is None:
+            return
+        q.remove(hit)
+        yield {"t": "queued", "items": [x for x in q if not QUEUED_NOTICE.match(x)]}
 
     def locate(self):
         base = os.path.join(HOME, ".claude")
@@ -586,7 +607,7 @@ class Claude:
             same = []
             for f in glob.glob(os.path.join(base, "sessions", "*.json")):
                 try:
-                    if json.load(open(f)).get("cwd") == CWD:
+                    if load_meta(f).get("cwd") == CWD:
                         same.append(f)
                 except Exception:
                     pass
@@ -596,7 +617,7 @@ class Claude:
         if meta is None:
             return None
         try:
-            sid = json.load(open(meta)).get("sessionId")
+            sid = load_meta(meta).get("sessionId")
         except Exception:
             return None
         found = [f for f in glob.glob(os.path.join(base, "projects", "*", f"{sid}.jsonl")) if fresh(f)]
@@ -664,12 +685,15 @@ class Claude:
                 and att.get("commandMode", "prompt") == "prompt" \
                 and (att.get("origin") or {}).get("kind", "human") == "human":
             text = att.get("prompt")
+            yield from self.unqueue(text)
             text = user_text(text) if isinstance(text, str) else None
             if text and text.strip():
                 yield {"t": "msg", "id": (d.get("uuid") or str(id(d))) + ".0", "role": "user", "text": text}
             return
         if kind not in ("user", "assistant") or d.get("isMeta") or d.get("isSidechain"):
             return
+        if kind == "user" and isinstance((d.get("message") or {}).get("content"), str):
+            yield from self.unqueue(d["message"]["content"])
         if kind == "user" and isinstance((d.get("message") or {}).get("content"), list):
             tur = d.get("toolUseResult") if isinstance(d.get("toolUseResult"), dict) else {}
             if self.results is None:

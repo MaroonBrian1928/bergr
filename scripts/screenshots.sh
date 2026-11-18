@@ -3,7 +3,8 @@
 # App Store screenshots: runs the demo's shot test (bergrUITests/DemoShotsTests) on a clean simulator,
 # draws the Lock Screen and Home Screen frames from the real widget code (scripts/widget-render), and
 # frames each with a caption at the device's own screenshot size (iPhone 17 Pro: 1206×2622, the slot
-# App Store Connect requires; 17 Pro Max: 1320×2868; iPhone Duo outer display: 1398×2034).
+# App Store Connect requires; 17 Pro Max: 1320×2868; iPhone Duo outer display: 1398×2034;
+# iPad Pro 13-inch: 2752×2064, landscape).
 # Output: .build/screenshots/<device>-<appearance>/{raw,appstore}/*.png
 #
 #   scripts/screenshots.sh [dark|light] [device type]     (default: dark, "iPhone 17 Pro")
@@ -32,6 +33,21 @@ shots=(
   "8-widgets|home-widgets|Always in view|Widgets, Live Activity, encrypted alerts."
 )
 
+# iPad: its own set from bergrUITests/DemoPadShotsTests, in landscape (list and chat side by side).
+# The drawn Lock Screen and widget frames are iPhone geometry, so the iPad set leaves them out.
+pad=false
+if [[ "$device_type" == iPad* ]]; then
+  pad=true
+  shots=(
+    "1-agents|p01-list-summaries|Your whole herd, one list|Every machine beside the chat, summed up on device."
+    "2-answer|p02-answer-card|Answer in one tap|Questions become buttons."
+    "3-risky|p03-dangerous-command|Know what you're approving|One sentence on what the command does."
+    "4-side-by-side|p04-side-by-side|Two agents side by side|Watch one run while you answer another."
+    "5-usage|p05-usage|See the limit coming|Session, weekly and context, with a forecast."
+    "6-reply|p06-codex-reply|Talk, scan or paste|A reply doesn't need a keyboard."
+  )
+fi
+
 # A clean, dedicated simulator (sets $device).
 source scripts/simulator.sh
 
@@ -39,12 +55,16 @@ rm -rf "$out"
 mkdir -p "$raw" "$final"
 signing=(BERGR_BUNDLE_ID_PREFIX="${BERGR_BUNDLE_ID_PREFIX:-com.pavelzw}")
 [ -n "${BERGR_TEAM:-}" ] && signing+=(DEVELOPMENT_TEAM="$BERGR_TEAM")
+if $pad; then
+  tests=(-only-testing:bergrUITests/DemoPadShotsTests)
+else
+  tests=(-only-testing:bergrUITests/DemoShotsTests -skip-testing:bergrUITests/DemoShotsTests/testLockScreenLiveActivity)
+fi
 # A flaky tap now and then: one retry.
 for attempt in 1 2; do
   if TEST_RUNNER_BERGR_SHOTS="$PWD/$raw" TEST_RUNNER_BERGR_SHOT_APPEARANCE="$appearance" xcodebuild test \
        -project bergr.xcodeproj -scheme bergr -derivedDataPath "$derived" "${signing[@]}" -destination "id=$device" \
-       -only-testing:bergrUITests/DemoShotsTests \
-       -skip-testing:bergrUITests/DemoShotsTests/testLockScreenLiveActivity | xcbeautify --quiet; then
+       "${tests[@]}" | xcbeautify --quiet; then
     break
   fi
   [ "$attempt" = 2 ] && { echo "the shot test failed twice" >&2; exit 1; }
@@ -54,16 +74,26 @@ xcrun simctl status_bar "$device" clear
 
 # Lock Screen and Home Screen: the simulator can't show the Live Activity or widgets from the demo,
 # so they're drawn from the widget code (iPhone 17 Pro geometry; other devices get it scaled).
-widgets="$out/widgets"
-scripts/widget-render/render.sh "$widgets"
-for name in lock-live-activity home-widgets; do cp "$widgets/$name-$appearance.png" "$raw/$name.png"; done
-rm -rf "$widgets"
+if ! $pad; then
+  widgets="$out/widgets"
+  scripts/widget-render/render.sh "$widgets"
+  for name in lock-live-activity home-widgets; do cp "$widgets/$name-$appearance.png" "$raw/$name.png"; done
+  rm -rf "$widgets"
+fi
 
 # Frame: caption on Bergr's charcoal, the screenshot below with rounded corners. The output has
 # the capture's size (what App Store Connect expects for that device); the layout was designed
 # at 1320×2868 and scales with the width (f, in thousandths).
-read -r W H < <(sips -g pixelWidth -g pixelHeight "$raw/01-agents.png" | awk '/pixel/ {printf "%s ", $2} END {print ""}')
-f=$((W * 1000 / 1320))
+first="$raw/$(echo "${shots[0]}" | cut -d'|' -f2).png"
+# A landscape screenshot is stored portrait with an orientation tag (viewers turn it, ImageMagick
+# doesn't): apply the tag first, so the frames get the picture upright.
+for entry in "${shots[@]}"; do
+  src="$raw/$(echo "$entry" | cut -d'|' -f2).png"
+  [ -f "$src" ] && magick "$src" -auto-orient "$src"
+done
+read -r W H < <(magick identify -format '%w %h' "$first")
+# Landscape iPad: the layout is scaled from the height instead (the width would make it huge).
+if [ "$W" -gt "$H" ]; then f=$((H * 1000 / 2000)); else f=$((W * 1000 / 1320)); fi
 BG="#303438" FG="#d9dad8" ACCENT="#9da1a6"
 bold=/Library/Fonts/SF-Pro-Display-Bold.otf
 regular=/Library/Fonts/SF-Pro-Display-Regular.otf
@@ -73,6 +103,7 @@ top=$((470 * f / 1000))
 shot_h=$((H - top - 95 * f / 1000))
 shot_w=$((shot_h * W / H))
 radius=$((72 * f / 1000))
+$pad && radius=$((36 * f / 1000))
 for entry in "${shots[@]}"; do
   IFS='|' read -r name frame title subtitle <<<"$entry"
   src="$raw/$frame.png"

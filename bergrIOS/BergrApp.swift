@@ -32,6 +32,7 @@ struct BergrApp: App {
                         NotificationRouter.shared.pending = target
                     }
                 }
+                .modifier(ShakeToDiagnosticsModifier())
                 #if DEBUG
                 .task { ScreenRecording.startIfRequested() }
                 #endif

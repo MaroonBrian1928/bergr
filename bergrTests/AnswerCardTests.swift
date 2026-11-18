@@ -46,6 +46,30 @@ struct AnswerCardTests {
         #expect(choices.first?.selected == true)
     }
 
+    /// On a phone-width terminal an option's description wraps over many lines.
+    @Test func claudeQuestionWithLongWrappedDescriptions() {
+        let lines = [
+            "│ Where should reports land?",
+            "",
+            "❯ 1. Relay to GitHub issue (Recommended)",
+            "     The relay files each report as an issue",
+            "     in a private repo, with the log and the",
+            "     screenshot attached. You get GitHub's",
+            "     notifications, a searchable list and",
+            "     comments. Needs a GitHub token stored",
+            "  2. Relay to R2 and push to me",
+            "     Reports are kept in R2 for 30 days and",
+            "     an alert is pushed to your phone. You",
+            "     read them on a small private page.",
+            "  3. Type something.",
+            "────────────────────────────────",
+            "  4. Chat about this",
+            "",
+            "Enter to select · ↑/↓ to navigate · Esc to cancel",
+        ]
+        #expect(AnswerParser.choices(in: lines).map(\.number) == [1, 2, 3, 4])
+    }
+
     @Test func claudePrompt() {
         let c = AnswerParser.choices(in: Self.claude)
         #expect(c.map(\.number) == [1, 2, 3])

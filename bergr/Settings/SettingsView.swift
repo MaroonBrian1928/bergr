@@ -11,6 +11,8 @@ struct SettingsView: View {
     @AppStorage(TerminalFont.sizeKey) private var fontSize = TerminalFont.defaultSize
     @AppStorage(TerminalFont.storageKey) private var fontFamily = TerminalFont.jetBrainsMono
     @AppStorage(Appearance.key) private var appearance = Appearance.system
+    /// Shake the phone to open Diagnostics (see ShakeToDiagnostics).
+    @AppStorage("bergr.shakeForDiagnostics") private var shakeForDiagnostics = true
     @AppStorage(TerminalTheme.lightKey) private var lightTheme = TerminalTheme.defaultLight
     @AppStorage(TerminalTheme.darkKey) private var darkTheme = TerminalTheme.defaultDark
     @Environment(\.colorScheme) private var colorScheme
@@ -349,12 +351,22 @@ struct SettingsView: View {
                     AuthTrailView()
                 } label: {
                     Label {
-                        Text("Face ID Log")
+                        Text("Diagnostics")
                     } icon: {
-                        SettingsIcon("faceid", color: .green)
+                        SettingsIcon("stethoscope", color: .gray)
                     }
                     .frame(minHeight: 44)
                 }
+                #if os(iOS)
+                Toggle(isOn: $shakeForDiagnostics) {
+                    Label {
+                        Text("Shake for Diagnostics")
+                    } icon: {
+                        SettingsIcon("iphone.radiowaves.left.and.right", color: .gray)
+                    }
+                }
+                .frame(minHeight: 44)
+                #endif
                 NavigationLink {
                     TipJarView()
                 } label: {

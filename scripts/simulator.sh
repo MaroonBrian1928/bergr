@@ -23,6 +23,11 @@ print(max(rs, key=lambda r: [int(x) for x in r["version"].split(".")])["identifi
     device="$(xcrun simctl create "$sim_name" "$type_id" "$runtime")"
     echo "created simulator $sim_name ($device) on $runtime"
 fi
+# Delete the simulator when the script ends: each one keeps gigabytes of data, and they piled up
+# (28 GB) and filled the disk. Set BERGR_KEEP_SIM=1 to keep it between runs.
+if [ -z "${BERGR_KEEP_SIM:-}" ]; then
+    trap 'xcrun simctl shutdown "$device" >/dev/null 2>&1; xcrun simctl delete "$device" >/dev/null 2>&1' EXIT
+fi
 
 xcrun simctl boot "$device" 2>/dev/null || true
 xcrun simctl bootstatus "$device" -b >/dev/null

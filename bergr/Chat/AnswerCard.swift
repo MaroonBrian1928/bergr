@@ -123,7 +123,7 @@ enum AnswerParser {
                     i -= 1
                     continue
                 }
-                guard !found.isEmpty, !text.isEmpty, wrapped.count < 3 else { break }
+                guard !found.isEmpty, !text.isEmpty, wrapped.count < 12 else { break }
                 wrapped.append(text)
             }
             i -= 1

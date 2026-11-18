@@ -65,6 +65,10 @@ struct ChatView: View {
     #endif
     /// Scrolled well up from the latest message: a button brings it back.
     @State private var awayFromLatest = false
+    /// Stops the chat following its own height when that height keeps flipping (see BounceGuard).
+    @State private var bounce = BounceGuard()
+    /// The connection bar, once the connection has been down a moment (see the task that sets it).
+    @State private var connectionBarShown = false
     #if os(macOS)
     @State private var scrollControl = ChatScrollControl()
     /// The heights of the header and the reply bar over the table, in whole points.
@@ -193,7 +197,7 @@ struct ChatView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 if let pane { PaneHeader(chrome: pane, backdrop: palette.background) { chatButtons } }
-                if let session, session.state != .connected, !session.host.isDemo {
+                if let session, connectionBarShown, session.state != .connected, !session.host.isDemo {
                     ConnectionBar(session: session, text: palette.text, secondary: palette.secondary,
                                   background: palette.bubble) { session.retry(keys: keys) }
                         .transition(.opacity)
@@ -208,6 +212,13 @@ struct ChatView: View {
                 .macBarHeight { macBars.bottom = $0 }
         }
         .background(palette.background)
+        // A reconnect that's over in a moment (the connection dropped and came straight back)
+        // doesn't flash the bar: it shows after 1.5 s without a connection.
+        .task(id: session.map { $0.state != .connected } ?? false) {
+            guard let session, session.state != .connected else { connectionBarShown = false; return }
+            try? await Task.sleep(for: .seconds(1.5))
+            if !Task.isCancelled { withAnimation(motion) { connectionBarShown = true } }
+        }
         .onDisappear {
             if draftSave != nil { draftSave?.cancel(); draftSave = nil; ReplyDrafts.set(draft, for: draftKey) }
             outbox.draftKey = draftKey
@@ -421,9 +432,19 @@ struct ChatView: View {
                 })
         .onScrollPhaseChange { _, phase in
             if scroll.scrolling != phase.isScrolling { scroll.scrolling = phase.isScrolling }
+            if phase == .interacting, bounce.tripped { bounce.reset() }
         }
         .defaultScrollAnchor(.bottom)
-        .defaultScrollAnchor(.bottom, for: .sizeChanges)
+        .defaultScrollAnchor(bounce.tripped ? nil : .bottom, for: .sizeChanges)
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in
+            if bounce.record(height: height, at: Date.now.timeIntervalSinceReferenceDate,
+                             userScrolling: scroll.scrolling) {
+                let r = bounce.range.map { "\(Int($0.lowerBound))↔\(Int($0.upperBound)) pt" } ?? "?"
+                AuthTrail.note("Scroll: chat kept bouncing (\(r), \(feed.items.count) items, "
+                               + "state \(state ?? "-")); held still")
+            }
+        }
+        .onChange(of: feed.items.count) { if bounce.tripped { bounce.reset() } }
         #if DEBUG
         .modifier(BounceProbe(feed: feed, terminal: terminal, model: model, state: state,
                               on: UserDefaults.standard.bool(forKey: "bergr.bounceProbe")))
