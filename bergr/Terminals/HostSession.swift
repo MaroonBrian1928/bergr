@@ -229,6 +229,10 @@ final class HostSession {
     @MainActor
     func runningFeed(address: String) -> ChatFeed? { feeds[address]?.feed }
 
+    /// Background shells the agent left running (its background commands), from its chat feed.
+    @MainActor
+    func runningShells(address: String) -> Int { feeds[address]?.feed.runningShells ?? 0 }
+
     /// Sub-agents running under a terminal's agent, from its chat feed if one is being followed.
     @MainActor
     func runningSubagents(address: String) -> Int {

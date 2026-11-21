@@ -6,6 +6,10 @@ struct AgentRow: View {
     let terminal: Terminal
     /// Sub-agents its agent is running now (known while its chat is being followed).
     var subagents = 0
+    /// Background shells it left running.
+    var shells = 0
+    /// What it's doing now, in the on-device model's words (while it works).
+    var doing: String?
     /// The machine it runs on, shown when the list isn't grouped by machine.
     var machine: String?
     /// A reply that wasn't delivered is waiting in its draft.
@@ -47,6 +51,14 @@ struct AgentRow: View {
                         }
                     }
                 }
+                if let doing {
+                    Text(doing)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(lines + 1)
+                        .contentTransition(.opacity)
+                        .animation(.easeOut(duration: 0.25), value: doing)
+                }
                 if let branch {
                     Label(Worktrees.rowText(branch), systemImage: branch.isLinkedWorktree ? "square.on.square" : "arrow.triangle.branch")
                         .font(.caption)
@@ -60,6 +72,11 @@ struct AgentRow: View {
                 }
                 if subagents > 0 {
                     Label("\(subagents) sub-agent\(subagents == 1 ? "" : "s") running", systemImage: "person.2.badge.gearshape")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if shells > 0 {
+                    Label("\(shells) in background", systemImage: "terminal")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -98,6 +115,7 @@ struct AgentRow: View {
                     .lineLimit(1)
                 Text([machine, AgentsOrdering.info(terminal), branch.map(Worktrees.rowText),
                       subagents > 0 ? "\(subagents) sub-agents running" : nil,
+                      shells > 0 ? "\(shells) in background" : nil, doing,
                       unsent ? "Unsent reply" : nil]
                     .compactMap { $0 }.joined(separator: " · "))
                     .font(.caption)

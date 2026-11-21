@@ -31,7 +31,7 @@ With only the demo machine added, leaving the app shows the demo's agents in a L
 Lock Screen. Notifications need a real computer running herdr and Bergr's helper, so they can't be
 shown in the demo. Both are optional.
 
-Tips: Settings → About → Support Bergr offers three optional tips (consumable in-app purchases). They
+Tips: Settings → Support Bergr offers three optional tips (consumable in-app purchases). They
 unlock nothing; every feature is free without them.
 
 About location: Settings → When Bergr isn't open → "Updates come from" offers "Bergr stays running".

@@ -517,6 +517,78 @@ SUB_QUIET = 60  # a sub-agent silent this long is done
 SUB_READ = 64 * 1024  # a child's transcript is read from its last 64 KB
 SUBS = {}
 
+# Claude Code's background shells (a Bash call run in the background, or moved there after its
+# timeout), by task id: {"id": the chat's event id, "file": its output file, "sent": last tail}.
+# Sent as "subagent" events of kind "shell", so the chat shows them like its sub-agents.
+BG = {}
+BG_OUTPUT = re.compile(r"Output is being written to: (\S+)")
+TASK_NOTE = re.compile(r"<task-id>([^<]+)</task-id>.*?<status>([^<]+)</status>", re.S)
+
+
+def bg_event(task, **fields):
+    ev = {"t": "subagent", "id": "bg-" + task, "kind": "shell"}
+    ev.update(fields)
+    return ev
+
+
+def bg_tick(now=None):
+    """Every few seconds: each running background shell's latest output; and one whose end was
+    never recorded (Claude quit, or the record was lost) stops showing as running once Claude is
+    gone or nothing has its output file open any more."""
+    now = time.time() if now is None else now
+    claude_gone = PID > 0 and not pid_alive(PID)
+    for task, job in list(BG.items()):
+        path = job.get("file")
+        if path and now - job.get("read", 0) >= 3:
+            job["read"] = now
+            try:
+                with open(path, "rb") as fh:
+                    fh.seek(0, 2)
+                    size = fh.tell()
+                    fh.seek(max(0, size - 4096))
+                    text = fh.read().decode("utf-8", "replace")
+                tail = tool_tail(text)
+                if tail and tail != job.get("sent"):
+                    job["sent"] = tail
+                    emit(bg_event(task, output=tail))
+            except OSError:
+                pass
+    # One lsof for all of them, every 30 s: a shell whose output file nothing holds open is over.
+    paths = [job["file"] for job in BG.values() if job.get("file")]
+    open_now = None
+    if not claude_gone and paths and now - STATE.get("bg_checked", 0) >= 30:
+        STATE["bg_checked"] = now
+        open_now = files_in_use(paths)
+    for task, job in list(BG.items()):
+        over = claude_gone or (open_now is not None and job.get("file") and job["file"] not in open_now
+                               and os.path.realpath(job["file"]) not in open_now)
+        # Codex's have no file to watch: one it hasn't checked on for half an hour is no longer followed.
+        over = over or (not job.get("file") and now - job.get("heard", now) > 1800)
+        if over:
+            BG.pop(task, None)
+            emit(bg_event(task, state="done", summary="ended", ended=round(now)))
+
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+
+
+def files_in_use(paths):
+    """Which of these files some process has open (one lsof call); None when lsof can't say."""
+    try:
+        r = subprocess.run(["lsof", "-Fn", "--"] + paths, capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode not in (0, 1):
+        return None
+    return {line[1:] for line in r.stdout.decode("utf-8", "replace").splitlines() if line.startswith("n")}
+
 
 def recent(path):
     try:
@@ -694,10 +766,32 @@ class Claude:
             return
         if kind == "user" and isinstance((d.get("message") or {}).get("content"), str):
             yield from self.unqueue(d["message"]["content"])
+            for task, status in TASK_NOTE.findall(d["message"]["content"]):
+                if not task.startswith("a"):  # "a…" is a sub-agent's, followed on its own
+                    BG.pop(task, None)
+                    status = status.strip()
+                    yield bg_event(task, state="done" if status == "completed" else "failed",
+                                   summary="" if status == "completed" else status,
+                                   ended=round(record_time(d) or time.time()))
         if kind == "user" and isinstance((d.get("message") or {}).get("content"), list):
             tur = d.get("toolUseResult") if isinstance(d.get("toolUseResult"), dict) else {}
             if self.results is None:
                 self.results = {}
+            at = record_time(d) or time.time()
+            if tur.get("backgroundTaskId"):
+                task = str(tur["backgroundTaskId"])
+                tid = next((b.get("tool_use_id") for b in d["message"]["content"]
+                            if isinstance(b, dict) and b.get("type") == "tool_result"), None)
+                text = next((result_text(b.get("content")) for b in d["message"]["content"]
+                             if isinstance(b, dict) and b.get("type") == "tool_result"), "") or ""
+                m = BG_OUTPUT.search(text)
+                BG[task] = {"file": m.group(1) if m else None}
+                yield bg_event(task, parent=tid, state="running", started=round(at),
+                               name=getattr(self, "bash", {}).get(tid) or "Background command")
+            if tur.get("task_id") and str(tur.get("message", "")).startswith("Successfully stopped"):
+                task = str(tur["task_id"])
+                BG.pop(task, None)
+                yield bg_event(task, state="done", summary="stopped", ended=round(at))
             for b in d["message"]["content"]:
                 if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id"):
                     self.results[b["tool_use_id"]] = {
@@ -740,6 +834,12 @@ class Claude:
                     yield {"t": "msg", "id": bid, "role": kind, "text": text}
                     if kind == "assistant":
                         yield from linked_images(bid, text)
+            elif t == "thinking" and kind == "assistant" and d.get("thinkingDisplay") == "updates":
+                # Visible thinking: the terminal shows these short updates between steps as the
+                # agent's own text ("· summary"), so the chat does too. Hidden thinking is empty.
+                text = (block.get("thinking") or "").strip()
+                if text:
+                    yield {"t": "msg", "id": bid, "role": "assistant", "text": text}
             elif t == "image":
                 src = block.get("source") or {}
                 ev = image_event(bid, kind, src.get("media_type"), src.get("data")) \
@@ -782,6 +882,11 @@ class Claude:
                 yield plan_event([(x.get("content"), x.get("status")) for x in block["input"]["todos"]
                                   if isinstance(x, dict)])
             elif t == "tool_use":
+                if block.get("name") == "Bash" and isinstance(block.get("input"), dict):
+                    inp = block["input"]
+                    if not hasattr(self, "bash"):
+                        self.bash = {}
+                    self.bash[block.get("id") or bid] = (inp.get("description") or inp.get("command") or "")[:160]
                 yield {"t": "tool", "id": block.get("id") or bid, "name": block.get("name") or "tool",
                        "summary": tool_summary(block.get("input"))}
 
@@ -1186,6 +1291,9 @@ class Codex:
             args = p.get("arguments") or p.get("input") or p.get("action") or ""
             if p.get("call_id"):
                 self.__dict__.setdefault("calls", {})[p["call_id"]] = pid
+                # What it ran, to name a command that keeps running in the background.
+                self.__dict__.setdefault("call_src", {})[p["call_id"]] = \
+                    ((p.get("name") or "") + " " + (args if isinstance(args, str) else json.dumps(args)))[-20000:]
             question_tool = (p.get("name") or "").rsplit(".", 1)[-1]
             if question_tool.startswith("request_user_input"):
                 # Codex asking the user (A/B/C): a question card, not a tool step.
@@ -1228,8 +1336,77 @@ class Codex:
                 out = out.get("content") if "content" in out else out.get("output")
             failed = failed or exit_failed(out)
             cid = p.get("call_id")
+            yield from codex_background(self, cid, p.get("output"), d)
             yield from toolout(self.__dict__.get("calls", {}).get(cid, cid), result_text(out), failed=failed)
             yield from tool_images(pid, out)
+
+
+CX_SESSION = re.compile(r'"session_id"\s*:\s*(\d+)')
+CX_EXIT = re.compile(r'"exit_code"\s*:\s*(-?\d+)')
+CX_POLL = re.compile(r'write_stdin\W*\{[^}]*?session_id\W*:\W*(\d+)')
+CX_CMD = re.compile(r'exec_command\W*\{\W*cmd\W*:\s*\\?"((?:[^"\\]|\\.)*)')
+
+
+def codex_background(src, cid, raw, d):
+    """Codex's background commands: one still running when exec_command returns hands back a
+    `session_id`; Codex polls it with write_stdin({session_id}) until a poll returns an exit
+    code. Sent like Claude's background shells (kind "shell"), each poll's output as its output."""
+    text = raw if isinstance(raw, str) else (result_text(raw) or "")
+    call = src.__dict__.get("call_src", {}).get(cid, "")
+    at = round(record_time(d) or time.time())
+    running = src.__dict__.setdefault("cx_running", {})
+    polled = [int(n) for n in CX_POLL.findall(call)]
+    objs = []
+    for m in CX_OUTPUT.finditer(text):
+        try:
+            objs.append(json.loads(m.group(0)))
+        except Exception:
+            pass
+    if not objs and ("session_id" in text or "exit_code" in text):
+        # Output with braces in it defeats the pattern: the ids alone still say enough.
+        sid, code = CX_SESSION.search(text), CX_EXIT.search(text)
+        objs.append({"session_id": int(sid.group(1)) if sid else None,
+                     "exit_code": int(code.group(1)) if code else None})
+    exit_at = [i for i, o in enumerate(objs) if o.get("exit_code") is not None and o.get("session_id") is None]
+    for i, obj in enumerate(objs):
+        sid, code = obj.get("session_id"), obj.get("exit_code")
+        tail = tool_tail(obj.get("output") or "") if isinstance(obj.get("output"), str) else ""
+        if isinstance(sid, int) and code is None:
+            task = f"cx{sid}"
+            if sid not in running:
+                cmd = CX_CMD.search(call)
+                name = cmd.group(1).encode().decode("unicode_escape", "replace") if cmd else ""
+                name = (name.strip().splitlines() or ["Background command"])[0][:160]
+                running[sid] = name
+                BG[task] = {"file": None, "heard": at}
+                yield bg_event(task, parent=src.__dict__.get("calls", {}).get(cid, cid), state="running",
+                               started=at, name=name)
+            if task in BG:
+                BG[task]["heard"] = at
+            if tail:
+                yield bg_event(task, output=tail)
+        elif code is not None:
+            # Which poll this exit belongs to: certain only with one poll in the call, or one
+            # result per poll in order. Otherwise it's left (the 30-minute limit ends it).
+            if len(polled) == 1:
+                mine = polled
+            elif len(polled) == len(exit_at) and i in exit_at:
+                mine = [polled[exit_at.index(i)]]
+            else:
+                mine = []
+            for sid in mine:
+                if sid in running:
+                    running.pop(sid, None)
+                    BG.pop(f"cx{sid}", None)
+                    ev = bg_event(f"cx{sid}", state="done" if code == 0 else "failed", ended=at,
+                                  summary="" if code == 0 else f"exit {code}")
+                    if tail:
+                        ev["output"] = tail
+                    yield ev
+
+
+# The JSON objects exec_command / write_stdin return, as they appear in the output text.
+CX_OUTPUT = re.compile(r'\{[^{}]*"(?:session_id|exit_code)"[^{}]*\}')
 
 
 # MARK: Antigravity: ~/.gemini/antigravity-cli/conversations/<id>.db (SQLite, protobuf steps)
@@ -1741,6 +1918,8 @@ def follow_jsonl(source):
         if not path and not said_none:
             said_none = True
             emit({"t": "none"})
+        if BG:
+            bg_tick()
         refresh_models()
         keepalive()
         flush()

@@ -1,3 +1,6 @@
+import Foundation
+import SSHTransport
+import HerdrKit
 import Testing
 @testable import bergr
 
@@ -68,6 +71,31 @@ struct AnswerCardTests {
             "Enter to select · ↑/↓ to navigate · Esc to cancel",
         ]
         #expect(AnswerParser.choices(in: lines).map(\.number) == [1, 2, 3, 4])
+    }
+
+    // A Claude question on a phone-width terminal: the question wraps, each option has a description.
+    @Test func claudeQuestionWrapsAndDescribes() {
+        let lines = [
+            "────────────────────────────────",
+            " ☐ Icon",
+            "",
+            "Second Wind's app icon (page just opened): which",
+            "one ships?",
+            "",
+            "❯ 1. C, Plate in the Wind (Recommended)",
+            "     A weight plate trailing gusts: lifting and run…",
+            "  2. D, Second Swell",
+            "     Two full-bleed swells, t…",
+            "  3. Type something.",
+            "────────────────────────────────",
+            "  4. Chat about this",
+        ]
+        #expect(AnswerParser.question(in: lines) == "Second Wind's app icon (page just opened): which one ships?")
+        #expect(AnswerParser.context(in: lines) == ["☐ Icon"])
+        let c = AnswerParser.choices(in: lines)
+        #expect(c.map(\.label) == ["C, Plate in the Wind (Recommended)", "D, Second Swell", "Type something.", "Chat about this"])
+        #expect(c[0].detail == "A weight plate trailing gusts: lifting and run…")
+        #expect(c[2].detail.isEmpty)
     }
 
     @Test func claudePrompt() {
@@ -157,5 +185,117 @@ struct AntigravityApprovalTests {
     @Test func questionAndContext() {
         #expect(AnswerParser.question(in: screen) == "Run this command?")
         #expect(AnswerParser.context(in: screen) == ["Requesting permission for:", "ls -la /home/me/project"])
+    }
+}
+
+struct HelperCoversTests {
+    @Test func recentHelperSendsTheAlert() {
+        #expect(AgentNotifier.helperCovers(age: 60))
+        #expect(!AgentNotifier.helperCovers(age: RelayHeard.staleAfter + 1))
+        #expect(!AgentNotifier.helperCovers(age: nil))
+    }
+}
+
+struct LastOptionDetailTests {
+    @Test func lastOptionKeepsItsDescription() {
+        let lines = ["Pick?", "", "❯ 1. A", "     About A", "  2. B", "     About B", "", "Esc to cancel"]
+        let c = AnswerParser.choices(in: lines)
+        #expect(c.map(\.label) == ["A", "B"])
+        #expect(c.map(\.detail) == ["About A", "About B"])
+    }
+
+    @Test func footersStayOut() {
+        let indented = ["Pick?", "", "❯ 1. A", "  2. B", "     Enter to select · Esc to cancel"]
+        #expect(AnswerParser.choices(in: indented).last?.detail == "")
+        let boxed = ["│ Pick?        │", "│ ❯ 1. Yes     │", "│   2. No      │", "│ Esc to cancel │", "╰──────────────╯"]
+        #expect(AnswerParser.choices(in: boxed).last?.label == "No")
+    }
+}
+
+struct LinkedAlsoDirectTests {
+    static func machines(_ json: String) throws -> [MachineView] {
+        try JSONDecoder().decode([MachineView].self, from: Data(json.utf8))
+    }
+
+    @Test func directConnectionWinsByCoreName() throws {
+        let linked = try Self.machines(#"[{"name":"studio","host":null,"state":"connected","target":null,"version":null},{"name":"pi","host":null,"state":"connected","target":null,"version":null}]"#)
+        let host = Host(name: "Workstation", target: SSHTarget(host: "10.0.0.20", username: "me"))
+        #expect(SameMachine.linkedAlsoDirect(linked, names: ["studio", "pi"],
+                                             direct: SameMachine.directNames(host, coreName: nil, failed: false)).isEmpty)
+        let direct = SameMachine.directNames(host, coreName: "studio", failed: false)
+        #expect(SameMachine.linkedAlsoDirect(linked, names: ["studio", "pi"], direct: direct) == ["studio"])
+        #expect(SameMachine.directNames(host, coreName: "studio", failed: true) == SameMachine.DirectIdentity())
+    }
+
+    @Test func differentMachinesStayApart() throws {
+        // Same name, different address: two machines.
+        let linked = try Self.machines(#"[{"name":"laptop","host":"10.0.0.9","state":"connected","target":null,"version":null}]"#)
+        let host = Host(name: "laptop", target: SSHTarget(host: "10.0.0.5", username: "me"))
+        #expect(SameMachine.linkedAlsoDirect(linked, names: ["laptop"],
+                                             direct: SameMachine.directNames(host, coreName: "laptop", failed: false)).isEmpty)
+        // localhost on two machines is two machines.
+        let local = try Self.machines(#"[{"name":"box","host":"localhost","state":"connected","target":null,"version":null}]"#)
+        let mine = Host(name: "Mine", target: SSHTarget(host: "localhost", username: "me"))
+        #expect(SameMachine.linkedAlsoDirect(local, names: ["box"],
+                                             direct: SameMachine.directNames(mine, coreName: nil, failed: false)).isEmpty)
+        // A linked "box" at its own localhost isn't the directly added "box".
+        let boxHost = Host(name: "box", target: SSHTarget(host: "10.0.0.7", username: "me"))
+        #expect(SameMachine.linkedAlsoDirect(local, names: ["box"],
+                                             direct: SameMachine.directNames(boxHost, coreName: "box", failed: false)).isEmpty)
+        // Same address: one machine, whatever the names.
+        let same = try Self.machines(#"[{"name":"lab","host":"10.0.0.5","state":"connected","target":null,"version":null}]"#)
+        #expect(SameMachine.linkedAlsoDirect(same, names: ["lab"],
+                                             direct: SameMachine.directNames(host, coreName: nil, failed: false)) == ["lab"])
+    }
+
+    @Test func targetsCompareByTheirHost() throws {
+        #expect(SameMachine.hostPart("alex@10.0.0.21") == "10.0.0.21")
+        #expect(SameMachine.hostPart("me@Studio.local:2222") == "studio.local")
+        #expect(SameMachine.hostPart("[fe80::1]:22") == "fe80::1")
+        #expect(SameMachine.hostPart("fe80::1") == "fe80::1")
+        #expect(SameMachine.hostPart("127.0.1.1").isEmpty)
+        // herdr writes the target with the user: still the machine saved by its IP.
+        let linked = try Self.machines(#"[{"name":"laptop","host":null,"state":"connected","target":"alex@10.0.0.21","version":null}]"#)
+        let host = Host(name: "Laptop", target: SSHTarget(host: "10.0.0.21", username: "alex"))
+        #expect(SameMachine.linkedAlsoDirect(linked, names: ["laptop"],
+                                             direct: SameMachine.directNames(host, coreName: nil, failed: false)) == ["laptop"])
+    }
+
+    @Test func aNameAndItsIPAreOneMachine() throws {
+        // Saved by name, linked by IP (and the other way round): the lookup ties them together.
+        let resolve: (String) -> Set<String> = { $0 == "studio.local" ? ["10.0.0.20"] : [] }
+        let byIP = try Self.machines(#"[{"name":"box","host":null,"state":"connected","target":"10.0.0.20","version":null}]"#)
+        let byName = Host(name: "Workstation", target: SSHTarget(host: "studio.local", username: "me"))
+        #expect(SameMachine.linkedAlsoDirect(byIP, names: ["box"],
+                                             direct: SameMachine.directNames(byName, coreName: nil, failed: false, resolve: resolve),
+                                             resolve: resolve) == ["box"])
+        let linkedByName = try Self.machines(#"[{"name":"box","host":"studio.local","state":"connected","target":null,"version":null}]"#)
+        let savedByIP = Host(name: "Workstation", target: SSHTarget(host: "10.0.0.20", username: "me"))
+        #expect(SameMachine.linkedAlsoDirect(linkedByName, names: ["box"],
+                                             direct: SameMachine.directNames(savedByIP, coreName: nil, failed: false, resolve: resolve),
+                                             resolve: resolve) == ["box"])
+        // One IP, two SSH ports: two machines behind one router.
+        let natLinked = try Self.machines(#"[{"name":"b","host":null,"state":"connected","target":"me@203.0.113.5:2223","version":null}]"#)
+        let natHost = Host(name: "A", target: SSHTarget(host: "203.0.113.5", port: 2222, username: "me"))
+        #expect(SameMachine.linkedAlsoDirect(natLinked, names: ["b"],
+                                             direct: SameMachine.directNames(natHost, coreName: nil, failed: false)).isEmpty)
+        #expect(SameMachine.linkedAlsoDirect(natLinked, names: ["b"],
+                                             direct: SameMachine.directNames(natHost, coreName: "203.0.113.5", failed: false)).isEmpty)
+        let natBoth = try Self.machines(#"[{"name":"b","host":"203.0.113.5","state":"connected","target":"me@203.0.113.5:2223","version":null}]"#)
+        #expect(SameMachine.linkedAlsoDirect(natBoth, names: ["b"],
+                                             direct: SameMachine.directNames(natHost, coreName: nil, failed: false)).isEmpty)
+        // One machine, two users: two cores, two sets of agents.
+        let otherUser = try Self.machines(#"[{"name":"root-box","host":null,"state":"connected","target":"root@10.0.0.21","version":null}]"#)
+        let alex = Host(name: "Laptop", target: SSHTarget(host: "10.0.0.21", username: "alex"))
+        #expect(SameMachine.linkedAlsoDirect(otherUser, names: ["root-box"],
+                                             direct: SameMachine.directNames(alex, coreName: nil, failed: false)).isEmpty)
+        #expect(SameMachine.hostPart("2001:0db8:0:0:0:0:0:1") == "2001:db8::1")
+        #expect(SameMachine.hostPart("0:0:0:0:0:0:0:1").isEmpty)
+        #expect(AddressResolver.isIP("10.0.0.20") && AddressResolver.isIP("fe80::1") && !AddressResolver.isIP("studio.local"))
+    }
+
+    @Test func descriptionsThatMentionKeysStay() {
+        let lines = ["Pick?", "", "❯ 1. A", "  2. B", "     Press Enter to insert a newline", "", "Enter to select · Esc to cancel"]
+        #expect(AnswerParser.choices(in: lines).last?.detail == "Press Enter to insert a newline")
     }
 }

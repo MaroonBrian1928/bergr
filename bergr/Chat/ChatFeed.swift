@@ -155,13 +155,20 @@ final class ChatFeed {
         var summary: String
         /// Arrival order, to keep several sub-agents of one run stable.
         var order: Int
+        /// A background shell (kind "shell"): when it started and ended, and its latest output.
+        var started: Date? = nil
+        var ended: Date? = nil
+        var output: String = ""
+        var isShell: Bool { kind == "shell" }
     }
 
     /// The sub-agents, in the order they first appeared.
     var subagents: [SubagentInfo] { subagentMap.values.sorted { $0.order < $1.order } }
     private var subagentMap: [String: SubagentInfo] = [:]
     private var subagentCount = 0
-    var runningSubagents: Int { subagentMap.values.filter { $0.state == .running }.count }
+    var runningSubagents: Int { subagentMap.values.filter { $0.state == .running && !$0.isShell }.count }
+    /// Background shells still running (Claude's background Bash commands).
+    var runningShells: Int { subagentMap.values.filter { $0.state == .running && $0.isShell }.count }
 
     /// What the chat shows. While the helper reads the backlog (or re-reads it after a reset),
     /// the conversation is built in `building` and shown in one step once it's caught up, so a
@@ -614,12 +621,20 @@ final class ChatFeed {
     func applySubagent(_ event: [String: Any]) {
         guard let id = event["id"] as? String else { return }
         let old = subagentMap[id]
+        func date(_ key: String) -> Date? {
+            (event[key] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
+        }
+        // An update may carry only what changed (a background shell's output): the rest stays.
         let next = SubagentInfo(
             id: id, parent: event["parent"] as? String ?? old?.parent,
-            name: event["name"] as? String ?? old?.name ?? "Sub-agent", kind: event["kind"] as? String ?? "",
-            state: SubagentInfo.State(rawValue: event["state"] as? String ?? "") ?? .running,
-            steps: (event["steps"] as? NSNumber)?.intValue ?? 0, summary: event["summary"] as? String ?? "",
-            order: old?.order ?? subagentCount)
+            name: event["name"] as? String ?? old?.name ?? "Sub-agent",
+            kind: event["kind"] as? String ?? old?.kind ?? "",
+            state: (event["state"] as? String).flatMap(SubagentInfo.State.init(rawValue:)) ?? old?.state ?? .running,
+            steps: (event["steps"] as? NSNumber)?.intValue ?? old?.steps ?? 0,
+            summary: event["summary"] as? String ?? old?.summary ?? "",
+            order: old?.order ?? subagentCount,
+            started: date("started") ?? old?.started, ended: date("ended") ?? old?.ended,
+            output: event["output"] as? String ?? old?.output ?? "")
         if old == nil { subagentCount += 1 }
         if next != old { subagentMap[id] = next }
     }

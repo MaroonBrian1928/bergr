@@ -5,6 +5,8 @@ struct AnswerChoice: Equatable, Sendable {
     let number: Int
     let label: String
     let selected: Bool
+    /// The option's description on the lines under it (Claude's questions), if any.
+    var detail: String = ""
 }
 
 enum AnswerParser {
@@ -105,12 +107,29 @@ enum AnswerParser {
         var i = bottom
         // Lines between two choices continue the one above them: a long option wraps on a
         // narrow terminal ("2. Yes, and always allow … for" / "commands that start with 'ls'").
-        var wrapped: [String] = []
+        // Lines indented to the label's column or deeper are the option's description instead
+        // ("❯ 1. Relay to GitHub (Recommended)" / "     The relay files each report…").
+        var wrapped: [(text: String, indent: Int)] = []
+        // The last option's own continuation lines sit below it, up to a blank line or a rule.
+        // Only its description (aligned with the label or deeper), never the prompt's key hints.
+        let lastColumn = labelColumn(lines[bottom])
+        var k = bottom + 1
+        while k < lines.count, wrapped.count < 12 {
+            let text = clean(lines[k])
+            let indent = lines[k].prefix { $0 == " " || borders.contains($0) }.count
+            guard !text.isEmpty, !isRule(lines[k]), indent >= lastColumn, choice(lines[k]) == nil,
+                  !isKeyHint(text) else { break }
+            wrapped.insert((text, indent), at: 0)
+            k += 1
+        }
         while i >= 0 {
             if let c = choice(lines[i]) {
                 guard found.isEmpty || c.number == found[0].number - 1 else { break }
-                let label = ([c.label] + wrapped.reversed()).joined(separator: " ")
-                found.insert(AnswerChoice(number: c.number, label: label, selected: c.selected), at: 0)
+                let column = labelColumn(lines[i])
+                let below = wrapped.reversed()
+                let label = ([c.label] + below.filter { $0.indent < column }.map(\.text)).joined(separator: " ")
+                let detail = below.filter { $0.indent >= column }.map(\.text).joined(separator: " ")
+                found.insert(AnswerChoice(number: c.number, label: label, selected: c.selected, detail: detail), at: 0)
                 wrapped = []
                 start = i
                 if c.number == 1 { break }
@@ -124,13 +143,48 @@ enum AnswerParser {
                     continue
                 }
                 guard !found.isEmpty, !text.isEmpty, wrapped.count < 12 else { break }
-                wrapped.append(text)
+                wrapped.append((text, lines[i].prefix { $0 == " " || borders.contains($0) }.count))
             }
             i -= 1
         }
         guard found.first?.number == 1 else { return nil }
         return (start, found)
     }
+
+    /// Where a numbered option's label starts on its line ("❯ 1. Yes" → 5).
+    private static func labelColumn(_ line: String) -> Int {
+        guard let dot = line.firstIndex(of: ".") else { return 0 }
+        let after = line[line.index(after: dot)...].prefix { $0 == " " }.count
+        return line.distance(from: line.startIndex, to: dot) + 1 + after
+    }
+
+    /// The question's lines above the choices: a long question wraps on a narrow terminal
+    /// ("Second Wind's app icon (page just opened): which" / "one ships?"), so it runs up to a
+    /// blank line or a rule, at most three lines. `first` is its top line's index.
+    private static func questionLines(in lines: [String]) -> (first: Int, text: [String])? {
+        guard let start = run(in: lines)?.start else { return nil }
+        var j = start - 1
+        while j >= 0, clean(lines[j]).isEmpty, !isRule(lines[j]) { j -= 1 }
+        var out: [String] = []
+        while j >= 0, out.count < 3 {
+            let text = clean(lines[j])
+            if text.isEmpty || isRule(lines[j]) { break }
+            out.insert(text, at: 0)
+            j -= 1
+        }
+        return out.isEmpty ? nil : (j + 1, out)
+    }
+
+    /// A prompt's footer of key hints ("Enter to select · ↑/↓ to navigate · Esc to cancel"):
+    /// hints joined by "·", or a line that starts with one. Not a description that mentions a key.
+    private static func isKeyHint(_ text: String) -> Bool {
+        let t = text.lowercased()
+        let hint = ["esc to", "enter to", "↑/↓", "tab to", "ctrl+"]
+        if t.contains("·") { return hint.contains { t.contains($0) } }
+        return hint.contains { t.hasPrefix($0) }
+    }
+
+    private static func isRule(_ line: String) -> Bool { line.contains("──") || line.contains("━━") }
 
     /// A menu without numbers, picked with the arrow keys ("❯ Deny, and tell Claude what to do
     /// differently (esc)" / "  Allow for this session"): the line with the cursor and the options
@@ -175,10 +229,8 @@ enum AnswerParser {
     /// line ("Requesting permission for:" / "ls -la /home/x"), at most four, top first.
     static func context(in lines: [String]) -> [String] {
         guard let start = run(in: lines)?.start else { return [] }
-        var j = start - 1
-        while j >= 0, clean(lines[j]).isEmpty { j -= 1 } // up to the question
-        j -= 1                                            // past it
-        while j >= 0, clean(lines[j]).isEmpty { j -= 1 } // and the gap above it
+        var j = (questionLines(in: lines)?.first ?? start) - 1 // above the question
+        while j >= 0, clean(lines[j]).isEmpty { j -= 1 }       // and the gap above it
         var out: [String] = []
         while j >= 0, out.count < 4 {
             let text = clean(lines[j])
@@ -193,14 +245,9 @@ enum AnswerParser {
     /// with box-drawing borders and selection markers stripped; empty when there is none.
     static func choices(in lines: [String]) -> [AnswerChoice] { run(in: lines)?.choices ?? [] }
 
-    /// The nearest non-empty line above the choices (the question), if any.
+    /// The question above the choices, its wrapped lines joined, if any.
     static func question(in lines: [String]) -> String? {
-        guard let start = run(in: lines)?.start else { return nil }
-        for line in lines[..<start].reversed() {
-            let text = clean(line)
-            if !text.isEmpty { return text }
-        }
-        return nil
+        questionLines(in: lines)?.text.joined(separator: " ")
     }
 
     /// Whether the question a choice came from is still on screen: same number and same label.
@@ -421,7 +468,7 @@ struct AnswerCard: View {
             Text(question ?? status?.title ?? "Waiting for you")
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(palette.text)
-                .lineLimit(3)
+                .lineLimit(5)
                 .padding(.horizontal, 4)
             ForEach(Array(choices.enumerated()), id: \.offset) { index, choice in
                 let primary = index == 0 && choice.label.lowercased().hasPrefix("yes")
@@ -441,10 +488,17 @@ struct AnswerCard: View {
                         Text("\(choice.number)")
                             .font(.footnote.monospacedDigit())
                             .foregroundStyle(primary ? Color.white.opacity(0.75) : palette.secondary)
-                        Text(confirm ? "Tap again to confirm: \(choice.label)" : choice.label)
-                            .font(.callout)
-                            .multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(confirm ? "Tap again to confirm: \(choice.label)" : choice.label)
+                                .font(.callout)
+                            if !choice.detail.isEmpty {
+                                Text(choice.detail)
+                                    .font(.footnote)
+                                    .opacity(0.7)
+                            }
+                        }
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .foregroundStyle(risky ? Color.white : primary ? palette.onAccent : palette.text)
                     .padding(.horizontal, 14)

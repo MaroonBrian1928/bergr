@@ -1852,7 +1852,11 @@ struct SubagentGroup: View {
 
     static func title(_ agents: [ChatFeed.SubagentInfo]) -> String {
         let running = agents.filter { $0.state == .running }.count
-        var text = "\(agents.count) sub-agents"
+        let shells = agents.filter(\.isShell).count, others = agents.count - shells
+        var parts: [String] = []
+        if others > 0 { parts.append("\(others) sub-agent\(others == 1 ? "" : "s")") }
+        if shells > 0 { parts.append("\(shells) background command\(shells == 1 ? "" : "s")") }
+        var text = parts.joined(separator: ", ")
         if running > 0 { text += " (\(running) running)" }
         return text
     }
@@ -1866,7 +1870,7 @@ struct SubagentGroup: View {
                     withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.35)) { open.toggle() }
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: "person.2.badge.gearshape")
+                        Image(systemName: agents.allSatisfy(\.isShell) ? "terminal" : "person.2.badge.gearshape")
                             .font(.footnote)
                             .frame(width: 18)
                         Text(Self.title(agents))
@@ -1903,17 +1907,59 @@ struct SubagentGroup: View {
 private struct SubagentLine: View {
     let agent: ChatFeed.SubagentInfo
     let palette: ChatPalette
+    /// A background shell's latest output, opened with a tap.
+    @State private var showOutput = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var detail: String {
+    private func detail(now: Date) -> String {
         var parts: [String] = []
+        if agent.isShell, let started = agent.started {
+            let seconds = max(0, (agent.ended ?? now).timeIntervalSince(started))
+            parts.append(agent.state == .running ? "running \(Self.duration(seconds))" : Self.duration(seconds))
+        }
         if !agent.summary.isEmpty { parts.append(agent.summary) }
         if agent.steps > 0 { parts.append("\(agent.steps) \(agent.steps == 1 ? "step" : "steps")") }
         return parts.isEmpty ? "" : " · " + parts.joined(separator: " · ")
     }
 
+    /// "42s", "4m", "1h 5m".
+    static func duration(_ seconds: TimeInterval) -> String {
+        let s = Int(seconds)
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60)m" }
+        return "\(s / 3600)h \(s % 3600 / 60)m"
+    }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                guard agent.isShell, !agent.output.isEmpty else { return }
+                withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.35)) { showOutput.toggle() }
+            } label: {
+                TimelineView(.periodic(from: .now, by: agent.isShell && agent.state == .running ? 1 : 3600)) { context in
+                    line(detail: detail(now: context.date))
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(agent.isShell && !agent.output.isEmpty ? (showOutput ? "Hides its output" : "Shows its latest output") : "")
+            if showOutput, !agent.output.isEmpty {
+                Text(agent.output)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(palette.text)
+                    .lineLimit(12)
+                    .textSelection(.enabled)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(palette.codeBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .padding(.leading, 26)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    private func line(detail: String) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "person.2.badge.gearshape")
+            Image(systemName: agent.isShell ? "terminal" : "person.2.badge.gearshape")
                 .font(.footnote)
                 .frame(width: 18)
             (Text(agent.name).fontWeight(.semibold) + Text(detail))
@@ -1931,8 +1977,9 @@ private struct SubagentLine: View {
             .frame(width: 16)
         }
         .frame(minHeight: PlatformMetrics.controlHeight)
+        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Sub-agent \(agent.name), \(agent.state.rawValue)\(detail)")
+        .accessibilityLabel("\(agent.isShell ? "Background command" : "Sub-agent") \(agent.name), \(agent.state.rawValue)\(detail)")
     }
 }
 
@@ -2178,8 +2225,18 @@ struct ToolRun: View {
                 .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 8)))
             }
             if let lastOutput {
+                // Until the new step prints, the box keeps its size but not the last step's text:
+                // under the running step, that text read as its output.
                 outputBlock(lastOutput, minLines: outputLines)
-                    .opacity(newestOutput == nil ? 0.5 : 1)
+                    .opacity(newestOutput == nil ? 0 : 1)
+                    .overlay(alignment: .topLeading) {
+                        if newestOutput == nil {
+                            Text("Waiting for output…")
+                                .font(.footnote)
+                                .foregroundStyle(palette.secondary)
+                                .padding(10)
+                        }
+                    }
                     .padding(.leading, 26)
                     .padding(.top, 2)
                     .transition(.opacity)

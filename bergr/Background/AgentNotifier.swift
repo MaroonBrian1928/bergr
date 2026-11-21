@@ -82,6 +82,10 @@ final class AgentNotifier {
     private let sessions: SessionStore
     private var last: [UUID: [Terminal]] = [:]
     private var delivered: Set<String> = []
+    /// What the relay last heard from each machine's helper and when it was asked, refreshed at
+    /// most every 5 minutes; `heardFetch` is a refresh under way, shared by alerts that arrive together.
+    private var heard: (value: RelayHeard, at: Date)?
+    private var heardFetch: Task<RelayHeard?, Never>?
     private var started = false
     var focusedAddress: (host: UUID, address: String)? {
         didSet { NotificationRouter.shared.focused = focusedAddress }
@@ -97,9 +101,11 @@ final class AgentNotifier {
 
     private func observe() {
         let current = withObservationTracking {
-            sessions.ids.compactMap { id in
-                sessions.existing(id).map { (id: id, hasSnapshot: $0.snapshot != nil, terminals: $0.terminals,
-                         machine: $0.host.name.isEmpty ? $0.host.target.host : $0.host.name) }
+            let all = sessions.ids.compactMap { sessions.existing($0) }
+            return all.map { session in
+                (id: session.host.id, hasSnapshot: session.snapshot != nil,
+                 terminals: Self.withoutDirectCopies(session, among: all),
+                 machine: session.host.name.isEmpty ? session.host.target.host : session.host.name)
             }
         } onChange: { [weak self] in
             Task { @MainActor in self?.observe() }
@@ -121,8 +127,61 @@ final class AgentNotifier {
         for id in last.keys where !ids.contains(id) { last[id] = nil }
     }
 
+    /// A session's terminals, less those of machines linked through it that are also added
+    /// directly: those alert from the direct connection only (they alerted twice, once each way).
+    private static func withoutDirectCopies(_ session: HostSession, among all: [HostSession]) -> [Terminal] {
+        let direct = all.filter { $0.host.id != session.host.id }.reduce(into: SameMachine.DirectIdentity()) { names, other in
+            var failed = false
+            if case .failed = other.state { failed = true }
+            names.formUnion(SameMachine.directNames(other.host, coreName: other.coreName, failed: failed,
+                                                        resolve: AddressResolver.shared.ips))
+        }
+        func machine(_ t: Terminal) -> String? {
+            t.address.firstIndex(of: "/").map { String(t.address[..<$0]) }
+        }
+        let skip = SameMachine.linkedAlsoDirect(session.machines, names: Set(session.terminals.compactMap(machine)),
+                                                direct: direct, resolve: AddressResolver.shared.ips)
+        return skip.isEmpty ? session.terminals : session.terminals.filter { machine($0).map { !skip.contains($0) } ?? true }
+    }
+
     private func post(_ alert: Alert, agent: String, transcript: [String]) {
         // Settings → Notifications.
+        guard UserDefaults.standard.bool(forKey: Delivery.notificationsKey) else { return }
+        // A machine whose helper pushes to this phone gets its alert from there: posting here too
+        // gave two of each while Bergr was open or still running in the background.
+        if Delivery.helperSupported, PushRegistration.shared.enabled, let secret = PushRegistration.shared.relaySecret {
+            Task { @MainActor in
+                if await self.helperPushes(for: alert.host, secret: secret) { return }
+                self.postNow(alert, agent: agent, transcript: transcript)
+            }
+            return
+        }
+        postNow(alert, agent: agent, transcript: transcript)
+    }
+
+    /// Whether the relay heard this machine's helper recently (within its stale limit), counting
+    /// the time since it was asked.
+    private func helperPushes(for host: UUID, secret: String) async -> Bool {
+        if heard == nil || Date().timeIntervalSince(heard!.at) > 5 * 60 {
+            let fetch = heardFetch ?? Task { await PushRegistration.fetchHeard(secret: secret) }
+            heardFetch = fetch
+            let asked = Date()
+            let value = await fetch.value
+            if heardFetch == fetch { heardFetch = nil }
+            // A failed refresh keeps the last good answer (it ages out by itself).
+            if let value, heard.map({ $0.at < asked }) ?? true { heard = (value, asked) }
+        }
+        guard let heard, let age = heard.value.age(of: host) else { return false }
+        return Self.helperCovers(age: age + Date().timeIntervalSince(heard.at))
+    }
+
+    /// A helper heard within `RelayHeard.staleAfter` sends this machine's alerts itself.
+    nonisolated static func helperCovers(age: TimeInterval?) -> Bool {
+        guard let age else { return false }
+        return age <= RelayHeard.staleAfter
+    }
+
+    private func postNow(_ alert: Alert, agent: String, transcript: [String]) {
         guard UserDefaults.standard.bool(forKey: Delivery.notificationsKey) else { return }
         // Per-kind switches, muted agents and quiet hours.
         guard NotificationPrefs.load().allows(kind: alert.kind, host: alert.host, address: alert.address,

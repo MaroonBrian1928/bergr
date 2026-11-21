@@ -418,14 +418,21 @@ struct AgentsView: View {
     /// The terminals of each machine this core is linked to, by machine. A machine that's also
     /// added to Bergr directly is left out here: its agents already show under it.
     private func linkedGroups(_ all: [Terminal], host: Host, session: HostSession) -> [LinkedGroup] {
-        let direct = Set(hosts.hosts.filter { $0.id != host.id }.flatMap { [$0.name.lowercased(), $0.target.host.lowercased()] })
+        // Added directly too: the direct connection wins while it works.
+        let direct = hosts.hosts.filter { $0.id != host.id }.reduce(into: SameMachine.DirectIdentity()) { names, other in
+            let otherSession = sessions.existing(other.id)
+            var failed = false
+            if case .failed = otherSession?.state { failed = true }
+            names.formUnion(SameMachine.directNames(other, coreName: otherSession?.coreName, failed: failed,
+                                                        resolve: AddressResolver.shared.ips))
+        }
         let byMachine = Dictionary(grouping: all.filter { $0.address.contains("/") }) {
             String($0.address.prefix { $0 != "/" })
         }
+        let skip = SameMachine.linkedAlsoDirect(session.machines, names: Set(byMachine.keys), direct: direct, resolve: AddressResolver.shared.ips)
         return byMachine.keys.sorted().compactMap { name in
             let machine = session.machines.first { $0.name == name }
-            let names = [name, machine?.host, machine?.target].compactMap { $0?.lowercased() }
-            if names.contains(where: direct.contains) { return nil }
+            if skip.contains(name) { return nil }
             return LinkedGroup(name: name, state: machine?.state, terminals: byMachine[name] ?? [])
         }
     }
@@ -463,6 +470,8 @@ private struct SubagentRow: View {
     @State private var lifecycle = AgentLifecycle()
     @State private var sending: String?
     @State private var problem: String?
+    @State private var showingActivity = false
+    private let activity = AgentActivity.shared
 
     private var canManage: Bool { terminal.isLive && terminal.isAgent && !terminal.address.contains("/") }
     private var canRestart: Bool { canManage && ChatAgent.detect(terminal).map { $0 != .antigravity } == true }
@@ -527,12 +536,19 @@ private struct SubagentRow: View {
     }
 
     private var cwd: String { terminal.foreground?.cwd ?? terminal.cwd }
+    /// Changes when its chat grows (or it starts or stops working): time to look again.
+    private var activityKey: String {
+        "\(terminal.agentState == .working)|\(session.runningFeed(address: terminal.address)?.items.count ?? -1)"
+    }
     private var worktree: WorktreeRecord? {
         canManage ? WorktreeRegistry.record(host: session.host.id, address: terminal.address) : nil
     }
 
     private var rowContent: some View {
-        AgentRow(terminal: terminal, subagents: session.runningSubagents(address: terminal.address), machine: machine,
+        AgentRow(terminal: terminal, subagents: session.runningSubagents(address: terminal.address),
+                 shells: session.runningShells(address: terminal.address),
+                 doing: terminal.agentState == .working ? activity.line(host: session.host.id, address: terminal.address) : nil,
+                 machine: machine,
                  unsent: ReplyDrafts.hasUnsent(for: "\(session.host.id.uuidString)|\(terminal.address)"),
                  branch: terminal.isLive && terminal.isAgent ? BranchInfoStore.shared.info(host: session.host.id, cwd: cwd) : nil)
             // At most one ask per folder a minute (the store skips fresh answers); a turn ending forces one.
@@ -543,11 +559,26 @@ private struct SubagentRow: View {
                     try? await Task.sleep(for: .seconds(BranchInfoStore.maxAge))
                 }
             }
+            // While it works: what it's doing, in a line the on-device model writes from its chat.
+            .task(id: activityKey) {
+                guard terminal.agentState == .working, let feed = session.runningFeed(address: terminal.address) else { return }
+                await activity.refreshLine(host: session.host.id, address: terminal.address,
+                                           agent: terminal.displayName, items: feed.items)
+            }
+            .sheet(isPresented: $showingActivity) {
+                AgentActivitySheet(name: AgentsOrdering.title(terminal), host: session.host.id,
+                                   address: terminal.address, agent: terminal.displayName,
+                                   feed: session.runningFeed(address: terminal.address))
+            }
             .onChange(of: terminal.agentState) { old, new in
                 guard old == .working, new != .working, terminal.isLive, terminal.isAgent else { return }
                 Task { await BranchInfoStore.shared.refresh(session: session, cwd: cwd, force: true) }
             }
             .contextMenu {
+                if terminal.isLive, terminal.isAgent, OnDeviceText.isAvailable,
+                   session.runningFeed(address: terminal.address) != nil {
+                    Button("What's It Doing?", systemImage: "text.magnifyingglass") { showingActivity = true }
+                }
                 if terminal.isLive, terminal.isAgent, !terminal.address.contains("/") {
                     if let agent = ChatAgent.detect(terminal), agent != .antigravity {
                         Button("Restart", systemImage: "arrow.clockwise") { lifecycle.confirming = .restart }

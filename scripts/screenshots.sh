@@ -53,7 +53,8 @@ source scripts/simulator.sh
 
 rm -rf "$out"
 mkdir -p "$raw" "$final"
-signing=(BERGR_BUNDLE_ID_PREFIX="${BERGR_BUNDLE_ID_PREFIX:-com.pavelzw}")
+# The store build's name, not "bergr Dev": iPadOS shows it in the status bar.
+signing=(BERGR_BUNDLE_ID_PREFIX="${BERGR_BUNDLE_ID_PREFIX:-com.pavelzw}" BERGR_NAME_SUFFIX=)
 [ -n "${BERGR_TEAM:-}" ] && signing+=(DEVELOPMENT_TEAM="$BERGR_TEAM")
 if $pad; then
   tests=(-only-testing:bergrUITests/DemoPadShotsTests)
