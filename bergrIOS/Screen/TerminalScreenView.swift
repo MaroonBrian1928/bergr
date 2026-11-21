@@ -277,6 +277,13 @@ struct TerminalScreenView: View {
             Button(chat ? "Show Terminal" : "Show Chat",
                    systemImage: chat ? "apple.terminal" : "bubble.left.and.text.bubble.right")
             {
+                // Half a line typed in the terminal moves into the chat's draft, so the chat's reply
+                // isn't typed after it.
+                if !chat, let line = model.takeTypedLine() {
+                    let key = "\(session.host.id.uuidString)|\(address)"
+                    let draft = ReplyDrafts.text(for: key)
+                    ReplyDrafts.set(draft.isEmpty ? line : draft + " " + line, for: key)
+                }
                 chatPreferred.toggle()
             }
         }

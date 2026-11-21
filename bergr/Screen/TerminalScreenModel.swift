@@ -28,6 +28,9 @@ final class TerminalScreenModel {
     private(set) var ambiguousPreview = ""
     /// Speculative local echo to draw over the screen (opt-in, slow links only).
     private(set) var prediction: EchoPredictor.Prediction?
+    /// What was typed here on the current line since the last Return; nil once it can't be known
+    /// (arrows, Tab, Escape move or change the line in ways we don't follow).
+    @ObservationIgnored private(set) var typedLine: String? = ""
     @ObservationIgnored private var journal = InputJournal()
     @ObservationIgnored private var latency = InputLatency()
     @ObservationIgnored private var predictor = EchoPredictor()
@@ -152,6 +155,8 @@ final class TerminalScreenModel {
     func setWatching(_ watch: Bool) {
         guard watch != watching else { return }
         watching = watch
+        // Another viewer may change the line meanwhile: what we typed no longer says what's there.
+        typedLine = nil
         // Watching means not typing: put the keyboard away (bringing it back takes over).
         if watch { wantsKeyboard = false }
         guard pump != nil, phase == .live else { return }
@@ -274,7 +279,12 @@ final class TerminalScreenModel {
     private var automationTail: Task<Void, Never>?
 
     /// Runs one automated key sequence after the ones started before it have finished.
+    /// Automated typing under way (a chat reply being delivered): the typed line is its, not the person's.
+    @ObservationIgnored private var automating = 0
+
     func automate(_ steps: @escaping @MainActor () async -> Void) async {
+        automating += 1
+        defer { automating -= 1 }
         #if os(macOS)
         if let session, let address {
             await session.automate(address: address, steps)
@@ -296,11 +306,19 @@ final class TerminalScreenModel {
             return
         }
         if controlLatched, text.count == 1, let c = text.first, c.isLetter || "[]\\@^_ ".contains(c) {
+            // ^U and ^C leave an empty line; any other control key, we can't tell.
+            typedLine = "uUcC".contains(c) ? "" : nil
             controlLatched = false
             press(c == " " ? .space : .letter(c), modifiers: .control, text: nil)
             return
         }
         predict(text)
+        // Followed only while each character is one code point (one Backspace each); else unknown.
+        if Self.trackable(text) {
+            typedLine = typedLine.map { $0 + text }
+        } else {
+            typedLine = nil
+        }
         send(Data(text.utf8))
     }
 
@@ -311,6 +329,12 @@ final class TerminalScreenModel {
             modifiers.insert(.control)
             controlLatched = false
         }
+        switch key {
+        case .enter: typedLine = ""
+        case .backspace where modifiers.isEmpty: typedLine = typedLine.map { String($0.dropLast()) }
+        case .space where modifiers.isEmpty: typedLine = typedLine.map { $0 + " " }
+        default: typedLine = modifiers.contains(.control) && [TerminalKey.letter("u"), .letter("c")].contains(key) ? "" : nil
+        }
         // Any key but a plain character ends a prediction; Return also lifts a suspended one.
         predict(key == .enter ? "\r" : "\u{7f}")
         send(vt.encode(key, modifiers: modifiers, text: text))
@@ -319,6 +343,7 @@ final class TerminalScreenModel {
     func paste(_ text: String) {
         guard let vt, !text.isEmpty else { return }
         predict("\u{7f}")
+        typedLine = Self.trackable(text) ? typedLine.map { $0 + text } : nil
         // Bracketed paste keeps shells and editors from running pasted lines one by one,
         // but only programs that turned it on understand the markers.
         if vt.bracketedPaste {
@@ -415,6 +440,43 @@ final class TerminalScreenModel {
         if journal.ambiguousCount != ambiguousInput { ambiguousInput = journal.ambiguousCount }
         let preview = journal.ambiguousPreview
         if preview != ambiguousPreview { ambiguousPreview = preview }
+    }
+
+    /// Takes back what was typed on the current line and not sent (the person switched to the chat,
+    /// whose reply would otherwise be typed after it): erases it with one Backspace per character
+    /// and returns it, for the chat's draft. Nil when nothing is pending or the line isn't known.
+    func takeTypedLine() -> String? {
+        // Not while a chat reply is being typed, and not while watching (someone else's line).
+        guard automating == 0, !watching, let line = typedLine, !line.isEmpty else { return nil }
+        typedLine = ""
+        guard let vt, attached != nil else {
+            // Not attached yet: it's still waiting here, unsent. Take it off the end of the queue
+            // (earlier queued lines stay); when it can't be found as typed, queue the erasing instead.
+            Self.dropTail(Data(line.utf8), from: &pendingInput, orAppend: Data(repeating: 0x7f, count: line.count))
+            return line
+        }
+        let backspace = vt.encode(.backspace, modifiers: [], text: nil)
+        send(Data((0..<line.count).flatMap { _ in backspace }))
+        return line
+    }
+
+    /// Removes `tail` from the end of the queued chunks when they end with exactly it; otherwise
+    /// appends `fallback` (Backspaces) to undo it once sent.
+    nonisolated static func dropTail(_ tail: Data, from queue: inout [Data], orAppend fallback: Data) {
+        let all = queue.reduce(into: Data()) { $0.append($1) }
+        guard !tail.isEmpty, all.count >= tail.count, all.suffix(tail.count) == tail else {
+            queue.append(fallback)
+            return
+        }
+        queue = [Data(all.prefix(all.count - tail.count))].filter { !$0.isEmpty }
+    }
+
+    /// Plain text whose characters are each one printable code point: one Backspace erases each.
+    nonisolated static func trackable(_ text: String) -> Bool {
+        text.allSatisfy { c in
+            c.unicodeScalars.count == 1
+                && c.unicodeScalars.allSatisfy { $0.value >= 0x20 && !(0x7f...0x9f).contains($0.value) }
+        }
     }
 
     /// Sends again what a dropped channel may have lost (the user chose to).
