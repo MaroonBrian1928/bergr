@@ -1,41 +1,56 @@
-Found six code-backed hazards. This was a static audit of `335c7ae..HEAD`; no files were edited and no runtime reproduction was attempted.
+# Mac app state audit
+
+## Status (checked 2026-11-21)
+
+Each finding checked against current code by symbol (no builds run). Fixes landed in commit fd2bcbd unless noted.
+
+- Finding 1, cross-window input overlap (shared automation FIFO): Done — `HostSession.automate(address:)` with `inputQueues` (`bergr/Terminals/HostSession.swift:158-164`), used by `TerminalScreenModel.automate` on macOS (`bergr/Screen/TerminalScreenModel.swift:246-256`).
+- Finding 2, replaced host keeps a model bound to the removed session: Done — `ChatWindow` keyed by `ObjectIdentifier(session)` plus address, so state is rebuilt (`bergrMac/App/ChatWindow.swift:30-39`).
+- Finding 3, read ownership diverges from window visibility: Done — `KeyWindowObserver` reports key window and app activation, and resigns on app deactivation (`bergrMac/App/KeyWindowObserver.swift:28-43`); `setReading` drives `startLooking`/`stopLooking` (`ChatWindow.swift:178-183`).
+- Finding 4, a later terminal launch deletes an earlier pending script: Done — unique UUID script names, pruning only files older than 7 days (`bergrMac/Terminal/TerminalLauncher.swift:58-74`).
+- Finding 5, system SSH test has no attempt or target identity: Done — attempt ID gating on completion (`bergr/Hosts/HostEditor.swift:339-345`); cancel on target or port change and on dismiss (`HostEditor.swift:149-151`, `:363-372`).
+- Finding 6, concurrent release runs share and destroy pipeline state: Not started — `scripts/mac-release.sh:19` (`out=.build/mac`) and `:77` (`rm -rf "$out"`) unchanged; no lock anywhere in the script (the only lock-like check is the tag check at `:62`).
+- Finding 7, composer submission depends on responder-chain state: Done — `ChatView` passes `onSubmit: { send() }` (`bergr/Chat/ChatView.swift:1555-1558`).
+- Finding 8, attachment selection has no cancellation or draft generation: Not started — `bergrMac/Chat/AttachmentPicker.swift:72-75` still computes `room` before an untracked `Task` awaits the panel, then appends after the await.
+
+Found six code-backed hazards. This was a static audit of `335c7ae..HEAD`; no files were edited and no runtime reproduction was attempted. Line numbers refer to that range.
 
 **Confirmed from code**
 
 1. **High — Separate windows have separate input FIFOs for the same terminal.**
    Location: [ChatWindow.swift:30](../bergrMac/App/ChatWindow.swift), with `ChatView.swift:25`, `TerminalScreenModel.swift:233`, and `ReplyDelivery.swift:259`.
    **State/mutators:** Each window owns a model and outbox; each model owns its own `automationTail`. Reply drivers advance independently despite targeting the same host/address.
-   **Interleaving:** Main-window reply A types its text and sleeps before Enter. A detached window sends B during that sleep. B’s text reaches the same prompt before A’s Enter, submitting combined text; B’s later Enter acts on the subsequent prompt. Shell-mode and interrupt sequences can overlap similarly.
-   **Smallest fix:** Share the automation owner per `(HostSession, address)`. Reuse the existing FIFO behind a session-owned terminal input owner; all windows’ `ReplyEnvironment`s must use that owner.
+   **Interleaving:** Main-window reply A types its text and sleeps before Enter. A detached window sends B during that sleep. B's text reaches the same prompt before A's Enter, submitting combined text; B's later Enter acts on the subsequent prompt. Shell-mode and interrupt sequences can overlap similarly.
+   **Smallest fix:** Share the automation owner per `(HostSession, address)`. Reuse the existing FIFO behind a session-owned terminal input owner; all windows' `ReplyEnvironment`s must use that owner.
 
 2. **High — Host replacement preserves a model bound to the removed session.**
    Location: [ChatWindow.swift:43](../bergrMac/App/ChatWindow.swift), [MenuBar.swift:34](../bergrMac/MenuBar/MenuBar.swift), and `MacRootView.swift:24`.
-   **State/mutators:** Host edits replace the `HostSession`; SwiftUI retains `ChatWindow`’s model/feed state. `model.started` remains true because the model retains its original session. The task key contains only agent type and connected status.
+   **State/mutators:** Host edits replace the `HostSession`; SwiftUI retains `ChatWindow`'s model/feed state. `model.started` remains true because the model retains its original session. The task key contains only agent type and connected status.
    **Interleaving:** Open a chat, edit its machine, and let the replacement session connect. The retained model skips `start()` because `started` is true. Subsequent input still attaches through the stopped, removed session, while uploads/feed acquisition can use the replacement session.
    **Smallest fix:** Key the chat lifecycle by session object identity as well as address, recreating its state on replacement. Ensure disappearance cancels the old outbox/model. Both main and detached windows need this.
 
-3. **Medium — Window visibility and “read” ownership diverge.**
+3. **Medium — Window visibility and "read" ownership diverge.**
    Location: [ChatWindow.swift:63](../bergrMac/App/ChatWindow.swift), with `HostSession.swift:124–146` and `MacNotifications.swift:35`.
    **State/mutators:** Appearance callbacks acquire/release `looking[address]`; activation callbacks separately update notification focus. App resignation clears notification focus but leaves `looking` registered.
    **Interleaving:** Open a chat, switch to another app, and let the agent finish. The window remains mounted and the Mac connection stays alive. `markLookedAt()` writes the new turn as seen although the user never saw it. Unread state is lost and finished-alert eligibility can be affected.
-   **Smallest fix:** Own a read lease for the window’s active viewing state. Acquire/release it on activation and disappearance, using the existing reference-counted `startLooking`/`stopLooking` methods.
+   **Smallest fix:** Own a read lease for the window's active viewing state. Acquire/release it on activation and disappearance, using the existing reference-counted `startLooking`/`stopLooking` methods.
 
-4. **Medium — A later terminal launch deletes an earlier launch’s pending script.**
+4. **Medium — A later terminal launch deletes an earlier launch's pending script.**
    Location: [TerminalLauncher.swift:34](../bergrMac/Terminal/TerminalLauncher.swift) and [TerminalLauncher.swift:60](../bergrMac/Terminal/TerminalLauncher.swift).
    **State/mutators:** Script existence lives in a shared directory; `open()` starts a process and returns without tracking consumption. Every `writeScript()` deletes every previous script.
-   **Interleaving:** Launch A writes its script and starts `/usr/bin/open`. Before the terminal opens that file, launch B deletes it. A’s terminal cannot execute the requested attach. Main-actor serialization does not serialize the external consumer.
+   **Interleaving:** Launch A writes its script and starts `/usr/bin/open`. Before the terminal opens that file, launch B deletes it. A's terminal cannot execute the requested attach. Main-actor serialization does not serialize the external consumer.
    **Smallest fix:** Stop deleting scripts on each launch. Keep unique scripts and prune only sufficiently old files; launch-process completion alone does not prove the terminal has consumed the script.
 
 5. **Medium — System SSH test results have no attempt or target identity.**
    Location: [HostEditor.swift:280](../bergr/Hosts/HostEditor.swift), [SystemSSHTest.swift:47](../bergr/Hosts/SystemSSHTest.swift).
    **State/mutators:** The button mutates `testingSystemSSH`/`systemSSH`; an untracked task publishes completion; editable fields independently mutate the target. The process is hidden inside a continuation and has no cancellation path.
-   **Interleaving:** Start testing machine A, edit the hostname/user to B while SSH waits, then receive A’s success. The editor displays “ssh works” beside B’s configuration. Dismissing the editor also leaves the process running.
-   **Smallest fix:** Introduce a small test-attempt owner containing target, process, task and result. Invalidate it on target changes/disappearance and publish only for the current attempt. Follow `ConnectionAttempt`’s identity-gating pattern.
+   **Interleaving:** Start testing machine A, edit the hostname/user to B while SSH waits, then receive A's success. The editor displays "ssh works" beside B's configuration. Dismissing the editor also leaves the process running.
+   **Smallest fix:** Introduce a small test-attempt owner containing target, process, task and result. Invalidate it on target changes/disappearance and publish only for the current attempt. Follow `ConnectionAttempt`'s identity-gating pattern.
 
-6. **Medium — Concurrent release runs share and destroy each other’s pipeline state.**
+6. **Medium — Concurrent release runs share and destroy each other's pipeline state.**
    Location: [mac-release.sh:19](../scripts/mac-release.sh), [mac-release.sh:76](../scripts/mac-release.sh), and `mac-release.sh:107`.
    **State/mutators:** Pipeline phase is represented by files under fixed `.build/mac` paths plus external notarization/release state. Each invocation independently deletes and rewrites those paths.
-   **Interleaving:** Run A finishes notarization or signature checks. Run B clears/recreates `.build/mac`. A resumes and generates metadata or uploads using B’s files—or fails after partially completing external work. The prerequisite release check is also not a lock.
+   **Interleaving:** Run A finishes notarization or signature checks. Run B clears/recreates `.build/mac`. A resumes and generates metadata or uploads using B's files—or fails after partially completing external work. The prerequisite release check is also not a lock.
    **Smallest fix:** Acquire an exclusive release lock before checking release existence or modifying output, and hold it through upload. Alternatively use isolated run directories plus a publication lock.
 
 **Unconfirmed risks / design concerns**

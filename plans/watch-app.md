@@ -1,9 +1,35 @@
 # Handoff: native Apple Watch app
 
+## Status (checked 2026-11-21)
+
+- Watch app code (`bergrWatch/`, `SharedWatch/WatchLink.swift`): Done on branch `watch-app` — files present in its tree (`bergrWatch/AgentListView.swift`, `WatchModel.swift`, `BergrWatchApp.swift`); none on `main`.
+- Complication (`BergrWatchWidget/`): Done on branch `watch-app` — `BergrWatchWidget/NeedsYouComplication.swift` reads the app-group defaults; not on `main`.
+- WatchConnectivity data path (`updateApplicationContext` from `writeSnapshot`): Done on branch `watch-app` — `WatchBridge.swift` `push` (line 33); `LiveActivityController.swift` calls it from `writeSnapshot` (line 237 on branch). `main`'s `writeSnapshot` (line 236) has no push.
+- Answers via `sendMessage`, sealed like the Live Activity, SSH fallback: Done on branch `watch-app` — `WatchModel.swift:57` `sendMessage`; `WatchBridge.swift:97-102`. The symbols it uses exist on `main`: `RemoteAnswer.intentAnswer`, `RemoteAnswerSender` (`bergr/Background/AnswerFlow.swift`).
+- Replies via `AnswerFlow.reply`: Done on branch `watch-app` — `WatchBridge.swift:104-107` goes through `AgentIntentBridge.send`; `AnswerFlow.reply` is on `main` (`AnswerFlow.swift:256`).
+- Dangerous commands and Esc get no buttons: Done on branch `watch-app` — `WatchBridge.swift:62` (no options when dangerous), `:93` (Esc refused); `DangerousCommand` is on `main` (`Shared/DangerousCommand.swift`); test `dangerousQuestionHasNoButtons`.
+- Dictated reply field: Done on branch `watch-app` — `bergrWatch/AgentListView.swift` `TextField("Reply")`.
+- Config (`Config/Watch*.plist`, entitlements with app group): Done on branch `watch-app` — both entitlements declare `group.$(BERGR_BUNDLE_ID_PREFIX).bergr`.
+- Project targets and embed trap (`relative-path`): Done on branch `watch-app` — targets `bergrWatch` and `BergrWatchWidget` in `bergr.xcodeproj/project.xcproj`; embed copy uses `relative-path` `$(CONTENTS_FOLDER_PATH)/Watch` (line 74).
+- `bergrTests/WatchBridgeTests` (9 tests): Done on branch `watch-app` (file present, 9 `@Test`s). That they pass is Unclear: not re-run here (no builds).
+- Other "Verified" suites (LiveActivity, RemoteAnswer) and the unsigned device build: Unclear — not run here. `RemoteAnswerTests.swift` exists on `main`.
+- Watch simulator / real-watch run: Not started — no watchOS runtime or run record in the repo.
+- Signing blocker (Xcode accounts, development profiles for the new bundle ids): Unclear — profile state lives outside the repo; the entitlements that need it are on the branch.
+- Fix: watch targets' `MARKETING_VERSION` equal to the iPhone app's: Not started — on `watch-app`, `bergrWatch` and `BergrWatchWidget` are 0.3.8 (project lines 262, 300) while the other targets are 0.3.9; `main` is 0.3.18 with no watch targets.
+- Fix: watch in the dev profile, cached watch profiles deleted: Unclear — device registration and profile cache are outside the repo.
+- Rebase onto `main`: Not started — `watch-app` tip `ac9429d` sits on `d0526c2` (Version 0.3.9), which is 52 commits behind `main`. The plan's base `ff654f1` is stale.
+- Commit `abf1775`: Done on branch `watch-app`, under another hash — `abf1775` is on no branch or tag (reflog only). `ac9429d` carries identical watch paths (`git diff abf1775 ac9429d` is empty for them).
+- Known limit "list shows at most 3 agents": Partial, plan number is stale — `WatchContext.maxAgents = 6` (`SharedWatch/WatchLink.swift:13`).
+- Known limit "only the top agent gets answer buttons": Done on branch `watch-app` — options only for the prompt's row (`WatchBridge.swift:62`).
+- Known limit "options other than Yes/No go over SSH": Done on branch `watch-app` — fallback at `WatchBridge.swift:101-102`; which options take the intent path is Unclear.
+- Relay-driven or background updates for the watch list: Not started — no background or relay path on the branch; updates only come from `writeSnapshot`.
+
 Status: **shelved (2026-11-15).** Built, tested, not merged. The code is on local branch `watch-app` (commit `abf1775`,
 based on `ff654f1`; main has moved on, so rebase first). It is blocked only by signing.
 
 ## What it is
+
+The files named here are on the `watch-app` branch, not on `main`.
 
 A watchOS 11 app embedded in the iOS app, plus a complication:
 
@@ -47,9 +73,9 @@ profiles; after that `just phone` works from the CLI. Then also run `just archiv
 that distribution signing covers the watch targets.
 
 Alternative if profiles can't be made: drop the App Group from the two watch targets (the wildcard
-profile then signs them). The complication would lose its shared count, so it would need another
-source (e.g. the watch app writing its own `UserDefaults` via a shared container is not possible
-without the group — consider showing only the app, no complication).
+profile then signs them). The complication would lose its shared count and would need another source.
+Without the group the watch app cannot read a shared container, so either find another source
+or ship the app without a complication.
 
 ## Shelved, and why (2026-11-15)
 

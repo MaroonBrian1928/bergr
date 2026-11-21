@@ -1,6 +1,101 @@
 # Bergr for Mac: a native macOS app outside the Mac App Store
 
-Status: plan, nothing implemented. Measured on 6643278 with Xcode 27 on Apple silicon.
+## Status (checked 2026-11-21)
+
+Static check of the tree at HEAD (no builds run). Commit refs are the first commit of each item.
+
+- Measurement (section 1, macOS compile counts): Done — historical record at 6643278; not re-run.
+- 2.1 Second target `bergrMac` (macOS 26, hardened runtime, entitlements, Mac-Info.plist): Done — `bergr.xcodeproj/project.xcproj` (target `bergrMac`), `Config/Mac-Info.plist`, `Config/bergrMac.entitlements`.
+- 2.1 Separate bundle id `<prefix>.bergr.mac`: Done — `project.xcproj` (`PRODUCT_BUNDLE_IDENTIFIER` of `bergrMac`).
+- 2.1 Shared scheme `bergrMac`: Done — `bergr.xcodeproj/xcshareddata/xcschemes/bergrMac.xcscheme`.
+- 2.1 Shared `MARKETING_VERSION` and build number: Done — `project.xcproj` (0.3.18 / build 2 on all targets).
+- 2.1 Sparkle as a remote package of the project: Done (different route) — Sparkle comes through the local package `MacKit/Package.swift` (depends on Sparkle 2.6+), linked into `bergrMac` (`project.xcproj` "packages" and product entries).
+- 2.2 Folder split (`bergr/` shared, `bergrIOS/`, `bergrMac/`, `SharedIOS/`): Done — `project.xcproj` folder memberships; the folders exist.
+- 2.2 Files moved to `bergrIOS/` (canvas, arrow stick, peek, keep-alive, live activity, answer intent, screen recording, composer, attachments, select-text, app, root view): Done — `bergrIOS/Screen/`, `bergrIOS/Background/`, `bergrIOS/Chat/`, `bergrIOS/Debug/`, `bergrIOS/BergrApp.swift`, `bergrIOS/RootView.swift`.
+- 2.2 Split of `PushRegistration` (UIKit part to iOS): Partial — `bergr/Background/PushRegistration.swift` still holds UIKit code behind `#if os(iOS)` (lines 7, 107); the `AppDelegate` is in `bergrIOS/Background/AppDelegate.swift`.
+- 2.2 `BergrActivityAttributes` out of shared code: Partial — still `Shared/BergrActivityAttributes.swift`, whole file under `#if os(iOS)` (line 2); not moved to `SharedIOS/`.
+- 2.2 `bergr/Platform.swift` shims (PlatformImage, Pasteboard, background colors, navigation/keyboard modifiers, DeviceName): Done — `bergr/Platform.swift` (`Pasteboard` line 89, `DeviceName` line 235).
+- 2.2 `TerminalFont` moved to shared: Done — `bergr/Settings/TerminalFont.swift`.
+- 2.2 `Fonts` moved to shared (UIFont to CTFont): Partial — no shared `Fonts`; iOS `Fonts` still at `bergrIOS/Screen/TerminalCanvas.swift:943`; Mac-only NSFont twin at `bergrMac/Platform/Fonts.swift`.
+- 2.2 `ChatAttachment` moved to shared: Done — `bergr/Chat/ChatAttachment.swift`.
+- 2.2 URL target parsing shared: Partial — shared copy at `bergr/Background/AgentLink.swift:5`; a second copy remains at `bergrIOS/Background/LiveActivityController.swift:151`.
+- 2.2 `SessionStore` created in the App (shared by windows and menu bar): Done — `bergrMac/App/BergrMacApp.swift:33`.
+- 2.3 Scenes: main window, one window per `AgentRef`, Settings, `MenuBarExtra`: Done — `bergrMac/App/BergrMacApp.swift:64, :73, :83`; `AgentRef` at `bergr/Agents/AgentRef.swift:5`.
+- 2.3 `NSApplicationDelegateAdaptor`, app keeps running after last window: Done — `BergrMacApp.swift:8`; `bergrMac/App/MacShell.swift:49`.
+- 2.3 APNs callbacks in the Mac app delegate: Not started — local notifications only (decision 3).
+- 2.3 Commands (New Session ⌘N, New Window for Agent ⌥⌘N, Open in Terminal ⌘T, next/previous needing you ⌘] ⌘[, Interrupt ⌘., Check for Updates…): Done — `bergrMac/App/MacCommands.swift:47-105`.
+- 2.3 Commands Find ⌘F and Reply focus ⌘L: Not started — neither is in `MacCommands.swift`.
+- 2.3 "Open in <terminal>" as a context-menu item on agent rows: Partial — toolbar and menu items exist in the chat window only (`bergrMac/App/ChatWindow.swift:68, :147`; `MacCommands.swift:80`); no row context menu found.
+- 2.3 Composer as `NSTextView`: Partial (SwiftUI field instead of NSTextView) — SwiftUI `TextField(axis: .vertical)` with `onKeyPress` (`bergrMac/Chat/ComposerField.swift:53-61`; commit dc81a73). Return sends, Shift/Option-Return breaks the line: Done (same file, `decide`).
+- 2.3 Attachments: NSOpenPanel, drop, paste: Done — `bergrMac/Chat/AttachmentPicker.swift` (NSOpenPanel), `ComposerField.swift:71` (`onDrop`), ⌘V paste (commit 5a1371d).
+- 2.3 Image viewer (Quick Look or magnifiable scroll view): Done with its own viewer — `bergrMac/Chat/ImageViewer.swift`; Quick Look not used.
+- 2.3 Select text (`.textSelection`, no sheet on the Mac): Done — `.textSelection(.enabled)` in shared views; `bergrIOS/Chat/SelectTextSheet.swift` stays iOS-only.
+- 2.3 Appearance through `NSApp.appearance`: Done — `bergr/Settings/TerminalTheme.swift:94-96`.
+- 2.3 Menu-bar item with counts and a popover (Needs You / Working): Done — `bergrMac/MenuBar/MenuBar.swift`; counts from `bergr/Agents/AgentCounts.swift`.
+- 2.3 KeepAlive replaced by a stored switch: Done (different route) — `bergrMac/Platform/KeepAlive.swift` only stores the setting; the process stays alive.
+- 2.3 Reconnect on wake (`NSWorkspace.didWakeNotification`): Done — `bergrMac/MenuBar/MenuBar.swift:48`.
+- 2.3 Local notifications: `UNUserNotificationCenter` wired: Done — `bergrMac/Notifications/MacNotifications.swift`; `bergr/Background/AgentNotifier.swift`.
+- 2.3 Notification click opens that agent's window: Unclear — click handler is `bergr/Background/NotificationRouter.swift:39`; the `openWindow(value:)` call on that path was not traced.
+- 2.3 Haptics and `sensoryFeedback` compile unchanged: Unclear — shared code uses them (`bergr/Chat/ChatView.swift` and others); no build run.
+- 2.4 Secure Enclave keys on the data protection keychain, entitlement error mapped: Done — `HerdrKit/Sources/KeyStore/KeyStore.swift` (`kSecUseDataProtectionKeychain`, `errSecMissingEntitlement`).
+- 2.4 `.userPresence` access control for Macs without Touch ID: Done — `KeyStore.swift`; `HerdrKit/Tests/KeyStoreTests/KeyStoreMacTests.swift`.
+- 2.4 Import from `~/.ssh`: Done — `HerdrKit/Sources/KeyStore/OpenSSHImport.swift`; picker in `bergr/Keys/KeysView.swift`. Picker opening at `~/.ssh`: Unclear.
+- 2.4 Machines prefilled from `~/.ssh/config`: Done — `bergr/Setup/SSHConfig.swift`, `bergr/Setup/SSHConfigImportView.swift` (commit 38ecaab).
+- 2.4 Native ssh-agent client (`SSH_AUTH_SOCK`, NIOSSH key type): Not started — deferred as decided; no `SSH_AUTH_SOCK` code. Related but different: "Use this Mac's SSH" routes through the system ssh and its agent (`HerdrKit/Sources/SSHTransport/SSHConnection.swift:58`, `bergr/Hosts/HostEditor.swift:258`; commit 8168e6d).
+- 2.4 Copy public key and "Test" for the system ssh: Done — `bergrMac/Settings/MacSettings.swift:67` ("Copy Public Key"); `bergr/Hosts/HostEditor.swift:330-348` ("Test System ssh"); `bergr/Hosts/SystemSSHTest.swift`.
+- 2.5 `Host.local` ("This Mac") and `herdr-core` lookup: Done — `bergr/Hosts/HostStore.swift:36`; `bergr/Hosts/LocalCore.swift:7-28`.
+- 2.5 Local connection through `ProcessTransport`: Done — `HerdrKit/Sources/HerdrKit/Transport.swift`; `bergr/Hosts/LocalCore.swift`.
+- 2.5 Local exec and upload: Done — `bergr/Terminals/HostSession.swift:275` (`LocalCore.openExec`); `bergr/Terminals/HostSession+Upload.swift:9`.
+- 2.5 "This Mac" added automatically on first launch when `herdr-core` exists: Done — commit 94382c7.
+- 2.6 Pure `TerminalApp` / `AttachCommand` / `LaunchPlan` in HerdrKit: Done — `HerdrKit/Sources/HerdrKit/TerminalLaunch.swift`.
+- 2.6 Launcher tests (argv, port, quoting, refusal, plans): Done — `HerdrKit/Tests/HerdrKitTests/TerminalLaunchTests.swift`.
+- 2.6 Local argv through `/bin/zsh -lc`, remote argv with `-t` and `-p` only when not 22: Done — `TerminalLaunch.swift:62-76`.
+- 2.6 Address and user/host validation with refusal: Done — `TerminalLaunch.swift:63-69`.
+- 2.6 Ghostty via `open -na … --args -e`: Done — `TerminalLaunch.swift:30-32`. The AppleScript "new window with command" option for newer Ghostty: Not started. "Verify on this Mac": Unclear (no evidence in repo).
+- 2.6 iTerm2, Terminal.app (`.command` via `open -a`), WezTerm, Kitty: Done — `TerminalLaunch.swift:33-38`.
+- 2.6 Generated `.command` script in `~/Library/Caches/<bundle id>/attach`, mode 0700: Done — `bergrMac/Terminal/TerminalLauncher.swift:58-74`.
+- 2.6 Old scripts removed at launch: Done (different rule) — only scripts older than 7 days are pruned (`TerminalLauncher.swift:63-68`; audit fix fd2bcbd).
+- 2.6 Settings picker of installed terminals: Done — `TerminalLauncher.swift:77-96` (`TerminalSettingsView`).
+- 2.7 Entitlements (no sandbox, keychain group, no push, no Apple Events): Done — `Config/bergrMac.entitlements` (also `audio-input`).
+- 2.7 `Mac-Info.plist` keys (feed URL, automatic checks, category, minimum OS, local network text): Done — `Config/Mac-Info.plist`.
+- 2.7 Sparkle EdDSA public key in `SUPublicEDKey`: Not started (user step) — the value is empty (`Config/Mac-Info.plist`); `scripts/mac-release.sh:54` refuses to release without it.
+- 2.7 `Config/MacExportOptions.plist` (developer-id): Done — `Config/MacExportOptions.plist`.
+- 2.7 `scripts/mac-release.sh` (archive, export, codesign, DMG, notarize, staple, appcast, `gh release`, `--dry-run`): Done — `scripts/mac-release.sh:79-116`.
+- 2.7 `just mac-release` and `just mac-release-check`: Done — `justfile:311-316` (the upload switch is `just mac-release true`).
+- 2.7 Sparkle updater (standard controller, "Check for Updates…" command, automatic checks): Partial — `bergrMac/Updates/Updater.swift` uses `startingUpdater: false`, so no checks start; the command is at `bergrMac/App/MacCommands.swift:64`.
+- 2.7 `just licenses` lists Sparkle: Not started — `bergr/Licenses/licenses.json` has no Sparkle entry.
+- 2.7 Homebrew cask template: Done — `scripts/homebrew/bergr.rb` (template). The tap repository itself: Unclear (outside this repo).
+- 2.7 `docs/mac-release.md`: Done — `docs/mac-release.md`.
+- 2.7 README and AGENTS.md updated for the Mac app: Not started — neither mentions `mac-release` or `bergrMac`.
+- 2.7 `just mac-build` (unsigned compile check): Dropped — no such recipe; `just mac-native` builds unsigned by default (commit 17c76fc).
+- 2.7 `just mac-native` added beside `just mac`: Done — `justfile:68`; `just mac` kept at `justfile:48`.
+- 2.8 Option A, local notifications only: Done — `bergrMac/Notifications/MacNotifications.swift`.
+- 2.8 Option B, APNs on the Mac: Not started — `bergr/Background/PushRegistration.swift:130-132` picks the sandbox flag from `#if DEBUG`; no profile reading; no `aps-environment` in `bergrMac.entitlements`.
+- 2.8 Option B, macOS notification service extension and app group: Not started — no Mac target; `BergrNotificationService` is iOS-only in `project.xcproj`.
+- 2.8 Relay supports `ALLOWED_BUNDLE_IDS` (no relay code change): Done — `relay/src/index.js:411`; `relay/wrangler.toml:42` (commented example). Mac bundle ids not added: Not started (needed only for option B).
+- 2.9 Mac build step in CI: Done — `.github/workflows/ci.yml:69-72`.
+- 2.9 CI switched on: Not started — `.github/workflows/ci.yml:21` is still `if: false`.
+- Chunk 0 (foundation: both targets compile and run): Partial — structure, shims, scheme and stubs (later replaced by code) are in place; compile and launch not verified here.
+- Chunk A (Mac shell, windows, commands, menu bar): Done — `bergrMac/App/`, `bergrMac/MenuBar/`, `bergrMac/Settings/`; `bergrTests/AgentCountsTests.swift`. Visual check: Unclear.
+- Chunk B (terminal launcher): Done — code and tests present. Ghostty and Terminal.app checked by hand: Unclear.
+- Chunk C (chat on the Mac): Partial — composer is a SwiftUI field, not `NSTextView`; no unit test for attachment conversion found.
+- Chunk D (keys and "This Mac"): Partial — code and tests present (`KeyStoreMacTests.swift`, `LocalMachineTests.swift`); signed-build Secure Enclave check and iOS non-regression: Unclear.
+- Chunk E (notifications): Partial — option A Done; option B Not started.
+- Chunk F (release): Partial — recipe, justfile, export options and appcast tooling present; Sparkle key, updater start, licenses, README/AGENTS and CI switch still open.
+- Decision 1, bundle id `com.example.bergr.mac`: Done — `project.xcproj`. Showing the Mac app in App Store Connect: Unclear (external).
+- Decision 2, second target with `bergrIOS/` and `bergrMac/`: Done — see 2.1 and 2.2.
+- Decision 3, local notifications only in v1: Done — no APNs code.
+- Decision 4, Secure Enclave plus `~/.ssh` import; ssh-agent later: Partial — Secure Enclave and import Done; ssh-agent Not started.
+- Decision 5, "This Mac" in v1: Done — see 2.5.
+- Decision 6, attach uses system ssh, documented, copy key and test button: Done — `bergr/Hosts/HostEditor.swift:330-348`; footer in `bergrMac/Terminal/TerminalLauncher.swift:93`.
+- Decision 7, launch through a generated `.command` script: Done — see 2.6.
+- Decision 8, macOS 26 and Apple silicon only: Partial — macOS 26 Done (`MACOSX_DEPLOYMENT_TARGET` 26.0 in `project.xcproj`); Apple silicon only Not started (no `ARCHS` setting in `project.xcproj`).
+- Decision 9, shared version and build number, tags `mac-v<version>`: Done — `project.xcproj`; `scripts/mac-release.sh:24`.
+- Decision 10, releases in this repository, tap, Developer ID certificate: Partial — release location wired in `scripts/mac-release.sh`; tap and certificate are outside the repo: Unclear.
+- Decision 11, Dock icon plus menu-bar item: Done — no `LSUIElement` in `Config/Mac-Info.plist`; `MenuBarExtra` in `BergrMacApp.swift`.
+- Decision 12, keep `just mac`, add `just mac-native`: Done — `justfile:48, :68`.
+
+Status: largely implemented on the Mac target (see the Status section above). The text below is the original plan. Measured on 6643278 with Xcode 27 on Apple silicon.
 
 Scope (decided): agent list across machines, chat, answer cards, notifications, settings, a menu-bar
 status item (working / needs-you counts), and "Open in <terminal>" which launches the user's terminal
@@ -9,6 +104,9 @@ terminal, no sandbox. Distribution: Developer ID + notarization, DMG on GitHub r
 optional Homebrew cask. The iOS app stays on the App Store; both share code and `relay/`.
 
 ## 1. Measurement
+
+The paths in this section are from the measured tree (6643278). Several files have since moved,
+most of the iOS-only screen and chat files to `bergrIOS/`.
 
 ### What was run
 
@@ -75,7 +173,7 @@ Most frequent real errors: `navigationBarTitleDisplayMode` (9), `UIPasteboard` (
 `UIApplicationDelegateAdaptor` (1).
 
 **Bottom line:** about 3,500 of the app's ~15,000 lines (terminal canvas, Live Activity, keep-alive,
-widgets) are simply not part of the Mac app. The other ~80 % compiles after roughly 100 to 130 small
+widgets) are simply not part of the Mac app. The other ~80% compiles after roughly 100 to 130 small
 edits, plus four Mac replacements (composer, attachments, image viewer, app shell). The package layer
 needs nothing.
 
@@ -122,7 +220,7 @@ Folders are synchronized, so the split is by folder and needs no per-file projec
 Rule: a whole file that is one platform's goes into that platform's folder (the compiler then enforces
 the split); `#if os(iOS)` only for single modifiers or a few lines inside shared views. To keep the
 `#if`s out of view bodies, a shared `bergr/Platform.swift` holds:
-- `typealias PlatformImage = UIImage | NSImage`, `Image(platformImage:)`, JPEG/PNG data helpers,
+- `PlatformImage` (a typealias: `UIImage` on iOS, `NSImage` on macOS), `Image(platformImage:)`, JPEG/PNG data helpers,
 - `Pasteboard.copy(_ string:)`, `.string`, `.hasImage`, `.image` (replaces 12 `UIPasteboard` sites outside the canvas),
 - `Color.systemBackground` / `.groupedBackground` shims,
 - `View.inlineNavigationTitle()`, `.noAutocapitalization()`, `.urlKeyboard()`, `ToolbarItemPlacement.trailingAction`
@@ -215,7 +313,7 @@ always there.
 | Kitty | `net.kovidgoyal.kitty` | `<kitty.app>/Contents/MacOS/kitty --single-instance -- <argv…>` |
 
 The generated script is `~/Library/Caches/<bundle id>/attach/<uuid>.command`, mode 0700, content
-`#!/bin/zsh -l` + `exec <quoted argv>`; old ones are removed at launch. Using the script for every
+`#!/bin/zsh -l` + `exec <quoted argv>`; old ones are removed at launch. (Under review: `mac-state-audit.md` finding 4 says this can delete a script that another launch has not opened yet.) Using the script for every
 terminal (pass its path as the single program argument) keeps quoting in one place; then only the
 "how do I start program X in terminal Y" line differs per terminal. The `.command` route is preferred
 over AppleScript: no TCC prompt, no extra entitlement.
@@ -333,8 +431,8 @@ Owns: `bergr.xcodeproj/project.xcproj`, `Config/Mac-Info.plist`, `Config/bergrMa
 agents list and chat, `ComposerField` as a plain `TextField`, empty `AttachmentPicker`, `Updater`,
 `TerminalLauncher.open` that only logs). Also adds the Sparkle package and the `bergrMac` scheme so no
 later chunk edits the project file.
-Tests: existing ones unchanged. Add `bergrTests` cases for `Pasteboard`-free logic moved out
-(`TerminalFont` keys, URL target parsing) if they had none.
+Tests: existing ones unchanged. Add `bergrTests` cases for logic moved out of iOS-only files
+(`TerminalFont` keys, URL target parsing) if none exist yet.
 Done when: `just build` and `just test` pass as before, the iOS app looks unchanged on a phone
 (screenshots UI test, light and dark), and
 `xcodebuild -scheme bergrMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build` succeeds and
@@ -360,7 +458,7 @@ Owns: `HerdrKit/Sources/HerdrKit/TerminalLaunch.swift` (pure: `TerminalApp`, `At
 Tests: argv for local and remote, port handling, federated address, quoting, refusal of unsafe
 addresses, the launch plan per terminal.
 Done when: `swift test` passes and, on this Mac, Ghostty and Terminal.app open attached to a local and
-to a remote agent (Ghostty verified by hand; iTerm2, WezTerm, Kitty by plan tests unless installed).
+to a remote agent (Ghostty checked by hand; iTerm2, WezTerm and Kitty covered by the plan tests unless installed).
 
 ### C. Chat on the Mac: composer, attachments, images (3 to 4 h)
 
@@ -376,14 +474,14 @@ is selectable and copyable.
 
 Owns: `HerdrKit/Sources/KeyStore/*`, `HerdrKit/Tests/KeyStoreTests/*`, `bergr/Keys/*`,
 `bergr/Hosts/*`, `bergr/Terminals/ConnectionAttempt.swift`, `bergr/Terminals/HostSession+Command.swift`,
-`HostSession+Upload.swift`.
+`bergr/Terminals/HostSession+Upload.swift`.
 Work: `.userPresence` on the Mac, a clear "no keychain entitlement" state, import from `~/.ssh`,
 `Host.local` with `ProcessTransport`, local exec and upload, first-launch offer of "This Mac".
 Tests: `Host` decoding with and without `local`, local connector against a fake executable
 (`ProcessTransport` is already used in tests), KeyStore error mapping.
 Done when: a signed build creates and uses a Secure Enclave key, an imported `~/.ssh/id_ed25519`
 connects, "This Mac" lists local agents and a reply reaches one, an unsigned build starts and explains
-why keys are unavailable. iOS behaviour unchanged (`just test`, iOS build).
+why keys are unavailable. iOS behavior unchanged (`just test`, iOS build).
 
 ### E. Notifications (1 to 2 h for option A; +4 to 6 h for option B)
 
@@ -438,7 +536,7 @@ paused; C may find that `ChatView` needs more seams than 0 provided.
 11. **Dock**: normal app with Dock icon plus menu-bar item (recommended), or a setting for
     menu-bar-only (`LSUIElement`)?
 12. **`just mac`**: keep the iPad build beside `just mac-native` for now, or replace it as soon as the
-    native app is usable (memory note says app changes are installed on phone and this Mac).
+    native app is usable (app changes are installed on both the phone and this Mac).
 
 ## Decisions (user, 2026-11-10)
 
@@ -447,5 +545,5 @@ All recommendations accepted: separate bundle id `com.example.bergr.mac`; second
 Enclave keys plus import from `~/.ssh` (ssh-agent later); a "This Mac" machine in v1; terminal attach
 uses the system `ssh` (document it, add copy-public-key and test buttons); launch through a generated
 `.command` script; macOS 26, Apple silicon only; shared MARKETING_VERSION/build number with tags
-`mac-v<version>`; this repo's GitHub releases, tap `MaroonBrian1928/homebrew-tap`, Developer ID cert via
+`mac-v<version>`; this repo's GitHub releases, tap `homebrew-tap` under the same GitHub account, Developer ID cert via
 the API key; Dock icon plus menu-bar item; keep `just mac` (iPad build) and add `just mac-native`.

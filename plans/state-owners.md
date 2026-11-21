@@ -1,9 +1,50 @@
 # State owners: connection attempt, reply delivery, Live Activity session
 
+## Status (checked 2026-11-21)
+- Chunk A files (HostSession.swift edit; ConnectionAttempt.swift and ConnectionAttemptTests.swift created): Done — all three exist under bergr/Terminals/ and bergrTests/.
+- A `HostConnection` / `HostConnector` (live, Context): Done — bergr/Terminals/ConnectionAttempt.swift:6-89 (adds isLocal/isWindows, not in plan).
+- A `ConnectionTiming` (1 s, 30 s, 40 s, 5 s): Done — ConnectionAttempt.swift:91-96.
+- A `ConnectionAttemptOwner` protocol: Partial — exists (ConnectionAttempt.swift:100-111), but machines and layout are separate callbacks, not one `connected:…machines:layout:` call. Shape deviation, no missing behavior seen.
+- A `ConnectionAttempt` class (phases, generation, start, cancel → Task): Done — ConnectionAttempt.swift:117-201.
+- A HostSession `init(connector:timing:)`, `intent`, `pause()`, `resume(keys:)`: Done — HostSession.swift:36-60, 343-360.
+- A `teardown` deleted: Done — no `teardown` symbol left in bergr/Terminals/ (comment only, HostSession.swift:334).
+- A SessionStore `pauseAll`/`resumePaused` via per-session intent: Done — HostSession.swift SessionStore block (~L660-680); no `paused` set left.
+- A signing-key cache stored only while the attempt is current: Done — HostSession.swift:319.
+- A frozen contract symbols: Done — all present: exec (HostSession.swift:102), openExec (:273), terminal(_:), retry/start/stop, uploadImage (bergr/Terminals/HostSession+Upload.swift), SessionStore.existing/ids/pauseAll/resumePaused.
+- A ten named tests: Done — all ten names exist in bergrTests/ConnectionAttemptTests.swift (15 @Test total). Not run (no builds).
+- A must-not-change behavior (backoff 1→30 s, 40 s silence every 5 s, isActive after non-retryable failure, resume skips Face ID): Unclear — source is consistent with it; behavior not run.
+- Contract: RootView and TerminalScreenModel not edited: Unclear — both changed in many later commits for other features (e.g. 2f9f223, 49fa311, 8168e6d); history cannot attribute those to this plan.
+- Chunk B files (ChatView.swift edit; ReplyDelivery.swift and ReplyDeliveryTests.swift created; PendingReplyTests.swift edited): Done — bergr/Chat/ReplyDelivery.swift, bergrTests/ReplyDeliveryTests.swift and PendingReplyTests.swift (42 lines) exist. ChatView.swift has uncommitted working-tree changes, so its committed state may differ.
+- B `ReplyPayload` (text, hasImages, known, arrived, isIn, onScreen): Done — bergr/Chat/ReplyDelivery.swift:7-45 (adds `typed:`, not in plan).
+- B `ReplyTerminal` protocol and TerminalScreenModel conformance: Done — ReplyDelivery.swift:46-59.
+- B `ReplyTiming` values (150 ms, 120 ms, 2.5 s ×2, 10 s, 5 s, 20 s, 3 s): Done — ReplyDelivery.swift:61-74.
+- B `ReplyEnvironment`: Done — ReplyDelivery.swift:76-88 (adds `conversationID`, not in plan).
+- B `ReplyDelivery` phases, sentAt, attempts, epoch: Done — ReplyDelivery.swift:91-112.
+- B `ReplyOutbox` API (shown, send, pushNow, retry, discard, feedChanged, cancelAll): Done — ReplyDelivery.swift:115 on; ChatView calls it at ~L224-225, 341, 357, 584, 1680, 1695-1710, 1738+.
+- B epoch ownership and single outbox-level pushNow task: Done — `pushTask` guard at ReplyDelivery.swift:155; epoch checks through deliver/confirm/monitor.
+- B "record wasQueued at send": Done (equivalent) — no `wasQueued` symbol; phase is set at send (`working ? queued/pushed : sending`, ReplyDelivery.swift:~138-141) and pushNow filters `phase == .queued`.
+- B `Pending` and `@State pending` removed from ChatView: Done — no Pending type or typealias; `@State private var outbox = ReplyOutbox()` at ChatView.swift:25.
+- B waitForScreen / waitUntilStopped / confirmEnter moved out of ChatView: Partial — reply waits moved; `waitForScreen` remains in ChatView (~L1686) for the Codex answer flow (~L964, 1008). No waitUntilStopped or confirmEnter left in ChatView.
+- B thirteen named tests: Done — all thirteen exist in bergrTests/ReplyDeliveryTests.swift. Not run.
+- B visual check of the pending bubble (light/dark, narrow phone, Duo): Unclear — manual check; not verifiable from source.
+- Chunk C files: Done, with path change — LiveActivityController.swift and LiveActivitySession.swift live under bergrIOS/Background/ (plan says bergr/Background/). LiveActivitySessionTests.swift is in bergrTests/.
+- C `ActivityHandle` and live handle wrapper: Done — bergrIOS/Background/LiveActivitySession.swift:6-48.
+- C `LiveActivityEnvironment` (request, relay, beginBackgroundTime, now, sleep, note, static live): Done — LiveActivitySession.swift:50-89.
+- C `LiveActivitySession` (Mode/Push, show, adopt, end, 2 s throttle, registration backoff 0/2/5 s): Done — LiveActivitySession.swift:91-270.
+- C controller shrink (activity, lastSent, pending, tokenTask, post, registerForPush/unregisterFromPush): Done — none remain in LiveActivityController.swift; POST goes through environment.live.relay.
+- C controller keeps `relaySeed`: Partial — `relaySeed` is still stored on the controller (LiveActivityController.swift:320-332); plan moves it to the session.
+- C `reconcile` routes to session.show / end / adopt: Done — LiveActivityController.swift:183-187 (adopt), 294-304 (end, show).
+- C thirteen named tests: Done — all thirteen exist in bergrTests/LiveActivitySessionTests.swift. Not run.
+- Decision: outbox keeps chat lifetime, `cancelAll` on disappear: Done — ChatView.swift:224-225 (`outbox.cancelAll()` in onDisappear).
+- Decision: pause is idempotent: Done — HostSession.swift:349-352 (`guard intent == .running, isActive`).
+- Decision: DELETE after an abandoned registration, ordered after its POST: Done — LiveActivitySession.swift:114 (flag) and :192 (`relay("DELETE")`).
+- Decision: delivery monitor reads agent state fresh from the session: Done — agentState closure in ChatView `prepared()` reads `session.terminal(address)`.
+- Decision: one ConnectionAttempt per start/retry: Done — HostSession.start creates one attempt; retry = stop + start (HostSession.swift:343-346).
+
 Before external beta. Three independent chunks (A, B, C), one agent and worktree each, no shared file.
 The app target is MainActor by default; all new types are main-actor types. `bergr/` and `bergrTests/`
 are synchronized folders (new files need no project edit). `TerminalScreenModel.automate` stays and is
-the only way automated keys are typed. Source: audit /private/tmp/bergr-implicit-state-machines.md.
+the only way automated keys are typed. Source: an implicit-state audit at `/private/tmp/bergr-implicit-state-machines.md` (no longer present; the decisions below are the record).
 
 Decisions (made by the user): outbox keeps the chat view's lifetime (+ `cancelAll` on disappear);
 pause is idempotent; DELETE to the relay after an abandoned registration (ordered after its POST);
@@ -150,7 +191,7 @@ second tap while it runs is ignored. Record `wasQueued` at send so pushNow picks
 Moves out of ChatView: `Pending` → ReplyPayload (keep `typealias Pending = ReplyPayload` if cheaper for
 tests); `@State pending` → `@State private var outbox = ReplyOutbox()`; shownPending → outbox.shown;
 pushNow + waitForScreen, waitUntilStopped, confirmEnter, the key part of send, confirmPending + 21 s image
-task, watchDelivery, retry → outbox/driver. The view keeps: draft trimming, `!` normalisation, canType,
+task, watchDelivery, retry → outbox/driver. The view keeps: draft trimming, `!` normalization, canType,
 setWatching(false), clearing draft/attachments, sent += 1, demoUserSaid, scroll, upload-failure draft
 restore (only if the box is still empty) via onUploadFailure, `pushes += 1`, rendering from `reply.phase`,
 `.onChange(of: feed.items)` → `outbox.feedChanged`, `withAnimation(motion)` around outbox calls.

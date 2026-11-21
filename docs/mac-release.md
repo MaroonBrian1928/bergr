@@ -1,11 +1,12 @@
 # Releasing the Mac app
 
 `just mac-release` builds, signs, notarizes and packages the native Mac app (plan: `plans/mac-native.md`, section 2.7).
-Everything below the one-time steps is a recipe line you run yourself; nothing here runs in CI.
+You run every step by hand; nothing here runs in CI.
 
 ## One-time steps (you, in this order)
 
-1. **App ID.** In the developer portal, create `com.example.bergr.mac` with Keychain Sharing.
+1. **App ID.** In the developer portal, create `<prefix>.bergr.mac` (for example `com.example.bergr.mac`) with
+   Keychain Sharing. `<prefix>` is your `BERGR_BUNDLE_ID_PREFIX`.
 2. **Developer ID Application certificate.** Create it in Xcode (Settings, Accounts, Manage Certificates) or the
    portal, so it sits in your login keychain (`security find-identity -v -p codesigning` lists it). Then a
    Developer ID provisioning profile for the App ID, or cloud-managed Developer ID signing, which needs the
@@ -27,9 +28,9 @@ just mac-release           # archive, export, DMG, notarize, staple, appcast int
 just mac-release true      # the same, then gh release create mac-v<version> (DMG + appcast.xml)
 ```
 
-The version is `MARKETING_VERSION` (shared with iOS); the tag is `mac-v<version>`. Afterwards copy
+The version is `MARKETING_VERSION` (shared with iOS); the tag is `mac-v<version>`. Afterwards, copy
 `.build/mac/bergr.rb` (made from `scripts/homebrew/bergr.rb`) to `Casks/bergr.rb` in the tap and push.
-Check the DMG on a second Mac account: `spctl -a -t open --context context:primary-signature -v Bergr-<version>.dmg`.
+Check the DMG on a second Mac user account: `spctl -a -t open --context context:primary-signature -v Bergr-<version>.dmg`.
 
 The feed is `https://github.com/MaroonBrian1928/bergr/releases/latest/download/appcast.xml`
-(`SUFeedURL`), so every release carries its own `appcast.xml`.
+(`SUFeedURL` in `Config/Mac-Info.plist`), so every release carries its own `appcast.xml`.

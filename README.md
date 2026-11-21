@@ -21,11 +21,13 @@ your device, sums up the work, so you read one line instead of a screen of tool 
 
 ### On-device intelligence
 
-Written by Apple's on-device model (Foundation Models). The text never leaves the device. Without
+Apple's on-device model (Foundation Models) writes these. The text never leaves the device. Without
 Apple Intelligence, Bergr works the same and leaves the summaries out.
 
 - **Tool-run summaries**: long tool output becomes one line in the chat, with the full output a
   tap away
+- **What it's doing**: one line per working agent, saying what it is doing now, with a
+  "What's It Doing?" sheet for more
 - **Reply suggestions**: up to two likely next replies when an agent finishes a turn; tapping one
   fills the reply field
 - **Command explainer**: before you approve a command that is hard to undo, one sentence on what
@@ -48,8 +50,10 @@ Apple Intelligence, Bergr works the same and leaves the summaries out.
 
 - **One list across your machines**, sorted by what needs you (needs you, finished, working, idle)
   or grouped by machine, with Claude Code, Codex and Antigravity marked by their logos and their
-  sub-agents counted; machines linked to another machine's herdr-core show too
-- **A chat for each agent**: replies as they stream in, tool runs, plans, images and sub-agents;
+  sub-agents counted. A machine reached both directly and through another machine's herdr-core
+  shows once
+- **A chat for each agent**: replies as they stream in, tool runs, plans, images, sub-agents and
+  background commands the agent left running (these also show in the Agents list);
   queue a reply while it works or send it now, slash commands and skills from anywhere in a
   message, `!` shell commands, and the model, effort and permission mode from the agent's own
   model list
@@ -103,8 +107,8 @@ Apple Intelligence, Bergr works the same and leaves the summaries out.
 - **No account and no tracking**. Bergr has no server of its own for your content
 - **Pair an iPhone from the Mac** with a QR code: only the phone's public key crosses
 
-No server yet? **Try the Demo** on the first screen opens a built-in machine with agents to chat
-with and answer, all simulated on the device.
+No server yet? Tap **Try the Demo** on the first screen to open a built-in machine with agents to
+chat with and answer. Everything in it is simulated on the device.
 
 <p align="center">
   <picture>
@@ -152,7 +156,7 @@ cd bergr
 just ghostty   # builds libghostty-vt into HerdrKit/Frameworks
 just sim       # runs the app in the simulator
 just test      # HerdrKit tests
-just video     # the README video and screenshots, from the demo machine
+just video     # the README video, from the demo machine (App Store shots: just screenshots)
 ```
 
 To run it on your own iPhone, sign with your team: set `BERGR_TEAM` and `BERGR_BUNDLE_ID_PREFIX`
@@ -161,14 +165,14 @@ lists the other commands.
 
 ## Push alerts
 
-Push alerts are optional (Settings → Push alerts). When they're on, Bergr offers to install a small
+Push alerts are optional (Settings → When Bergr isn't open → Notifications). When they're on, Bergr offers to install a small
 helper, `bergr-notify`, on each machine: a Python script that runs as a user service (systemd on
 Linux, a LaunchAgent on macOS, a Scheduled Task on Windows), follows `hc events`, and sends an
 alert when an agent finishes a turn, hits an error or needs you; titles name the machine, and
 alerts that need you are ordinary notifications while finished ones are passive. The alert text is
 encrypted on the machine (Python standard library only, HMAC-SHA256 keystream plus tag) with a key
-only your phone holds, kept in its keychain; the relay in [`relay/`](relay) (a Cloudflare Worker)
-and Apple only pass an opaque blob along.
+that only your phone holds, kept in its keychain. The relay in [`relay/`](relay) (a Cloudflare
+Worker) and Apple only pass an opaque blob along.
 
 Building it yourself, push alerts need your own relay and APNs key: deploy `relay/` as its
 README describes, and point the app at it with the `bergr.push.relay` user default.
@@ -181,5 +185,6 @@ Bergr is a fork of [Hirte](https://github.com/glattziehen/hirte) by Pavel Zwersc
 Apache-2.0. Bergr's changes are listed in [NOTICE](NOTICE) and in the git history.
 
 Apache-2.0, see [LICENSE](LICENSE). Bergr ships Ghostty (libghostty-vt), Citadel, SwiftNIO (with
-NIO Transport Services) and other open-source code, the JetBrains Mono and Comic Mono fonts, and themes from
-iTerm2-Color-Schemes; their licenses are in the app under Settings → Open-Source Licenses.
+NIO Transport Services) and other open-source code, the JetBrains Mono and Comic Mono fonts, and
+themes from iTerm2-Color-Schemes. Their licenses are in the app under Settings → Open-Source
+Licenses.

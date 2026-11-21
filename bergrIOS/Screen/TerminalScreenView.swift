@@ -161,6 +161,14 @@ struct TerminalScreenView: View {
                                   background: theme.color(theme.background)) { session.retry(keys: keys) }
                         .transition(.opacity)
                 }
+                // Typing a dropped channel never confirmed: it may or may not have arrived, so ask.
+                if !chat, model.ambiguousInput > 0 {
+                    UnconfirmedInputBar(count: model.ambiguousInput, preview: model.ambiguousPreview,
+                                        text: theme.color(theme.foreground),
+                                        background: theme.color(theme.background),
+                                        resend: { model.resendAmbiguous() }, discard: { model.discardAmbiguous() })
+                        .transition(.opacity)
+                }
             }
         }
         .navigationTitle(pane == nil ? terminal?.nameInSpace ?? address : "")
@@ -472,5 +480,38 @@ private struct LinkedChatPrompt: View {
         .background(.regularMaterial, in: .rect(cornerRadius: 20))
         .padding(.horizontal, 16)
         .padding(.bottom, 16)
+    }
+}
+
+
+/// "3 keys may not have arrived: ls -la⏎" with Resend and Discard. A dropped connection can't say
+/// whether they got there, and sending a command twice can do harm, so the person decides.
+private struct UnconfirmedInputBar: View {
+    let count: Int
+    let preview: String
+    let text: Color
+    let background: Color
+    let resend: () -> Void
+    let discard: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "questionmark.circle").foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(count == 1 ? "A key may not have arrived" : "\(count) keys may not have arrived")
+                    .font(.footnote.weight(.semibold))
+                if !preview.isEmpty {
+                    Text(preview).font(.caption.monospaced()).lineLimit(1).opacity(0.7)
+                }
+            }
+            Spacer(minLength: 4)
+            Button("Discard", action: discard).buttonStyle(.bordered).controlSize(.small)
+            Button("Resend", action: resend).buttonStyle(.borderedProminent).controlSize(.small)
+        }
+        .foregroundStyle(text)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(background)
+        .accessibilityElement(children: .contain)
     }
 }

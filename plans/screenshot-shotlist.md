@@ -1,5 +1,31 @@
 # App Store screenshots and preview video: shot list
 
+## Status (checked 2026-11-21)
+- Demo: three machines: Done — `DemoMachine` has three cases in HerdrKit/Sources/HerdrKit/DemoScript.swift; DemoShotsTests reads rows t3, t11, t21.
+- Demo: named agents and logos: Done — DemoScript.swift has two claude-code, two codex, one antigravity; logo imagesets exist in BergrLiveActivity/Assets.xcassets and bergr/Agents/AgentLogo.swift.
+- Demo: fixed on-device text: Done — DemoChat.swift `summaries`, `chips`, `digest`, `explanation(for:)`, `changesSummary`, applied by `seed()`; routing of the away card through OnDeviceTextWriting not traced.
+- Demo: one story (website, shop-api, infra; the two kept beats): Done — `DemoBeat` folders in DemoScript.swift; "Run the database migration?" and "Upgraded Postgres to 18" (`timeline`).
+- Demo: status bar 9:41, Wi-Fi, full battery: Done — scripts/simulator.sh line 44 sets 9:41, Wi-Fi and battery level 100 (state "discharging"); screenshots.sh clears it after the run.
+- Conversation A (blocked migration, shop-api): Done — DemoScript `t3`: blocked, "Run the database migration?", msg "Add order totals endpoint".
+- Conversation B (finished dark mode turn): Done — DemoScript `t1`: done, "Add a dark mode toggle", msg "20 files changed".
+- Conversation C (Codex, working, 2 sub-agents): Done — DemoScript `t11`: working, "Running pg_upgrade checks"; DemoChat `runningSubagents` returns 2.
+- Conversation D (Codex, blocked, worktree): Partial — `t12` is blocked on the cache question and its branch `codex/cache-images` matches (DemoChat `repos`), but its folder is `shop-api-cache-images`, not `shop-api`, and there is no separate title.
+- Conversation E (Antigravity, idle): Done — DemoScript `t21`: idle, "Fix flaky checkout test"; folder is the Windows website path.
+- 1. Agents list: Done — testListChatChangesUsage (DemoShotsTests) saves "01-agents"; asserts rows t3, t11, t21 and the "Wants to run the orders migration" card. Groupings and "· worktree" label (Worktrees.swift) not asserted by the test.
+- 2. Chat with on-device summaries: Done — testListChatChangesUsage saves "02-chat-summaries"; asserts the three summaries and reply chips (DemoChat `summaries`, `chips`); context 80,000 of 200,000 is about 40%.
+- 3. Answer card: Done — testAnswerCards saves "03-answer-card"; asserts the command and "don't ask again".
+- 4. Risky command, explained: Done — testAnswerCards saves "04-dangerous-command"; asserts "Dangerous" and the explanation sentence. Confirm-before-Yes not asserted.
+- 5. Lock Screen: Partial — Live Activity is drawn by scripts/widget-render (screenshots.sh copies "lock-live-activity"), but SiteWidgetFixture.swift shows "2 need you, 1 working, 1 done", not "1 needs you · 2 working"; the notification is never rendered (only the "1 Yes · 2 No" text in Shared/AnswerCategory.swift); testLockScreenLiveActivity is skipped by screenshots.sh.
+- 6. Usage: Partial — testListChatChangesUsage saves "06-usage" and asserts only "Current session"; the test keeps the default 24-hour range, not "7 days". Values 62 / 41 / 18 and per-agent 40% / 73% are in DemoChat.swift. "At this rate… 15:10" is computed from the clock (UsageHistory.swift), so the time is Unclear.
+- 7. Reply with a scan or your voice: Partial — testCodexQuestionAndLiveRun saves "07-codex-reply" with the typed draft and attachment (`-bergr.demoAttach`); no test taps the mic (Dictation.swift listening state); testLimitBarAndAttachMenu asserts only "Scan Document" (saves "08-attach-menu").
+- 8. Widgets and Focus: Partial — home-widgets rendered by scripts/widget-render from SiteWidgetFixture.swift; the Agents widget counts and A/D names match, but the Usage widget reads "Limit at 3:10 PM" and "Resets Thu 9:00 AM", not "Limit at 15:10".
+- 9. Changes: Done — testListChatChangesUsage saves "09-changes" and "09b-changes-diff"; the summary sentence is in DemoChat `changesSummary`; branch `feature/dark-mode` and 20 tracked files in DemoChat `repos`; "Last test run" section in bergr/Changes/ChangesView.swift. Not in the App Store set (screenshots.sh); site-shots.sh uses it.
+- 10. iPad and Mac (iPad part): Partial — DemoPadShotsTests (p01 to p06) covers the list, answer card, dangerous command, side-by-side (`Open Beside`), usage and Codex reply; the pad captions in screenshots.sh differ from this plan; "C streaming with a tool row" not checked.
+- 10. iPad and Mac (Mac part): Not started — no UI test or script captures the Mac window or the menu-bar popover; "Pair iPhone" sheet exists (bergr/Pairing/PairPhoneView.swift) but is not shot.
+- Preview video (15 to 30 s): Partial — testVideoTour (class DemoTourTests, bergrUITests.swift) makes the README video; it has no "Show me what changed" tap, no Scan Document step and no end card; scripts/video.sh frames it for the README.
+- Light pass of frames 1 to 3 for the README: Partial — screenshots.sh and DemoShotsTests accept an appearance, but they render all eight frames, not only 1 to 3.
+- Things not to stage (30-day range): Done — no test selects 30 days; premise is out of date: bergr/Usage/UsageView.swift has a "30 days" option, offered once a week of readings exists.
+
 Ten frames. Frames 1 to 8 are the App Store set, in this order (the first three show in search
 results, so they carry the pitch). Frames 9 and 10 are for the site and the iPad and Mac slots.
 Captions are at most six words; the subcaption is optional and goes under it in the frame, as
@@ -11,8 +37,8 @@ set, with a light pass of frames 1 to 3 for the README.
 ## What the demo needs, in general
 
 - **Three machines**, so "your machines" reads at a glance: `studio` (a Mac), `buildbox` (Linux),
-  `winbox` (Windows). Today's demo has one.
-- **Named agents with their logos**: two Claude Code, two Codex, one Antigravity. Today's demo
+  `winbox` (Windows). The current demo has one.
+- **Named agents with their logos**: two Claude Code, two Codex, one Antigravity. The current demo
   rows are a generic "agent".
 - **Fixed on-device text.** Tool summaries, reply suggestions, titles, the command explanation,
   the changes summary and the away digest are written by Apple's on-device model. It is not
@@ -20,7 +46,7 @@ set, with a light pass of frames 1 to 3 for the README.
   these strings itself (every one of them goes through `OnDeviceTextWriting`, which tests already
   fake). The exact strings to stage are given per frame.
 - **One story across the frames**: a small shop. Projects `website`, `shop-api` and `infra`, as in
-  `DemoScript.swift` now. Keep the existing "Run the database migration?" and "Upgraded Postgres
+  `HerdrKit/Sources/HerdrKit/DemoScript.swift` now. Keep the existing "Run the database migration?" and "Upgraded Postgres
   to 18" beats; they already read well.
 - Status bar: 9:41, full battery, Wi-Fi (`simctl status_bar`, as the script does).
 

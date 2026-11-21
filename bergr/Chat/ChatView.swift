@@ -346,7 +346,9 @@ struct ChatView: View {
         let all = shownRows(allRows)
         let state = self.state
         let canType = self.canType
-        let tools = ToolContext(liveRunID: liveRunID, agents: feed.subagents, lastRowID: allRows.last?.id)
+        // Running ones show at the bottom, under the working line; finished ones stay with the step that started them.
+        let tools = ToolContext(liveRunID: liveRunID, agents: feed.subagents.filter { $0.state != .running },
+                                lastRowID: allRows.last?.id)
         let loose = search == nil ? looseSubagents : []
         let hidden = search == nil ? max(0, all.count - rowLimit) : 0
         let shown = hidden > 0 ? Array(all.suffix(rowLimit)) : all
@@ -548,10 +550,6 @@ struct ChatView: View {
     @ViewBuilder
     private func trailingRows(shownReplies: [ReplyDelivery], loose: [ChatFeed.SubagentInfo], noMatches: Bool,
                               state: String?) -> some View {
-        // Sub-agents whose starting tool call isn't in the conversation (yet).
-        if !loose.isEmpty {
-            SubagentGroup(agents: loose, palette: palette)
-        }
         // A sent reply shows at once; when the conversation has it, the real one takes
         // its place without moving, and this one goes in the same instant.
         ForEach(shownReplies) { reply in
@@ -628,6 +626,12 @@ struct ChatView: View {
                 // Fades in by drawing alone, and makes way for the reply at once.
                 .modifier(ArriveIn(active: true, rise: false))
                 .transition(.identity)
+        }
+        // What's running now (sub-agents, background commands), under the working line where
+        // the eye already is; still shown after the turn ends while they run.
+        if !loose.isEmpty {
+            SubagentGroup(agents: loose, palette: palette, open: loose.count <= 5)
+                .transition(.opacity)
         }
         if noMatches {
             Text("No matches")
@@ -1193,15 +1197,11 @@ struct ChatView: View {
         return rows
     }
 
-    /// Sub-agents that no tool call in the conversation started, while they still run. A finished
-    /// one whose call isn't loaded (it was before a compaction, or beyond the backlog) has nowhere
-    /// to sit, and piling those at the end of every visit only buries the conversation.
+    /// Sub-agents and background commands still running: listed at the bottom of the chat. A
+    /// finished one sits with the tool call that started it (one whose call isn't loaded has
+    /// nowhere to sit, and piling those at the end of every visit only buries the conversation).
     private var looseSubagents: [ChatFeed.SubagentInfo] {
-        let running = feed.subagents.filter { $0.state == .running }
-        // Mostly none: then the conversation isn't walked (this runs on every streamed token).
-        guard !running.isEmpty else { return [] }
-        let tools = Set(feed.items.filter { if case .tool = $0.kind { true } else { false } }.map(\.id))
-        return running.filter { $0.parent.map { !tools.contains($0) } ?? true }
+        feed.subagents.filter { $0.state == .running }
     }
 
     /// What every tool row needs, worked out once per body rather than per row.
@@ -1847,7 +1847,14 @@ private struct UserBubble: View {
 struct SubagentGroup: View {
     let agents: [ChatFeed.SubagentInfo]
     let palette: ChatPalette
-    @State private var open = false
+    @State private var open: Bool
+
+    /// `open`: each one listed from the start (the running ones at the bottom of the chat).
+    init(agents: [ChatFeed.SubagentInfo], palette: ChatPalette, open: Bool = false) {
+        self.agents = agents
+        self.palette = palette
+        _open = State(initialValue: open)
+    }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static func title(_ agents: [ChatFeed.SubagentInfo]) -> String {
@@ -1884,7 +1891,7 @@ struct SubagentGroup: View {
                             ProgressView().controlSize(.mini).frame(width: 16)
                         }
                     }
-                    .frame(minHeight: PlatformMetrics.controlHeight)
+                    .frame(minHeight: 30)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1900,7 +1907,7 @@ struct SubagentGroup: View {
             }
         }
         .foregroundStyle(palette.secondary)
-        .padding(.vertical, -max(0, (PlatformMetrics.controlHeight - 24) / 2)) // Keep the control from adding air between messages.
+        // Compact rows, no negative padding: pulled up, they sat on top of a step's output box.
     }
 }
 
@@ -1976,7 +1983,7 @@ private struct SubagentLine: View {
             }
             .frame(width: 16)
         }
-        .frame(minHeight: PlatformMetrics.controlHeight)
+        .frame(minHeight: 30)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(agent.isShell ? "Background command" : "Sub-agent") \(agent.name), \(agent.state.rawValue)\(detail)")

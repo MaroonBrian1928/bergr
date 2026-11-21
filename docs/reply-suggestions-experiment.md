@@ -2,10 +2,10 @@
 
 Historical initial spot checks; superseded by the [grounded evaluation](reply-suggestions-grounding.md).
 
-2026-11-12, local Apple Foundation Models on this Mac. Three synthetic coding
+Run on 2026-11-12 with local Apple Foundation Models on this Mac. Three synthetic coding
 conversations; these are prompt spot checks, not a quality benchmark.
 
-The existing writer called `OnDeviceText.clean`, which takes only the first line.
+The original writer called `OnDeviceText.clean`, which takes only the first line.
 Even when the model generated three replies, only one reached the chip parser.
 The suggestions also received no earlier user messages, so they could not see
 constraints such as "don't commit yet".
@@ -24,11 +24,13 @@ In this run, revised generation took 0.99–1.18 seconds. The original first cas
 suggested committing and deploying despite the user's constraint (which it had
 not been given). The revision respected that constraint. Results vary between
 runs; the model can still produce weak, duplicate, or invalid suggestions.
-The app requests two useful alternatives and keeps its existing behavior of
-showing no suggestions when the model is unavailable. It does not pad the list
-with generic fallback replies.
+The revision asked for two useful alternatives. When the model is unavailable,
+the app shows no suggestions; it does not pad the list with generic fallback
+replies. The [grounded approach](reply-suggestions-grounding.md) later replaced
+this prompt.
 
-Run the current broader comparison from the repository root with Apple Intelligence enabled:
+To run the broader comparison (the 0.3.0 baseline against the production code, on the
+fixtures in `scripts/fixtures/`), run this from the repository root with Apple Intelligence enabled:
 
 ```sh
 swiftc -parse-as-library Shared/OnDeviceText.swift \
@@ -39,4 +41,5 @@ swiftc -parse-as-library Shared/OnDeviceText.swift \
 ```
 
 The script uses the production instructions, prompt builder, response cleanup,
-and chip parser, and prints raw responses plus the number of usable chips.
+and chip parser. For each run it prints the replies and any failed checks, then a
+pass total per variant.

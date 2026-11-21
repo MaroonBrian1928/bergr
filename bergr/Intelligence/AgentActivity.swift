@@ -23,9 +23,10 @@ final class AgentActivity {
     static let detailWindow = 30
 
     static let lineInstructions = """
-        You describe what a coding agent is doing right now, from the end of its session. Answer \
-        with one plain-text phrase of at most 12 words that starts with a verb in the -ing form \
-        ("Running the tests after fixing the parser"). No markdown, no quotes, no trailing period.
+        You describe what a coding agent is doing right now, using only what the end of its session \
+        shows: its last steps and messages. Answer with one plain-text phrase of at most 12 words \
+        that starts with a verb in the -ing form and names the actual files, commands or task from \
+        the session. Never invent work the session doesn't show. No markdown, no quotes, no period.
         """
     static let detailInstructions = """
         You explain to the agent's owner what a coding agent is doing, from the end of its session. \

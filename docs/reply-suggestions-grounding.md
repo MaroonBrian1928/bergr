@@ -2,7 +2,7 @@
 
 The 0.3.0 prompt forced two replies and encouraged more checks after completed
 work. In practice, that often produced duplicate or unnecessary tests and reviews.
-The three original prompt spot checks did not cover those failures adequately.
+The [earlier spot checks](reply-suggestions-experiment.md) did not cover those failures well.
 
 The replacement uses one on-device guided-generation request. It restates the
 user's request, classifies the latest agent response, quotes its evidence, and
@@ -14,7 +14,7 @@ returns either actual offered choices or one pending action. Validation then:
 - copies question options from the actual response;
 - limits a pending action to one chip instead of two paraphrases;
 - rejects unrequested publishing or cancellation, and can trim an appended
-  unrequested action when the remaining fragment names the user's requested work.
+  unrequested action, keeping the part that names the user's requested work.
 
 The latest user request is supplied separately so it cannot be displaced by a
 long run of progress messages. All classification and generation run locally;
@@ -54,7 +54,8 @@ can still misclassify a message or produce an unsupported reply; validation then
 prefers no chip. The English pending-work and permission checks are conservative,
 and implicit permissions or other languages may cause useful replies to be hidden.
 
-Run from the repository root on a Mac with Apple Intelligence enabled:
+Run from the repository root on a Mac with Apple Intelligence enabled. The optional
+argument is the number of repetitions per scenario (default 3):
 
 ```sh
 swiftc -parse-as-library Shared/OnDeviceText.swift \

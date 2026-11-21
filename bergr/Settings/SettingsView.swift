@@ -12,6 +12,7 @@ struct SettingsView: View {
     @AppStorage(TerminalFont.storageKey) private var fontFamily = TerminalFont.jetBrainsMono
     @AppStorage(Appearance.key) private var appearance = Appearance.system
     /// Shake the phone to open Diagnostics (see ShakeToDiagnostics).
+    @AppStorage(EchoPredictor.settingKey) private var predictTyping = false
     @AppStorage("bergr.shakeForDiagnostics") private var shakeForDiagnostics = true
     @AppStorage(TerminalTheme.lightKey) private var lightTheme = TerminalTheme.defaultLight
     @AppStorage(TerminalTheme.darkKey) private var darkTheme = TerminalTheme.defaultDark
@@ -320,10 +321,18 @@ struct SettingsView: View {
                     }
                 }
                 .frame(minHeight: 44)
+                Toggle(isOn: $predictTyping) {
+                    Label {
+                        Text("Predict Typing on Slow Connections")
+                    } icon: {
+                        SettingsIcon("keyboard.badge.ellipsis", color: .green)
+                    }
+                }
+                .frame(minHeight: 44)
             } header: {
                 Text("Appearance")
             } footer: {
-                Text("The terminal uses the light or dark theme to match the appearance. Pinch a terminal to change the size there too.")
+                Text("The terminal uses the light or dark theme to match the appearance. Pinch a terminal to change the size there too.\n\nPredict Typing shows what you type at a shell prompt before the machine echoes it, underlined, on connections slower than 120 ms. Never at password prompts or in full-screen programs.")
             }
 
             Section {

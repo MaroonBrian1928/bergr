@@ -1,5 +1,42 @@
 # Site copy for bergr.dev
 
+## Status (checked 2026-11-21)
+- Source location (note at top: "not in this repository"): Changed — the live source is the sibling bergr-site repo (index.html, privacy.html).
+- Hero headline "The shepherd for your agent herd.": Done — index.html `<h1>` matches.
+- Hero subhead: Changed — site says "See which coding agents need you, then pick up the conversation in a chat view on iPhone, iPad or Mac."
+- Hero supporting line: Changed — site says "Enhanced with on-device Apple Intelligence." and "Connects to herdr-core over SSH."
+- Hero primary button: Changed — site says "Coming to the App Store" (app not listed), not "Download on the App Store".
+- Hero secondary link: Changed — site says "Watch the demo", not "Try the built-in demo, no server needed".
+- Hero visual: Changed — site uses a looping background video and a live question card with Yes/No, not a clip of frames 1 to 3.
+- 1. On-device headline "It reads the output so you don't have to.": Done — matches.
+- 1. On-device body: Changed — site keeps the core sentences, adds "The full output stays a tap away" and "Tap a suggestion to fill the reply field", and drops "so the text never leaves your device".
+- 1. On-device small print: Done — same wording (site writes the brand as lowercase "bergr").
+- 2. Answers headline "A question becomes a button.": Done — matches.
+- 2. Answers body: Changed — site rewrites it and says "Reply to a Codex question from the notification and it answers the question", which contradicts the plan's "Do not write" note. bergr/Background/AnswerFlow.swift sends from the notification when Codex's composer can be driven and falls back to the chat, so the site is closer to the code; live behaviour is untested.
+- 3. Usage headline "Know when you'll hit the limit.": Done — matches.
+- 3. Usage body: Changed — site says charts cover "24 hours, 7 days or 30 days"; the plan says 24 hours or 7 days and lists "30-day charts" as a claim to leave out.
+- 4. Say it headline "Reply without a keyboard.": Done — matches.
+- 4. Say it body: Done — identical wording.
+- 5. Stays with you headline "Close the app. Keep the herd in view.": Done — matches.
+- 5. Stays with you body: Done — identical wording.
+- 6. See the work headline "Check the diff before you say yes.": Done — matches.
+- 6. See the work body: Done — identical wording.
+- 7. Native headline "One app, three sizes.": Done — matches.
+- 7. Native body: Changed — site adds "On iPhone, every agent on every machine is one list"; the iPad, Mac and QR sentences match.
+- Privacy strip headline "Your machines. Your keys. Your device.": Done — matches.
+- Privacy strip body: Changed — site keeps the three sentences and adds the Face ID, host-key and VPN sentences plus an Apache-2.0 sentence.
+- Privacy strip link "What the relay stores, and nothing else": Done — link text present; href is privacy.html (file exists in bergr-site).
+- Closing CTA headline "Lead the herd from anywhere.": Done — matches.
+- Closing CTA line: Changed — site says "bergr isn't on the App Store yet. Until it is, build it from source…".
+- Closing CTA primary button "Download on the App Store": Changed — no App Store button in the CTA; it offers "Build it yourself" and "Source on GitHub".
+- Closing CTA secondary link "Source on GitHub": Done — present.
+- Footer line: Changed — site says "Open source, Apache-2.0. Not affiliated with Anthropic, OpenAI, Google, Apple or the herdr project."; no "based on Hirte" anywhere on the site.
+- Claim to leave out "30-day charts": Changed — the site says charts cover "30 days" (index.html, usage section).
+- Claim to leave out "AI command suggestions": Not used — the site has no such claim.
+- Claim to leave out "Hands-free mode": Not used — no such claim on the site.
+- Claim to leave out "Summaries on every alert": Not used — no such claim on the site.
+- Claim to leave out "Pricing": Not used — no price or "free" wording on the site.
+
 The site's source is not in this repository (the README and the App Store listing only link to
 bergr.dev and bergr.dev/privacy.html), so this is the copy on its own. Every claim here was checked
 against the code; the file named under each section is where it lives.

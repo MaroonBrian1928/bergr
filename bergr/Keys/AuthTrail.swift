@@ -40,6 +40,16 @@ struct AuthTrailView: View {
     var shakeToggle = false
     @AppStorage("bergr.shakeForDiagnostics") private var shakeForDiagnostics = true
 
+    private var terminals: [String: TerminalStats.Summary] { TerminalStats.shared.terminals }
+
+    private func responsivenessText(_ s: TerminalStats.Summary) -> String {
+        var parts: [String] = []
+        if let median = s.median { parts.append("typical \(median.latencyText)") }
+        if let p95 = s.p95 { parts.append("slow \(p95.latencyText)") }
+        parts.append("\(s.samples) keys")
+        return parts.joined(separator: " · ")
+    }
+
     var body: some View {
         List {
             if shakeToggle {
@@ -50,6 +60,21 @@ struct AuthTrailView: View {
                 }
             }
             ProblemReportSection(form: report, lines: lines)
+            Section("Terminal Responsiveness") {
+                if terminals.isEmpty {
+                    Text("No typing measured yet.").foregroundStyle(.secondary)
+                }
+                ForEach(terminals.sorted { $0.value.label < $1.value.label }, id: \.key) { _, s in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(s.label)
+                        Text(responsivenessText(s)).font(.footnote).foregroundStyle(.secondary)
+                        if s.peakQueuedBytes > 0 {
+                            Text("Peak queued output \(max(1, s.peakQueuedBytes / 1024)) KB")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
             if lines.isEmpty {
                 Text("Nothing yet. Face ID unlocks and app problems appear here.").foregroundStyle(.secondary)
             }

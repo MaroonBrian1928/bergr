@@ -49,6 +49,16 @@ final class TerminalCanvasView: UIView, UITextInput {
             setNeedsDisplay()
         }
     }
+    /// Speculative local echo (see EchoPredictor): drawn dimmed and underlined over the cells.
+    var prediction: EchoPredictor.Prediction? {
+        didSet {
+            guard prediction != oldValue else { return }
+            let g = geometry()
+            for row in [oldValue?.row, prediction?.row] {
+                if let row { setNeedsDisplay(lineRect(row, g)) }
+            }
+        }
+    }
     /// Cells that fit at the current font size; reported when they change.
     var onGridSize: ((Int, Int) -> Void)?
     var onFontSize: ((CGFloat) -> Void)?
@@ -349,6 +359,9 @@ final class TerminalCanvasView: UIView, UITextInput {
         if let cursor = screen.cursor, cursor.y < screen.lines.count {
             drawCursor(cursor, origin: g.origin, cellWidth: g.cellWidth, cellHeight: g.cellHeight, fonts: g.fonts, in: context)
         }
+        if let prediction, prediction.row < screen.lines.count {
+            drawPrediction(prediction, geometry: g, in: context)
+        }
         if watching {
             let cells = CGRect(
                 x: g.origin.x, y: g.origin.y,
@@ -361,6 +374,22 @@ final class TerminalCanvasView: UIView, UITextInput {
         if let thumb = scrollbarThumb(screen.scrollbar) {
             UIColor(screen.foreground).withAlphaComponent(0.45).setFill()
             UIBezierPath(roundedRect: thumb, cornerRadius: thumb.width / 2).fill()
+        }
+    }
+
+    private func drawPrediction(_ prediction: EchoPredictor.Prediction, geometry g: Geometry, in context: CGContext) {
+        let top = g.origin.y + CGFloat(prediction.row) * g.cellHeight
+        let color = UIColor(screen.foreground).withAlphaComponent(0.5)
+        let attributes: [NSAttributedString.Key: Any] = [.font: g.fonts.regular, .foregroundColor: color]
+        for (i, character) in prediction.text.enumerated() {
+            let column = prediction.column + i
+            guard column >= 0, column < screen.cols else { break }
+            let x = g.origin.x + CGFloat(column) * g.cellWidth
+            UIColor(screen.background).setFill()
+            context.fill(CGRect(x: x, y: top, width: g.cellWidth, height: g.cellHeight))
+            NSAttributedString(string: String(character), attributes: attributes).draw(at: CGPoint(x: x, y: top))
+            color.setFill()
+            context.fill(CGRect(x: x, y: top + g.cellHeight - 1, width: g.cellWidth, height: 1))
         }
     }
 
@@ -1113,6 +1142,7 @@ struct TerminalCanvas: UIViewRepresentable {
         view.watching = model.watching && !cropped
         view.cropped = cropped
         view.screen = model.frame
+        view.prediction = model.prediction
         view.refreshKeyBar()
         // The toolbar's keyboard button flips this; follow it once the view is on screen.
         if model.wantsKeyboard != view.isFirstResponder, view.window != nil {

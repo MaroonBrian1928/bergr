@@ -22,6 +22,19 @@ final class TerminalScreenModel {
     /// menu don't each rebuild them (or redraw) on every frame.
     private(set) var textLines: [String] = []
     private(set) var inLogin = false
+    /// Typed input a dropped channel left unconfirmed (it may or may not have arrived): the
+    /// screen offers Resend or Discard; nothing is resent on its own.
+    private(set) var ambiguousInput = 0
+    private(set) var ambiguousPreview = ""
+    /// Speculative local echo to draw over the screen (opt-in, slow links only).
+    private(set) var prediction: EchoPredictor.Prediction?
+    @ObservationIgnored private var journal = InputJournal()
+    @ObservationIgnored private var latency = InputLatency()
+    @ObservationIgnored private var predictor = EchoPredictor()
+    @ObservationIgnored private var predictionTick: Task<Void, Never>?
+    @ObservationIgnored private var statsAt: ContinuousClock.Instant?
+    /// Up by one for every channel and every stop: a write started on an older one isn't journaled.
+    @ObservationIgnored private var channelGeneration = 0
     /// Soft-keyboard Ctrl: applies to the next key.
     var controlLatched = false
     /// Scrolled up into history (new output does not move the view).
@@ -112,6 +125,8 @@ final class TerminalScreenModel {
             if attached == nil { return }
             if let at = attachedAt, Date.now.timeIntervalSince(at) < 3 { return }
         }
+        // Attaching again because the channel may have died: what it never confirmed is in doubt.
+        channelEnded()
         stop()
         phase = .attaching
         pumpConnectionRevision = session?.connectionRevision
@@ -119,6 +134,11 @@ final class TerminalScreenModel {
     }
 
     func stop() {
+        // Leaving on purpose (navigating away, watching instead): no "may not have arrived".
+        channelGeneration += 1
+        journal.forgetPending()
+        predictor.reset()
+        if prediction != nil { prediction = nil }
         pump?.cancel()
         pump = nil
         let attached = self.attached
@@ -158,6 +178,9 @@ final class TerminalScreenModel {
                 display: theme.displayFacts)
             guard !Task.isCancelled else { return await attached.detach() }
             self.attached = attached
+            channelGeneration += 1
+            // This channel's generation, before any await: a stop() meanwhile makes it stale.
+            let generation = channelGeneration
             attachedAt = .now
             reportedFocus = false
             let vt = try VirtualTerminal(
@@ -177,10 +200,14 @@ final class TerminalScreenModel {
                     reportedFocus = true
                     try? await attached.focus(true)
                 }
-                for data in pendingInput { try? await attached.send(data) }
+                for data in pendingInput { await write(data, to: attached, generation: generation) }
             }
             pendingInput.removeAll()
             for try await chunk in attached.output {
+                let now = ContinuousClock.now
+                journal.outputArrived(at: now)
+                latency.outputArrived(at: now)
+                latency.received(bytes: chunk.count)
                 vt.write(chunk)
                 await attached.consumed(bytes: chunk.count)
                 // The first paint turns mode 2048 back on, which answers with our size: that's
@@ -197,6 +224,7 @@ final class TerminalScreenModel {
             if !Task.isCancelled { phase = .failed(error.localizedDescription) }
         }
         if !Task.isCancelled {
+            channelEnded()
             // The channel is gone: forget it, so the next thing sent attaches again first
             // instead of going into a dead channel.
             attached = nil
@@ -272,6 +300,7 @@ final class TerminalScreenModel {
             press(c == " " ? .space : .letter(c), modifiers: .control, text: nil)
             return
         }
+        predict(text)
         send(Data(text.utf8))
     }
 
@@ -282,11 +311,14 @@ final class TerminalScreenModel {
             modifiers.insert(.control)
             controlLatched = false
         }
+        // Any key but a plain character ends a prediction; Return also lifts a suspended one.
+        predict(key == .enter ? "\r" : "\u{7f}")
         send(vt.encode(key, modifiers: modifiers, text: text))
     }
 
     func paste(_ text: String) {
         guard let vt, !text.isEmpty else { return }
+        predict("\u{7f}")
         // Bracketed paste keeps shells and editors from running pasted lines one by one,
         // but only programs that turned it on understand the markers.
         if vt.bracketedPaste {
@@ -337,10 +369,96 @@ final class TerminalScreenModel {
         // a window does; in the same task, so the focus report arrives first.
         let focusFirst = !reportedFocus
         reportedFocus = true
+        let generation = channelGeneration
         Task {
             if focusFirst { try? await attached.focus(true) }
-            try? await attached.send(data)
+            await write(data, to: attached, generation: generation)
         }
+    }
+
+    // MARK: Confirmations, latency, prediction
+
+    /// Sends typed input and records it: confirmed once the write returns and output follows.
+    private func write(_ data: Data, to attached: AttachedTerminal, generation: Int) async {
+        // The channel it was typed for is gone (left on purpose, or replaced): send, don't journal.
+        guard generation == channelGeneration else {
+            try? await attached.send(data)
+            return
+        }
+        let now = ContinuousClock.now
+        let seq = journal.sent(data, at: now)
+        latency.sent(at: now)
+        do {
+            try await attached.send(data)
+            if generation == channelGeneration { journal.written(seq) }
+        } catch {
+            guard generation == channelGeneration else { return }
+            journal.failed(seq)
+            publishAmbiguous()
+        }
+    }
+
+    /// The channel ended: what it never confirmed becomes ambiguous; predictions go.
+    private func channelEnded() {
+        journal.channelEnded()
+        publishAmbiguous()
+        predictor.reset()
+        if prediction != nil { prediction = nil }
+    }
+
+    /// One character per cell (a blank for an empty or continuation cell), so columns line up.
+    nonisolated static func cellText(_ cells: [ScreenCell]) -> String {
+        String(cells.map { $0.text.first ?? " " })
+    }
+
+    private func publishAmbiguous() {
+        if journal.ambiguousCount != ambiguousInput { ambiguousInput = journal.ambiguousCount }
+        let preview = journal.ambiguousPreview
+        if preview != ambiguousPreview { ambiguousPreview = preview }
+    }
+
+    /// Sends again what a dropped channel may have lost (the user chose to).
+    func resendAmbiguous() {
+        let data = journal.takeAmbiguous()
+        publishAmbiguous()
+        send(data)
+    }
+
+    func discardAmbiguous() {
+        journal.discardAmbiguous()
+        publishAmbiguous()
+    }
+
+    private func predict(_ text: String) {
+        guard let vt else { return }
+        let enabled = UserDefaults.standard.bool(forKey: EchoPredictor.settingKey)
+        predictor.typed(text, enabled: enabled, latency: latency.median, alternateScreen: vt.isAlternateScreen,
+                        cursor: frame.cursor.map { ($0.x, $0.y) }, cols: vt.cols, now: .now)
+        showPrediction()
+    }
+
+    private func showPrediction() {
+        if predictor.shown != prediction { prediction = predictor.shown }
+        // An unconfirmed prediction times out even with no new output.
+        predictionTick?.cancel()
+        guard predictor.shown != nil else { return }
+        predictionTick = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: EchoPredictor.confirmWithin + .milliseconds(100))
+            guard !Task.isCancelled, let self else { return }
+            self.predictor.tick(now: .now)
+            self.showPrediction()
+        }
+    }
+
+    /// Latency summary for Diagnostics, at most once a second.
+    private func reportStats() {
+        let now = ContinuousClock.now
+        if let at = statsAt, now - at < .seconds(1) { return }
+        statsAt = now
+        guard let session, let address, !latency.samples.isEmpty else { return }
+        let name = session.host.name.isEmpty ? session.host.target.host : session.host.name
+        TerminalStats.shared.update(key: "\(session.host.id.uuidString)|\(address)",
+                                    label: "\(name) \(address)", latency: latency)
     }
 
     // MARK: Scrolling
@@ -503,7 +621,17 @@ final class TerminalScreenModel {
     private func renderNow() {
         guard let vt else { return }
         frame = vt.frame()
+        latency.rendered()
+        reportStats()
         let lines = frame.textLines
+        if let shown = predictor.shown {
+            // By cell, not by character: a wide character (emoji, CJK) takes two cells.
+            var rows = [String](repeating: "", count: frame.lines.count)
+            if frame.lines.indices.contains(shown.row) { rows[shown.row] = Self.cellText(frame.lines[shown.row]) }
+            predictor.frameChanged(lines: rows, cursor: frame.cursor.map { ($0.x, $0.y) },
+                                   alternateScreen: vt.isAlternateScreen, now: .now)
+            showPrediction()
+        }
         guard lines != textLines else { return }
         textLines = lines
         let login = AnswerParser.inLogin(lines)

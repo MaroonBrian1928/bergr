@@ -928,6 +928,8 @@ class Claude:
                 continue
             if b.get("type") == "tool_use":
                 tr.steps += 1
+                # Its latest step ("Edit plans/watch-app.md"), until it says something itself.
+                tr.summary = short(((b.get("name") or "") + " " + tool_summary(b.get("input"))).strip())
             elif b.get("type") == "text" and (b.get("text") or "").strip():
                 tr.summary = last_line(b["text"])
 
@@ -1139,6 +1141,10 @@ class Codex:
         elif d.get("type") == "response_item":
             if p.get("type") in ("function_call", "custom_tool_call", "local_shell_call"):
                 tr.steps += 1
+                name, args = p.get("name") or "shell", p.get("arguments") or p.get("input") or p.get("action") or ""
+                if name == "exec" and (inner := code_mode_call(args)):
+                    name, args = inner
+                tr.summary = short((name + " " + tool_summary(args)).strip())
             elif p.get("type") == "message" and p.get("role") == "assistant":
                 text = "".join(c.get("text") or "" for c in p.get("content") or [] if isinstance(c, dict))
                 if text.strip():

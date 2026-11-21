@@ -1,5 +1,21 @@
 # Mosh ideas for Bergr
 
+## Status (checked 2026-11-21)
+
+- 1. Last-contact indicator and faster liveness: Partial — `HostSession.keepChecking` checks every 3 s (6 s when expensive) and `checkLine` skips when output arrived in 3 s (`bergr/Terminals/HostSession.swift:394-410`); first key after >5 s idle calls `checkLine` (`bergr/Screen/TerminalScreenModel.swift:320`); probe deadline uses the round trip with a 3 s floor (`HostSession.swift:365-380`); "Last update N ago" bar is `ConnectionBar` in chat and iOS terminal (no Mac terminal bar found). Missing: a separate "no answer for N s" state. `silenceLimit` is still 40 s (`bergr/Terminals/ConnectionAttempt.swift:95`).
+- 2. Round-trip estimate: Done — `HerdrKit/Sources/HerdrKit/RoundTrip.swift` (TCP-style smoothing), recorded per answered call in `HerdrClient.swift:181-184`, exposed as `HostSession.roundTrip`. Debug overlay: not found.
+- 3. Credit after consumption: Done — `TerminalScreenModel.swift:184-185` calls `vt.write` then `attached.consumed`; `HerdrClient.swift:151` no longer credits on receipt for attach. Attach stream is still unbounded (`HerdrClient.swift:147`), so backlog is bounded only by core credit. Event subscription still credits on receipt (`HerdrClient.swift:121`).
+- 4. Skip to latest screen (herdr-core): Not started — no resync or marker symbols; `hello.features` only checks `automatic_input` (`HerdrClient.swift:164`). Core behaviour without credit: Unclear, core source not in repo.
+- 5. Input sequence and echo ack (herdr-core): Not started — `HerdrKit/Sources/HerdrKit/Frames.swift` kinds (data, credit, close, resize, focus, facts, automaticInput) have no sequence or ack. Core side Unclear.
+- 6. Predictive local echo: Not started — no prediction or overlay symbols in `TerminalScreenModel` or `TerminalCanvas`.
+- 7. Output pacing by round trip (core): Not started — only client credit gating and render coalescing (8 ms / 100 ms, `TerminalScreenModel.swift:478`).
+- 8. Incremental reattach: Not started — `historyLines` exists (`TerminalScreenModel.swift:145-147`: 1000 when shown and not expensive, else 200; the plan's "1000" is stale), but there is no "history since P" protocol.
+- 9. Optimistic chat state: Partial — `ReplyDelivery.swift:92` phases (sending, queued, pushed, failed, confirmed); "Sending:" / "Not delivered" bubble with Retry (`bergr/Chat/ChatView.swift:569-582`); confirmed against the transcript (`ReplyPayload.arrived(in:)`). Reconnect does not replay automatically: retry is a user action (`ReplyDelivery.swift:187-193`). Exact delivery needs idea 5.
+- 10. Roaming via Multipath TCP: Not started — no MPTCP or multipath code, config or experiment in the repo.
+- 11. UDP state-sync transport: Dropped — plan verdict is skip; no UDP transport in the tree.
+- 12. Dropping scrollback, byte dropping, local line editing: Dropped — plan verdict is skip; scrollback is kept (`historyLines`), no client-side byte dropping.
+- Order of work (client now: 3, 2, 1): Partial — 3 and 2 Done, 1 Partial; proposal to herdr-core (4, 5, ping) Not started.
+
 Follow-up to `terminal-resilience.md`. Sources: the Mosh paper (USENIX ATC 2012), mosh.org and the
 Mosh README, as behavioral references only. Mosh is GPL: nothing here is taken from its source, and
 nothing should be. Mosh numbers below are quoted from memory of the paper; check them before using
@@ -43,7 +59,7 @@ Concretely:
   Not in the background: battery, and iOS suspends the sockets anyway.
 - Publish "last heard" from `ConnectionAttempt` (it already keeps `lastHeard`) through
   `HostSession`, counting any frame on any channel, and show the same bar in the terminal view
-  (`TerminalCanvas.swift` overlay on iOS, the Mac equivalent) as in the chat.
+  (`bergrIOS/Screen/TerminalCanvas.swift` overlay on iOS; the Mac equivalent) as in the chat.
 - Two states, like Mosh: "no answer for N s" (still trying) and "reconnecting". An unanswered ping
   after ~2 x the measured round trip (floor 3 s) starts the existing `retry`.
 - Also trigger a ping on the first key after a pause of more than a few seconds: the moment the user
