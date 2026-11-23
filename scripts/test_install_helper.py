@@ -6,7 +6,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 INSTALLER = os.path.join(HERE, "..", "bergr", "Push", "install-helper.py")
 NOTIFY = os.path.join(HERE, "..", "bergr", "Push", "bergr-notify.py")
 NOTIFY_VERSION = int(re.search(r"^VERSION = (\d+)", open(NOTIFY).read(), re.M).group(1))
-LOADER = "import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))"
+# As Bergr runs it (PushRegistration): one stdin line sets sys.argv and execs the installer.
+# Not argv: the helper source outgrows Linux's 128 KB limit on a single argument.
+LOADER = "import sys;exec(sys.stdin.buffer.readline())"
 
 
 class InstallHelperTests(unittest.TestCase):
@@ -30,7 +32,8 @@ class InstallHelperTests(unittest.TestCase):
                "PATH": (self.bin + ":" if with_hc else "") + "/usr/bin:/bin", "SHELL": "/nonexistent"}
         args = base64.b64encode(json.dumps(dict(op=op, **extra)).encode()).decode()
         installer = base64.b64encode(open(INSTALLER, "rb").read()).decode()
-        out = subprocess.run([sys.executable, "-I", "-c", LOADER, installer, args], env=env,
+        line = f"import base64,sys;sys.argv=['-c','{args}'];exec(base64.b64decode('{installer}'))\n"
+        out = subprocess.run([sys.executable, "-I", "-c", LOADER], input=line, env=env,
                              capture_output=True, text=True, check=True).stdout
         self.assertEqual(len(out.strip().splitlines()), 1)
         return json.loads(out)
