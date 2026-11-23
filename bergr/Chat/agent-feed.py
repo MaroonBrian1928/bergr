@@ -20,6 +20,7 @@
 #   {"t":"ping"}                                              right after the backlog (caught up),
 #                                                             then after 15 s of nothing else sent
 #   {"t":"none"}                                              no conversation found (yet)
+#   {"t":"cwd","path":..}                                     the folder the agent works in now (Claude)
 #   {"t":"cursor","session":<file name>,"offset":<byte offset>}   where reading stands (after the
 #                                                             backlog, then when it advances, at most
 #                                                             every 3 s). Passed back in argv to resume:
@@ -707,6 +708,10 @@ class Claude:
 
     def parse(self, d):
         kind = d.get("type")
+        # The folder Claude is working in now (each line records it; `cd` moves it), for Changes.
+        if isinstance(d.get("cwd"), str) and d["cwd"] != getattr(self, "cwd", None):
+            self.cwd = d["cwd"]
+            yield {"t": "cwd", "path": d["cwd"]}
         # The Claude Code version this conversation runs (each line records it).
         if isinstance(d.get("version"), str) and d["version"] != CLAUDE_VERSION[0]:
             CLAUDE_VERSION[0] = d["version"]
@@ -1638,7 +1643,7 @@ def list_commands():
 CLAUDE_MODELS = [
     {"id": "claude-opus-5-5", "name": "Opus 5.5", "description": "For complex work and everyday tasks"},
     {"id": "claude-sonnet-5-5", "name": "Sonnet 5.5", "description": "Most efficient for simpler tasks"},
-    {"id": "claude-fable-5-1", "name": "Fable 5.1", "description": "For your toughest challenges",
+    {"id": "claude-fable-5-2", "name": "Fable 5.2", "description": "For your toughest challenges",
      "note": "Requires usage credits"},
     {"id": "claude-haiku-5-5", "name": "Haiku 5.5", "description": "Fastest for quick answers"},
 ]

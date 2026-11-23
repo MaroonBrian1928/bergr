@@ -254,7 +254,7 @@ struct ChatView: View {
             }
         }
         .sheet(isPresented: $showingChanges) {
-            ChangesSheet(session: session, folder: ChangesSummary.workFolder(in: feed.items, cwd: terminal?.cwd), address: terminal?.address, items: feed.items, toolOutput: feed.toolOutput)
+            ChangesSheet(session: session, folder: ChangesSummary.workFolder(in: feed.items, cwd: feed.agentFolder ?? terminal?.cwd), address: terminal?.address, items: feed.items, toolOutput: feed.toolOutput)
         }
         .sheet(isPresented: $showingUsage) {
             UsageSheet(usage: feed.usage, agent: agent, machine: session?.host.name,
@@ -1642,6 +1642,10 @@ struct ChatView: View {
         let argv = terminal?.foreground.flatMap { ChatAgent.detect(name: $0.name, argv: $0.argv) == .claude ? $0.argv : nil }
             ?? ["claude"]
         let command = RestartCommand.make(argv: argv, conversation: id)
+        // Started as the terminal's own program (New Session), Claude has no shell under it to type
+        // the command into: quitting it ends the terminal. Start a new one resuming the conversation.
+        let direct = terminal.map { !RestartCommand.isShell($0.argv) } ?? false
+        let old = terminal
         withAnimation(motion) { feed.restartedIntoNewest() }
         // Unstructured: it outlives this chat, which goes away while Claude isn't running.
         Task { @MainActor in
@@ -1650,16 +1654,38 @@ struct ChatView: View {
                 try? await Task.sleep(for: .milliseconds(150))
                 model.press(.enter)
                 let deadline = Date.now.addingTimeInterval(15)
+                var exited = false
                 while Date.now < deadline {
                     try? await Task.sleep(for: .milliseconds(300))
-                    let fg = session.terminal(address)?.foreground
-                    if let fg, ChatAgent.detect(name: fg.name, argv: fg.argv) != .claude { break }
+                    let now = session.terminal(address)
+                    if now?.isLive != true { exited = true; break }
+                    if let fg = now?.foreground, ChatAgent.detect(name: fg.name, argv: fg.argv) != .claude { exited = true; break }
                 }
                 try? await Task.sleep(for: .milliseconds(400))
+                // Still running: starting another would put two Claudes on one conversation.
+                guard exited else { return }
+                if direct, let old {
+                    let windows = session.isWindowsHost || old.argv.first?.lowercased().hasSuffix(".exe") == true
+                    var request = RunRequest(argv: windows ? RestartCommand.arguments(argv: argv, conversation: id)
+                                                           : ["sh", "-c", RestartCommand.directLine(command)], cwd: old.cwd)
+                    var labels = [Terminal.seenLabel: "0"]
+                    if let space = old.labels[HerdrAppLayout.spaceLabel] { labels[HerdrAppLayout.spaceLabel] = space }
+                    request.labels = labels
+                    // `popos/t7`: a linked machine's terminal starts on that machine.
+                    if let slash = address.lastIndex(of: "/") { request.on = String(address[..<slash]) }
+                    if let started = try? await session.run(request) {
+                        NotificationCenter.default.post(name: RestartCommand.openTerminal, object: nil,
+                            userInfo: ["host": session.host.id, "address": started.address])
+                    }
+                    return
+                }
                 model.type(command)
                 try? await Task.sleep(for: .milliseconds(150))
                 model.press(.enter)
             }
+            // Once the new Claude Code is writing, read its version fresh.
+            try? await Task.sleep(for: .seconds(8))
+            feed.reconnect()
         }
     }
 
@@ -3218,7 +3244,31 @@ private struct UpdateBanner: View {
 
 /// The command that starts Claude Code again as it was started, resuming a conversation.
 enum RestartCommand {
+    /// Asks the app to open a terminal (userInfo: "host" UUID, "address" String).
+    static let openTerminal = Notification.Name("bergr.openTerminal")
+
+    /// Whether a terminal's own program is a shell (so a quit agent leaves a prompt to type into).
+    static func isShell(_ argv: [String]) -> Bool {
+        guard let first = argv.first else { return true }
+        // `sh -c '… exec claude'` (a restarted terminal) runs a command, not an interactive shell.
+        if argv.dropFirst().contains(where: { ["-c", "/c", "-command", "-Command"].contains($0) }) { return false }
+        let name = (first.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? first).lowercased()
+            .replacingOccurrences(of: ".exe", with: "").trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "pwsh", "powershell", "cmd", "elvish", "xonsh"]
+            .contains(name)
+    }
+
+    /// The command as a new terminal's program: Claude's usual install folders first on PATH.
+    static func directLine(_ command: String) -> String {
+        #"PATH="$HOME/.local/bin:$HOME/.claude/local:/opt/homebrew/bin:/usr/local/bin:$PATH"; exec "# + command
+    }
+
     static func make(argv: [String], conversation: String) -> String {
+        arguments(argv: argv, conversation: conversation).map(quote).joined(separator: " ")
+    }
+
+    /// The program and arguments, unquoted (a Windows restart runs them without a shell).
+    static func arguments(argv: [String], conversation: String) -> [String] {
         var args: [String] = []
         var skip = false
         // Drop what picked the conversation before; the resume below picks this one.
@@ -3234,7 +3284,7 @@ enum RestartCommand {
             args.append(arg)
         }
         // `claude` by name: the newest version installed, not the path the old one ran from.
-        return (["claude"] + args + ["--resume", conversation]).map(quote).joined(separator: " ")
+        return ["claude"] + args + ["--resume", conversation]
     }
 
     static func quote(_ s: String) -> String {

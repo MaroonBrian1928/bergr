@@ -24,7 +24,7 @@ final class ChangesModel {
     private(set) var turnSnapshot = TurnSnapshot.unknown
     /// Untracked files that appeared since the last turn started (Last turn scope).
     private(set) var newFiles: [String] = []
-    static let turnUnavailableText = "Turn snapshots need the push helper v18+."
+    static let turnUnavailableText = "No snapshot of the last turn yet: the push helper takes one when the agent starts working in a git folder."
     let folder: String
     let address: String?
     @ObservationIgnored private let run: Runner

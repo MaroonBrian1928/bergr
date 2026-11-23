@@ -251,6 +251,8 @@ final class ChatFeed {
 
     /// The models in the picker that need the newer version.
     private(set) var modelsNeedingUpdate: [String] = []
+    /// The folder the agent works in now, from its conversation (Claude), when it says.
+    private(set) var agentFolder: String?
     /// The conversation being followed (Claude: its session id).
     private(set) var conversationID: String?
     /// The Claude Code version this conversation runs.
@@ -264,6 +266,10 @@ final class ChatFeed {
     /// it can resume instead of sending the backlog again.
     private(set) var cursor: ChatHelperLaunch.Cursor?
     @ObservationIgnored private var activePipe: ExecPipe?
+
+    /// Starts the helper again (its loop reconnects): after a restart into a newer Claude Code, a
+    /// helper that was already running kept reporting the old version and the banner came back.
+    func reconnect() { activePipe?.close() }
     /// Whether the network is expensive or constrained (cellular, Low Data Mode); tests override it.
     @ObservationIgnored var isExpensive: () -> Bool = { NetworkWatcher.shared.isExpensive }
 
@@ -513,6 +519,8 @@ final class ChatFeed {
                                            note: $0["note"] as? String, efforts: $0["efforts"] as? [String] ?? [],
                                            defaultEffort: $0["default_effort"] as? String)
                     }
+                case "cwd":
+                    agentFolder = event["path"] as? String
                 case "version":
                     agentVersion = event["running"] as? String
                     newerAgent = event["installed"] as? String

@@ -1294,6 +1294,27 @@ class TurnBaselineTests(Base):
         _, body = notify.format_alert(term(state="done", msg="Done."), "done", stat="2 files, +2 \u22121")
         self.assertTrue(body.endswith(" \u00b7 2 files, +2 \u22121"))
 
+    def test_turn_stat_uses_the_baseline_folder(self):
+        # The terminal sits in a plain folder (home); the agent works in the repo.
+        plain = os.path.join(self.dir, "home")
+        os.makedirs(plain)
+        notify.record_turn_baseline("t1", self.repo, self.cfg)
+        self.write("a.txt", "one\nthree\n")
+        self.assertEqual(notify.turn_stat("t1", plain, self.cfg), "1 file, +1 \u22121")
+
+    def test_claude_folder_reads_the_conversation(self):
+        home = os.path.join(self.dir, "h")
+        os.makedirs(os.path.join(home, ".claude", "sessions"))
+        os.makedirs(os.path.join(home, ".claude", "projects", "-h"))
+        with open(os.path.join(home, ".claude", "sessions", "42.json"), "w") as f:
+            json.dump({"sessionId": "abc-1", "cwd": home}, f)
+        with open(os.path.join(home, ".claude", "projects", "-h", "abc-1.jsonl"), "w") as f:
+            f.write(json.dumps({"type": "user", "cwd": home}) + "\n")
+            f.write(json.dumps({"type": "assistant", "cwd": self.repo}) + "\n")
+            f.write(json.dumps({"type": "summary"}) + "\n")
+        self.assertEqual(notify.claude_folder(42, home=home), self.repo)
+        self.assertIsNone(notify.claude_folder(7, home=home))
+
     def test_skips_without_repo_or_baseline(self):
         plain = os.path.join(self.dir, "plain")
         os.makedirs(plain)

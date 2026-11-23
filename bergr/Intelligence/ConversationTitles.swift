@@ -16,7 +16,7 @@ final class ConversationTitles {
 
     static let instructions = """
     You name conversations with a coding agent. Reply with a short descriptive title of 3 to 7 words \
-    that says what the work is about, like "Fix flaky login redirect test". Plain text only: no quotes, \
+    that names what this conversation's work is about, using only what it shows. Plain text only: no quotes, \
     no markdown, no trailing punctuation.
     """
 

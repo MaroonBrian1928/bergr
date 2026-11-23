@@ -5,8 +5,9 @@ import Foundation
 enum ChangesSummary {
     static let instructions = """
         You summarise a code change for a developer reading it on a phone. Reply with exactly one \
-        plain-language sentence in the active voice that starts with a verb, for example: \
-        "Refactors the auth middleware and adds a redirect test". No markdown, no quotes, no lists.
+        plain-language sentence in the active voice that starts with a verb in the third person \
+        and names the actual files, functions or behavior the diff changes. Use only what the diff \
+        and stat show; never invent changes. No markdown, no quotes, no lists.
         """
     static let timeout: Duration = .seconds(5)
     static let diffLineLimit = 120

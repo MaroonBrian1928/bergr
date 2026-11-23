@@ -214,6 +214,11 @@ struct RootView: View {
         }
         // Siri, Shortcuts or a control launched the app: the queued request is routed here.
         .task { handleIntents() }
+        .onReceive(NotificationCenter.default.publisher(for: RestartCommand.openTerminal)) { note in
+            if let host = note.userInfo?["host"] as? Host.ID, let address = note.userInfo?["address"] as? String {
+                open(host: host, address: address)
+            }
+        }
         // The update banners only appear once the newest herdr-core is known: look it up here,
         // not from the (hidden) banner, which SwiftUI never runs a task for.
         .task { await CoreUpdates.shared.refresh() }

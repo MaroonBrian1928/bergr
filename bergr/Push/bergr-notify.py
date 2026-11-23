@@ -14,6 +14,7 @@ Usage: bergr-notify.py [--test | --version]   (--test sends one test alert to ev
 import atexit
 import base64
 import datetime
+import glob
 import hashlib
 import hmac
 import json
@@ -30,7 +31,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 24
+VERSION = 25
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 # Windows: child processes (hc, curl, git) get no console window; the helper runs under pythonw.exe,
 # where each console child would otherwise flash a window.
@@ -1253,15 +1254,18 @@ def record_turn_baseline(address, cwd, config_path=None, timeout=GIT_TIMEOUT):
 def turn_stat(address, cwd, config_path=None, timeout=GIT_TIMEOUT):
     """'4 files, +120 \u221218' for what changed since the turn's baseline, or None (no repo, no
     baseline, nothing changed, timeout)."""
-    if not cwd or not os.path.isdir(cwd):
-        return None
     name = ref_name(address)
     try:
         with open(os.path.join(turns_dir(config_path), name + ".json")) as f:
             saved = json.load(f)
         before = set(saved.get("untracked") or [])
+        # The baseline's own folder: an agent's work folder can differ from the terminal's.
+        if isinstance(saved.get("cwd"), str) and os.path.isdir(saved["cwd"]):
+            cwd = saved["cwd"]
     except (OSError, ValueError, AttributeError):
         before = set()
+    if not cwd or not os.path.isdir(cwd):
+        return None
     start = time.monotonic()
     short = _git(cwd, ["diff", "--shortstat", TURN_REF + name], timeout)
     if short is None:
@@ -1276,6 +1280,69 @@ def turn_stat(address, cwd, config_path=None, timeout=GIT_TIMEOUT):
     if not files:
         return None
     return f"{files} file{'s' if files != 1 else ''}, +{plus.group(1) if plus else 0} \u2212{minus.group(1) if minus else 0}"
+
+
+def _hc_terminal(address, timeout=2.0):
+    """herdr-core's record of one terminal (`hc get`), or None."""
+    try:
+        out = subprocess.run(["hc", "get", address], capture_output=True, text=True, timeout=timeout, **NO_WINDOW)
+        return json.loads(out.stdout) if out.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def claude_folder(pid, home=None):
+    """The folder a Claude Code process is working in now: its conversation records the current
+    folder on every line (a `cd` in its shell moves it), while the process and the terminal stay
+    where they started (often the home folder). None when it can't be told."""
+    base = os.path.join(home or os.path.expanduser("~"), ".claude")
+    try:
+        with open(os.path.join(base, "sessions", f"{int(pid)}.json")) as f:
+            sid = json.JSONDecoder().raw_decode(f.read().strip())[0].get("sessionId")
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+    if not isinstance(sid, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", sid):
+        return None
+    files = glob.glob(os.path.join(base, "projects", "*", sid + ".jsonl"))
+    if not files:
+        return None
+    try:
+        with open(files[0], "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(f.tell() - 262144, 0))
+            lines = f.read().decode("utf-8", "replace").split("\n")
+    except OSError:
+        return None
+    for line in reversed(lines):
+        if '"cwd"' not in line:
+            continue
+        try:
+            cwd = json.loads(line).get("cwd")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(cwd, str) and os.path.isdir(cwd):
+            return cwd
+    return None
+
+
+def turn_folder(address, fallback):
+    """Where a turn's changes happen: a Claude agent's current folder, else the program's or
+    terminal's folder."""
+    term = _hc_terminal(address) or {}
+    fg = term.get("foreground") if isinstance(term.get("foreground"), dict) else {}
+    pid = fg.get("pid")
+    program = " ".join(str(x) for x in (fg.get("argv") or [])[:1]).lower()
+    status = term.get("status") if isinstance(term.get("status"), dict) else {}
+    named = " ".join(str(x or "") for x in (term.get("agent"), status.get("app"), fg.get("name"))).lower()
+    if pid and ("claude" in program or "claude" in named):
+        found = claude_folder(pid)
+        if found:
+            return found
+    return _text(fg.get("cwd")) or _text(term.get("cwd")) or fallback
+
+
+def baseline_turn(address, cwd):
+    record_turn_baseline(address, turn_folder(address, cwd))
 
 
 def started_working(prev_state, state):
@@ -1950,7 +2017,7 @@ def run():
                         shared["terms"] = state.get("terms", {})
                         for address in started_working(before, state):
                             cwd = (state.get("terms", {}).get(address) or {}).get("cwd")
-                            threading.Thread(target=record_turn_baseline, args=(address, cwd), daemon=True).start()
+                            threading.Thread(target=baseline_turn, args=(address, cwd), daemon=True).start()
                     except Exception as e:
                         log(f"could not process event line: {e}")
                         continue

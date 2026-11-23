@@ -57,7 +57,7 @@ struct TurnDiffTests {
             await m.setScope(.lastTurn)
             #expect(m.scope == .all)
         }
-        #expect(ChangesModel.turnUnavailableText.contains("helper v18"))
+        #expect(ChangesModel.turnUnavailableText.contains("push helper"))
     }
 
     @Test func parsesFileListsAndNewFiles() {

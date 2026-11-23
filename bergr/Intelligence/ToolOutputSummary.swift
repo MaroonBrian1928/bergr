@@ -187,9 +187,8 @@ final class ToolOutputSummaries {
 
     static let stepsInstructions = """
     A coding agent ran some steps (shell commands, or descriptions of them). Say in one line of at \
-    most 6 words what they did together, as one task, starting with a verb. Examples: "Check the \
-    deployed container", "Run tests and fix padding", "Search the bot code for choices". \
-    One line only. No period, no quotes.
+    most 6 words what they did together, as one task, starting with a verb and naming what the \
+    steps actually touched. Never invent steps. One line only. No period, no quotes.
     """
 
     /// Requests waiting for a slot (for tests).
@@ -197,7 +196,7 @@ final class ToolOutputSummaries {
 
     static let instructions = """
     You summarize the output of a tool a coding agent ran, in one plain sentence of at most 12 \
-    words, like "689 tests passed, none failed" or "Build failed in ChatView.swift". \
+    words, using only what the output shows: what succeeded or failed. \
     Give numbers and file names when the output has them. No labels, no markdown, no quotes. \
     Reply with the sentence only.
     """

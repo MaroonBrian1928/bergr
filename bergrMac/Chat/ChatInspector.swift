@@ -67,7 +67,7 @@ struct ChatInspector: View {
         }
         .formStyle(.grouped)
         .sheet(isPresented: $showingChanges) {
-            ChangesSheet(session: session, folder: terminal?.cwd, address: terminal?.address, items: feed.items, toolOutput: feed.toolOutput)
+            ChangesSheet(session: session, folder: ChangesSummary.workFolder(in: feed.items, cwd: feed.agentFolder ?? terminal?.cwd), address: terminal?.address, items: feed.items, toolOutput: feed.toolOutput)
         }
         .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
         // A view of its own reads the conversation, so a streamed token redraws only it.
