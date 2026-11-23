@@ -12,6 +12,7 @@ struct MacRootView: View {
 
     var body: some View {
         content.background { UsageAlertsHost(sessions: sessions) }
+            .task { await CoreUpdates.shared.refresh() }
     }
 
     private var content: some View {

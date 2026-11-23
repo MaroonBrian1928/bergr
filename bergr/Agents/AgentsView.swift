@@ -124,6 +124,7 @@ struct AgentsView: View {
                     }
                 }
             }
+            CoreUpdateSection(sessions: sessions, hosts: hosts.hosts)
             if byAttention { attentionSections(lists) } else { machineSections(lists) }
             }
         }
@@ -807,5 +808,30 @@ extension AgentsView {
                     terminal: t, lines: list.session.digestLines(address: t.address))
             }
         }
+    }
+}
+
+/// herdr-core updates for the connected machines, one banner each (hidden when current or dismissed).
+private struct CoreUpdateSection: View {
+    let sessions: SessionStore
+    let hosts: [Host]
+    private let updates = CoreUpdates.shared
+
+    var body: some View {
+        let hidden = SameMachine.duplicates(hosts.map { ($0, sessions.existing($0.id)?.coreName) })
+        let outdated = hosts.filter { !hidden.keys.contains($0.id) }.compactMap { sessions.existing($0.id) }
+            .filter { CoreUpdates.newer(than: $0.coreVersion, latest: updates.latest) != nil }
+        Group {
+            if !outdated.isEmpty {
+                Section {
+                    ForEach(outdated, id: \.host.id) { session in
+                        CoreUpdateBanner(session: session, inList: true)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                            .listRowBackground(Color.clear)
+                    }
+                }
+            }
+        }
+        .task { await updates.refresh() }
     }
 }

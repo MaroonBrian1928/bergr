@@ -214,6 +214,10 @@ struct RootView: View {
         }
         // Siri, Shortcuts or a control launched the app: the queued request is routed here.
         .task { handleIntents() }
+        // The update banners only appear once the newest herdr-core is known: look it up here,
+        // not from the (hidden) banner, which SwiftUI never runs a task for.
+        .task { await CoreUpdates.shared.refresh() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await CoreUpdates.shared.refresh() } } }
         .onChange(of: showingNewSession) { _, showing in
             if !showing { newSessionPrefill = nil }
         }

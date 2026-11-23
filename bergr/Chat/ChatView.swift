@@ -796,6 +796,7 @@ struct ChatView: View {
                 .padding(.horizontal, 12)
                 .transition(arrival)
             }
+            if let session { CoreUpdateBanner(session: session) }
             if let sendError {
                 Label(sendError, systemImage: "exclamationmark.triangle")
                     .font(.footnote)

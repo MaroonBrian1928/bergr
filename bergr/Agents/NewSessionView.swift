@@ -93,7 +93,7 @@ struct NewSessionPrefill: Equatable {
     }
 }
 
-/// Starts Claude Code, Codex or Antigravity in a folder on one of the machines, then opens it.
+/// Starts Claude Code, Codex, Antigravity or a plain shell in a folder on one of the machines, then opens it.
 struct NewSessionView: View {
     @Environment(HostStore.self) private var hosts
     @Environment(\.dismiss) private var dismiss
@@ -110,6 +110,8 @@ struct NewSessionView: View {
     @State private var searchPath: [Host.ID: String] = [:]
     @State private var locateFailed: [Host.ID: String] = [:]
     @State private var agent: ChatAgent?
+    /// A plain shell instead of an agent.
+    @State private var shell = false
     @State private var folder = ""
     @State private var message = ""
     @State private var starting = false
@@ -154,15 +156,17 @@ struct NewSessionView: View {
                     if let session {
                         folderSection(session)
                     }
-                    if isRepo, agent != nil { worktreeSection }
-                    RecentSessionsSection(sessions: recent, loading: loadingRecent) { s in
-                        Task { await start(resuming: s) }
-                    }
-                    Section {
-                        TextField("First message", text: $message, prompt: Text("Optional"), axis: .vertical)
-                            .lineLimit(2...6)
-                    } footer: {
-                        Text("Sent as soon as the agent starts. Leave it empty to start with a blank conversation.")
+                    if isRepo, agent != nil || shell { worktreeSection }
+                    if !shell {
+                        RecentSessionsSection(sessions: recent, loading: loadingRecent) { s in
+                            Task { await start(resuming: s) }
+                        }
+                        Section {
+                            TextField("First message", text: $message, prompt: Text("Optional"), axis: .vertical)
+                                .lineLimit(2...6)
+                        } footer: {
+                            Text("Sent as soon as the agent starts. Leave it empty to start with a blank conversation.")
+                        }
                     }
                     if let error {
                         Section {
@@ -185,7 +189,7 @@ struct NewSessionView: View {
                         ProgressView()
                     } else {
                         Button("Start") { Task { await start() } }
-                            .disabled(agent == nil || session == nil)
+                            .disabled((agent == nil && !shell) || session == nil)
                     }
                 }
             }
@@ -216,19 +220,19 @@ struct NewSessionView: View {
     private var agentSection: some View {
         Section {
             if let agents {
-                if agents.isEmpty {
-                    Text("Claude Code, Codex and Antigravity aren't installed on this machine (none of claude, codex or agy is on its PATH).")
-                        .foregroundStyle(.secondary)
-                } else {
-                    Picker("Agent", selection: $agent) {
-                        ForEach(agents, id: \.agent) { found in
-                            Text(found.agent == .claude ? "Claude Code" : found.agent.displayName)
-                                .tag(Optional(found.agent))
-                        }
+                Picker("Agent", selection: choice) {
+                    ForEach(agents, id: \.agent) { found in
+                        Text(found.agent == .claude ? "Claude Code" : found.agent.displayName)
+                            .tag(found.agent.rawValue)
                     }
-                    .pickerStyle(.segmented)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
+                    Text("Shell").tag(Self.shellChoice)
+                }
+                .pickerStyle(.segmented)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
+                if agents.isEmpty {
+                    Text("Claude Code, Codex and Antigravity aren't installed on this machine (none of claude, codex or agy is on its PATH), so only a shell can start.")
+                        .foregroundStyle(.secondary)
                 }
             } else if let hostID, let failed = locateFailed[hostID] {
                 HStack {
@@ -244,6 +248,17 @@ struct NewSessionView: View {
                 }
             }
         }
+    }
+
+    private static let shellChoice = "shell"
+
+    /// The picker's selection: an agent's raw value, or `shellChoice`.
+    private var choice: Binding<String> {
+        Binding(
+            get: { shell ? Self.shellChoice : (agent?.rawValue ?? Self.shellChoice) },
+            set: { value in
+                if let picked = ChatAgent(rawValue: value) { agent = picked; shell = false } else { shell = true }
+            })
     }
 
     private func folderSection(_ session: HostSession) -> some View {
@@ -364,32 +379,45 @@ struct NewSessionView: View {
     }
 
     private func locate() async {
-        guard let hostID, located[hostID] == nil, let session else { return }
+        // Back on a machine already looked at: keep the choice to something it can start.
+        if let hostID, let found = located[hostID] { reconcile(found); return }
+        guard let hostID, let session else { return }
         locateFailed[hostID] = nil
         do {
             let output = try await session.commandOutput(NewSession.locateCommand)
             let found = NewSession.parseLocated(output)
             searchPath[hostID] = NewSession.parsePath(output)
             located[hostID] = found
-            if agent == nil || !found.contains(where: { $0.agent == agent }) { agent = found.first?.agent }
+            reconcile(found)
         } catch {
             locateFailed[hostID] = error.localizedDescription
         }
     }
 
+    private func reconcile(_ found: [(agent: ChatAgent, path: String)]) {
+        if agent == nil || !found.contains(where: { $0.agent == agent }) { agent = found.first?.agent }
+        if found.isEmpty { shell = true }
+    }
+
     private func start(resuming resumed: RecentSession? = nil) async {
-        guard let hostID, let session, let agent,
-              let path = agents?.first(where: { $0.agent == agent })?.path else { return }
+        guard let hostID, let session else { return }
+        var request: RunRequest
+        if shell && resumed == nil {
+            // No argv: herdr-core starts the machine's own shell; kept like New Terminal's shell.
+            request = RunRequest(keep: true)
+        } else {
+            guard let agent, let path = agents?.first(where: { $0.agent == agent })?.path else { return }
+            var argv = NewSession.argv(path: path, message: message)
+            if let resumed {
+                guard let resume = RecentSessions.resumeArgv(agent: agent, path: path, id: resumed.id) else { return }
+                argv = resume
+            }
+            request = RunRequest(argv: argv)
+            if let path = searchPath[hostID] { request.env?["PATH"] = path }
+        }
         starting = true
         defer { starting = false }
         error = nil
-        var argv = NewSession.argv(path: path, message: message)
-        if let resumed {
-            guard let resume = RecentSessions.resumeArgv(agent: agent, path: path, id: resumed.id) else { return }
-            argv = resume
-        }
-        var request = RunRequest(argv: argv)
-        if let path = searchPath[hostID] { request.env?["PATH"] = path }
         let folder = folder.trimmingCharacters(in: .whitespaces)
         if folder.hasPrefix("~"), let home = session.homeFolder {
             request.cwd = home + folder.dropFirst()

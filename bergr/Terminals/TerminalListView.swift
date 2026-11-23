@@ -242,6 +242,7 @@ struct TerminalListView: View {
             list(mode, rows)
                 .id(mode)
                 .opacity(concealed ? 0 : 1)
+                .safeAreaInset(edge: .bottom) { CoreUpdateBanner(session: session) }
                 .onChange(of: mode) { _, mode in
                     restoring = mode
                     let seen = visibleRows[mode] ?? []
