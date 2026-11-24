@@ -264,7 +264,11 @@ final class PushRegistration {
                 if enabled {
                     await self?.checkHelper(on: session)
                     await Self.importAutoApprovals(on: session)
-                } else { await self?.removeHelper(on: session) }
+                } else if PushOwner.isMine {
+                    // Only when notifications are off on the phone's notifying build: when the other
+                    // build owns them, it still needs the helper running on this machine.
+                    await self?.removeHelper(on: session)
+                }
             }
         }
     }
