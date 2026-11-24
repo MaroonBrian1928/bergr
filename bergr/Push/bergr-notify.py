@@ -31,7 +31,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 25
+VERSION = 26
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 # Windows: child processes (hc, curl, git) get no console window; the helper runs under pythonw.exe,
 # where each console child would otherwise flash a window.
@@ -1291,10 +1291,8 @@ def _hc_terminal(address, timeout=2.0):
         return None
 
 
-def claude_folder(pid, home=None):
-    """The folder a Claude Code process is working in now: its conversation records the current
-    folder on every line (a `cd` in its shell moves it), while the process and the terminal stay
-    where they started (often the home folder). None when it can't be told."""
+def claude_tail(pid, home=None):
+    """The last ~256 KB of a Claude Code process's conversation, as lines; None when not found."""
     base = os.path.join(home or os.path.expanduser("~"), ".claude")
     try:
         with open(os.path.join(base, "sessions", f"{int(pid)}.json")) as f:
@@ -1313,6 +1311,51 @@ def claude_folder(pid, home=None):
             lines = f.read().decode("utf-8", "replace").split("\n")
     except OSError:
         return None
+    return lines
+
+
+BLOCKED = "Permission for this action was denied by the Claude Code auto mode classifier."
+
+
+def claude_blocked(pid, home=None):
+    """The command of the last call Claude's auto mode blocked in its latest turn and that hasn't
+    run since (approved in /permissions it runs again with the same input); None otherwise."""
+    calls, blocked = {}, None
+    for line in claude_tail(pid, home) or []:
+        if '"tool_use"' not in line and '"tool_result"' not in line and '"user"' not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        content = (d.get("message") or {}).get("content") if isinstance(d, dict) else None
+        if d.get("type") == "user" and isinstance(content, str) and not content.startswith("<"):
+            blocked = None  # a new turn
+        for b in content if isinstance(content, list) else []:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "tool_use":
+                key = (b.get("name") or "") + json.dumps(b.get("input"), sort_keys=True)
+                if blocked and blocked[0] == key:
+                    blocked = None
+                calls[b.get("id")] = (key, b.get("input") if isinstance(b.get("input"), dict) else {})
+            elif b.get("type") == "tool_result":
+                text = b.get("content")
+                if isinstance(text, list):
+                    text = " ".join(x.get("text", "") for x in text if isinstance(x, dict))
+                if isinstance(text, str) and text.startswith(BLOCKED) and b.get("tool_use_id") in calls:
+                    key, inp = calls[b["tool_use_id"]]
+                    blocked = (key, str(inp.get("command") or inp.get("description") or inp.get("file_path") or "a tool call"))
+    return blocked[1] if blocked else None
+
+
+def claude_folder(pid, home=None):
+    """The folder a Claude Code process is working in now: its conversation records the current
+    folder on every line (a `cd` in its shell moves it), while the process and the terminal stay
+    where they started (often the home folder). None when it can't be told."""
+    lines = claude_tail(pid, home)
+    if lines is None:
+        return None
     for line in reversed(lines):
         if '"cwd"' not in line:
             continue
@@ -1323,6 +1366,21 @@ def claude_folder(pid, home=None):
         if isinstance(cwd, str) and os.path.isdir(cwd):
             return cwd
     return None
+
+
+def blocked_command(address):
+    """claude_blocked for the Claude Code running in this terminal, else None."""
+    term = _hc_terminal(address) or {}
+    fg = term.get("foreground") if isinstance(term.get("foreground"), dict) else {}
+    program = " ".join(str(x) for x in (fg.get("argv") or [])[:1]).lower()
+    status = term.get("status") if isinstance(term.get("status"), dict) else {}
+    named = " ".join(str(x or "") for x in (term.get("agent"), status.get("app"), fg.get("name"))).lower()
+    if not fg.get("pid") or ("claude" not in program and "claude" not in named):
+        return None
+    try:
+        return claude_blocked(fg["pid"])
+    except Exception:
+        return None
 
 
 def turn_folder(address, fallback):
@@ -1601,6 +1659,11 @@ def alerts_for(prev_state, line, machine=""):
         sent.add(key)
         stat = turn_stat(address, term.get("cwd")) if state == "done" else None
         title, body = format_alert(term, state, machine, stat)
+        # Finished with a call auto mode blocked: say so, so it can be allowed from the chat.
+        command = blocked_command(address) if state == "done" else None
+        if command:
+            title = "Claude: auto mode blocked a command" + (f" on {machine}" if machine else "")
+            body = (command if len(command) <= BODY_MAX - 25 else command[:BODY_MAX - 26] + "…") + " · Tap to allow and retry"
         alert = {"address": address, "turn": turn, "state": state, "title": title, "body": body}
         question = alert_question(term, state)
         if question:

@@ -34,6 +34,8 @@ enum NotificationSummary {
         case .decision(let question, let answer): text = "Answered \"\(question)\": \(answer)"
         case .note(let note): text = "Note: \(note)"
         case .question(let title, _): text = "Asked: \(title)"
+        case .blocked(let reason, let summary, _, let retried):
+            text = retried ? "Approved and ran: \(summary)" : "Auto mode blocked (\(reason)): \(summary)"
         case .image, .imageLoading, .imageOnDemand: return nil
         }
         return OnDeviceText.truncate(text, to: lineCharacters)

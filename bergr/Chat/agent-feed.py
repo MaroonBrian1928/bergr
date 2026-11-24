@@ -17,6 +17,9 @@
 #                                                             when changed. Its own messages are never
 #                                                             sent as msg/tool events.
 #   {"t":"question","id":..,"title":..,"options":[..]}   the agent asks the user to pick one
+#   {"t":"blocked","id":"blocked-"+<tool event id>,"reason":..,"summary":..,"retried":bool}
+#                                                             upsert; Claude's auto mode blocked this
+#                                                             call ("retried" once the same call ran again)
 #   {"t":"ping"}                                              right after the backlog (caught up),
 #                                                             then after 15 s of nothing else sent
 #   {"t":"none"}                                              no conversation found (yet)
@@ -246,6 +249,31 @@ def tool_tail(text, lines=12, chars=1200):
     out = text.split("\n")[-lines:]
     text = "\n".join(out)
     return text[-chars:] if len(text) > chars else text
+
+
+BLOCKED = "Permission for this action was denied by the Claude Code auto mode classifier."
+BLOCKED_REASON = re.compile(r"Reason: \[([^\]]+)\]")
+
+
+def call_key(block):
+    """A tool call's name and input, to spot the same call made again."""
+    try:
+        return (block.get("name") or "") + json.dumps(block.get("input"), sort_keys=True)
+    except (TypeError, ValueError):
+        return None
+
+
+def blocked_event(tid, text, calls):
+    """A "blocked" event when this result is Claude's auto mode blocking the call, else None."""
+    if not tid or not isinstance(text, str) or not text.startswith(BLOCKED):
+        return None
+    key, block = calls.get(tid, (None, {}))
+    inp = block.get("input") if isinstance(block.get("input"), dict) else {}
+    summary = inp.get("command") or tool_summary(inp) or block.get("name") or "a tool call"
+    m = BLOCKED_REASON.search(text)
+    return {"t": "blocked", "id": "blocked-" + tid, "key": key or tid, "reason": m.group(1) if m else "",
+            "name": block.get("name") or "", "description": str(inp.get("description") or "")[:200],
+            "summary": str(summary)[:600], "retried": False}
 
 
 def toolout(tid, text, failed=False):
@@ -852,6 +880,13 @@ class Claude:
                 if ev:
                     yield ev
             elif t == "tool_result":
+                ev = blocked_event(block.get("tool_use_id"), result_text(block.get("content")),
+                                   getattr(self, "calls", {}))
+                if ev:
+                    if not hasattr(self, "blocked"):
+                        self.blocked = {}
+                    self.blocked[ev["key"]] = ev
+                    yield {k: v for k, v in ev.items() if k != "key"}
                 yield from toolout(block.get("tool_use_id"), result_text(block.get("content")),
                                    failed=bool(block.get("is_error")))
                 # An image a tool brought back (Read of a screenshot, a browser capture): shown
@@ -887,6 +922,14 @@ class Claude:
                 yield plan_event([(x.get("content"), x.get("status")) for x in block["input"]["todos"]
                                   if isinstance(x, dict)])
             elif t == "tool_use":
+                key = call_key(block)
+                if not hasattr(self, "calls"):
+                    self.calls = {}
+                self.calls[block.get("id") or bid] = (key, block)
+                # The same call again after a block: approved (in /permissions, or as a new rule).
+                done = getattr(self, "blocked", {}).pop(key, None)
+                if done:
+                    yield {k: v for k, v in done.items() if k != "key"} | {"retried": True}
                 if block.get("name") == "Bash" and isinstance(block.get("input"), dict):
                     inp = block["input"]
                     if not hasattr(self, "bash"):

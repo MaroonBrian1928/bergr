@@ -100,6 +100,9 @@ final class ChatFeed {
         case note(String)
         /// The agent asks the user to pick an option (Codex's request_user_input); answered by replying.
         case question(title: String, options: [String])
+        /// Claude's auto mode blocked a tool call (`summary` is its command); `retried` once the
+        /// same call ran again after an approval.
+        case blocked(reason: String, summary: String, description: String, retried: Bool)
     }
 
     struct PlanStep: Equatable, Sendable {
@@ -527,7 +530,7 @@ final class ChatFeed {
                     modelsNeedingUpdate = event["needs"] as? [String] ?? []
                 case "commands":
                     applyCommands(event)
-                case "msg", "tool", "toolout", "plan", "image", "question":
+                case "msg", "tool", "toolout", "plan", "image", "question", "blocked":
                     trace?.mark("first event")
                     apply(event, type: type, prepared: parsed)
                 case "subagent":
@@ -739,6 +742,10 @@ final class ChatFeed {
                 if let a = event["async"] as? Bool { info.codexAsync = a }
                 if questionInfo[id] != info { questionInfo[id] = info }
             }
+        } else if type == "blocked" {
+            kind = .blocked(reason: event["reason"] as? String ?? "", summary: event["summary"] as? String ?? "",
+                            description: event["description"] as? String ?? "",
+                            retried: event["retried"] as? Bool ?? false)
         } else if type == "tool" {
             kind = .tool(name: event["name"] as? String ?? "tool", summary: event["summary"] as? String ?? "")
         } else {

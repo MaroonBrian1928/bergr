@@ -1315,6 +1315,27 @@ class TurnBaselineTests(Base):
         self.assertEqual(notify.claude_folder(42, home=home), self.repo)
         self.assertIsNone(notify.claude_folder(7, home=home))
 
+    def test_claude_blocked_until_retried_or_next_turn(self):
+        home = os.path.join(self.dir, "hb")
+        os.makedirs(os.path.join(home, ".claude", "sessions"))
+        os.makedirs(os.path.join(home, ".claude", "projects", "-h"))
+        with open(os.path.join(home, ".claude", "sessions", "5.json"), "w") as f:
+            json.dump({"sessionId": "s-1"}, f)
+        path = os.path.join(home, ".claude", "projects", "-h", "s-1.jsonl")
+        call = lambda tid: {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": "git push"}}]}}
+        denied = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+                  "content": notify.BLOCKED + " Reason: [Destructive or Unwanted Actions]."}]}}
+        def write(*rows):
+            with open(path, "w") as f:
+                f.write("".join(json.dumps(r) + "\n" for r in rows))
+        write({"type": "user", "message": {"content": "push it"}}, call("t1"), denied)
+        self.assertEqual(notify.claude_blocked(5, home=home), "git push")
+        write({"type": "user", "message": {"content": "push it"}}, call("t1"), denied, call("t2"))
+        self.assertIsNone(notify.claude_blocked(5, home=home))
+        write(call("t1"), denied, {"type": "user", "message": {"content": "never mind"}})
+        self.assertIsNone(notify.claude_blocked(5, home=home))
+
     def test_skips_without_repo_or_baseline(self):
         plain = os.path.join(self.dir, "plain")
         os.makedirs(plain)

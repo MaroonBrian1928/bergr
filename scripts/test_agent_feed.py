@@ -273,6 +273,36 @@ class ClaudeQuestions(Base):
         self.assertEqual([e["answer"] for e in evs if e["t"] == "question"], ["Skipped"])
 
 
+class AutoModeBlocks(Base):
+    DENIED = ("Permission for this action was denied by the Claude Code auto mode classifier. "
+              "Reason: [Destructive or Unwanted Actions]. If you have other tasks ...")
+
+    def call(self, c, uid, tid, cmd="rm -rf /tmp/x"):
+        return list(c.parse({"type": "assistant", "uuid": uid, "message": {"content": [
+            {"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": cmd, "description": "Delete x"}}]}}))
+
+    def result(self, c, uid, tid, text, error=True):
+        return list(c.parse({"type": "user", "uuid": uid, "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tid, "content": text, "is_error": error}]}}))
+
+    def test_block_then_retry(self):
+        c = load("claude", self.home)["Claude"]()
+        self.call(c, "a", "t1")
+        evs = [e for e in self.result(c, "r", "t1", self.DENIED) if e["t"] == "blocked"]
+        self.assertEqual(evs, [{"t": "blocked", "id": "blocked-t1", "reason": "Destructive or Unwanted Actions", "name": "Bash",
+                                "description": "Delete x", "summary": "rm -rf /tmp/x", "retried": False}])
+        again = [e for e in self.call(c, "b", "t2") if e["t"] == "blocked"]
+        self.assertEqual([(e["id"], e["retried"]) for e in again], [("blocked-t1", True)])
+
+    def test_other_calls_and_errors_are_not_blocks(self):
+        c = load("claude", self.home)["Claude"]()
+        self.call(c, "a", "t1")
+        self.assertFalse([e for e in self.result(c, "r", "t1", "Exit code 1\nnope") if e["t"] == "blocked"])
+        self.call(c, "b", "t2", cmd="ls")
+        self.result(c, "r2", "t2", self.DENIED)
+        self.assertFalse([e for e in self.call(c, "c", "t3", cmd="pwd") if e["t"] == "blocked"])
+
+
 class PastedMessages(Base):
     def test_pasted_reply_is_shown_unwrapped(self):
         ns = load("claude", self.home)

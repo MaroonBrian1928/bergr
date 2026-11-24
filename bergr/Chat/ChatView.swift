@@ -86,6 +86,8 @@ struct ChatView: View {
     /// The next send goes out as a new message even while Codex has a question open.
     @State private var sendAsNewMessage = false
     @State private var questionSending: Set<String> = []
+    /// Blocked calls being approved from their card (until the retry shows up).
+    @State private var blockedSending: Set<String> = []
     /// The search field at the top shows while searching; closing it clears the search.
     @State private var searching = false
     @FocusState private var searchFocused: Bool
@@ -972,6 +974,50 @@ struct ChatView: View {
         }
     }
 
+    /// Approves a call Claude's auto mode blocked and runs it again: /permissions opens on
+    /// "Recently blocked"; the row whose command shows under it gets r (retry), and Esc closes the
+    /// menu, which retries it. The card turns to "Allowed" when the same call shows up again.
+    private func allowBlocked(_ id: String, summary: String) {
+        guard canType, !blockedSending.contains(id) else { return }
+        if model.watching { model.setWatching(false) }
+        blockedSending.insert(id)
+        let needle = BlockedCard.needle(summary)
+        Task { @MainActor in
+            var problem: String?
+            await model.automate {
+                model.type("/permissions")
+                try? await Task.sleep(for: .milliseconds(150))
+                model.press(.enter)
+                await waitForScreen(upTo: .seconds(3)) { lines in lines.contains { $0.contains("to retry") } }
+                guard model.frame.textLines.contains(where: { $0.contains("to retry") }) else {
+                    model.press(.escape)
+                    problem = "Claude didn't show its recently blocked list. Approve it in the terminal with /permissions."
+                    return
+                }
+                for _ in 0..<12 {
+                    if BlockedCard.shows(needle, in: model.frame.textLines) {
+                        model.type("r")
+                        try? await Task.sleep(for: .milliseconds(250))
+                        model.press(.escape)
+                        return
+                    }
+                    model.press(.down)
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+                model.press(.escape)
+                problem = "Couldn't find that command in Claude's recently blocked list. Approve it in the terminal with /permissions."
+            }
+            if let problem {
+                sendError = problem
+                blockedSending.remove(id)
+            } else {
+                // Not retried after a while (the menu didn't take it): the button works again.
+                try? await Task.sleep(for: .seconds(20))
+                blockedSending.remove(id)
+            }
+        }
+    }
+
     /// Claude's question waiting in the terminal (AskUserQuestion), unanswered, while the agent is
     /// stopped on it.
     private var openClaudeQuestion: (id: String, info: ChatFeed.QuestionInfo)? {
@@ -1128,6 +1174,8 @@ struct ChatView: View {
                     return (question + " " + answer).localizedStandardContains(search) ? row : nil
                 case .question(let title, let options):
                     return ([title] + options).joined(separator: " ").localizedStandardContains(search) ? row : nil
+                case .blocked(let reason, let summary, let description, _):
+                    return [reason, summary, description].joined(separator: " ").localizedStandardContains(search) ? row : nil
                 case .tool, .image, .imageLoading, .imageOnDemand:
                     return nil
                 }
@@ -1265,6 +1313,8 @@ struct ChatView: View {
             switch item.kind {
             case .assistant:
                 key.reveal = feed.revealStart[item.id]
+            case .blocked:
+                key.waiting = blockedSending.contains(item.id)
             case .question:
                 key.waiting = questionSending.contains(item.id)
                 if let info = feed.questionInfo[item.id], info.keys || info.codexAsync {
@@ -1376,6 +1426,11 @@ struct ChatView: View {
                         draft = choice
                         send()
                     }
+                }
+            case .blocked(let reason, let summary, let description, let retried):
+                BlockedCard(reason: reason, summary: summary, description: description, retried: retried,
+                            sending: key.waiting, enabled: key.canType, palette: palette) {
+                    allowBlocked(item.id, summary: summary)
                 }
             case .tool:
                 EmptyView()
@@ -2748,6 +2803,67 @@ private extension String {
 
 /// A system line under the agent's reply (not its words): a quiet footnote on the reply's
 /// leading edge, icon on the first line's baseline, no container competing with the text.
+/// A tool call Claude's auto mode blocked, with a button that approves it and runs it again.
+private struct BlockedCard: View {
+    let reason: String
+    let summary: String
+    let description: String
+    let retried: Bool
+    let sending: Bool
+    let enabled: Bool
+    let palette: ChatPalette
+    let allow: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: retried ? "checkmark.shield.fill" : "hand.raised.fill")
+                    .foregroundStyle(retried ? palette.secondary : Color.needsYou)
+                Text(retried ? "Allowed and run again" : "Auto mode blocked this")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(palette.text)
+                if !reason.isEmpty, !retried {
+                    Text(reason).font(.caption).foregroundStyle(palette.secondary).lineLimit(1)
+                }
+            }
+            Text(summary)
+                .font(.footnote.monospaced())
+                .foregroundStyle(palette.secondary)
+                .lineLimit(retried ? 2 : 6)
+                .textSelection(.enabled)
+            if !retried {
+                Button(action: allow) {
+                    Label(sending ? "Allowing…" : "Allow and retry", systemImage: "arrow.clockwise")
+                        .font(.footnote.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .tint(Color.needsYou)
+                .disabled(!enabled || sending)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The command with all whitespace removed: the menu wraps it to the terminal's width.
+    static func needle(_ summary: String) -> String {
+        String(summary.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }.map(Character.init))
+    }
+
+    /// The selected row's command, printed between the first two dashed lines, is this one.
+    static func shows(_ needle: String, in lines: [String]) -> Bool {
+        let rules = lines.indices.filter { i in
+            let t = lines[i].trimmingCharacters(in: .whitespaces)
+            return t.count > 10 && t.allSatisfy { $0 == "╌" }
+        }
+        guard rules.count >= 2, !needle.isEmpty else { return false }
+        // Only an exact match: a cut-off command could be another one that starts the same way.
+        return Self.needle(lines[(rules[0] + 1)..<rules[1]].joined()) == needle
+    }
+}
+
 private struct NoteRow: View {
     let text: String
     let palette: ChatPalette
