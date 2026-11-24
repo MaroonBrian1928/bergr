@@ -114,6 +114,7 @@ final class PushRegistration {
     func didRegister(token: Data) {
         lastError = nil
         let hex = Self.hex(token)
+        PushOwner.publish(deviceID: Self.deviceID(token: hex))
         Task { await registerWithRelay(token: hex) }
     }
 
@@ -559,7 +560,13 @@ final class PushRegistration {
         if let rules { device["rules"] = ApprovalRuleStore.payload(rules, host: host) }
         // "Always ask" patterns (v18 on): never auto-answered, no Yes on the alert.
         if let askPatterns { device["askPatterns"] = askPatterns }
-        let object: [String: Any] = ["op": enabled ? "add" : "remove", "device": device]
+        var object: [String: Any] = ["op": enabled ? "add" : "remove", "device": device]
+        // The other Bergr on this phone (dev or TestFlight) leaves the helper as this one joins:
+        // one alert per event, even before that build is opened again.
+        let others = PushOwner.otherDeviceIDs.filter { $0 != device["id"] as? String }
+        // Also when this build's own entry is being removed (it stays running instead): the other
+        // build's still goes, since this one gets the notifications now.
+        if PushOwner.isMine, !others.isEmpty { object["drop"] = others }
         return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
     }
 
@@ -610,7 +617,8 @@ final class PushRegistration {
     dev = p["device"]
     devs = c.get("devices")
     devs = [x for x in devs if isinstance(x, dict)] if isinstance(devs, list) else []
-    rest = [x for x in devs if x.get("id") != dev["id"]]
+    drop = set(p.get("drop") or []) | {dev["id"]}
+    rest = [x for x in devs if x.get("id") not in drop]
     c["devices"] = rest + [dev] if p["op"] == "add" else rest
     fd, tmp = tempfile.mkstemp(dir=d)
     with os.fdopen(fd, "w") as fh:

@@ -160,7 +160,7 @@ final class ContextAlertTracker {
 @MainActor
 enum UsageNotifications {
     static func post(_ alerts: [UsageAlert]) {
-        guard UserDefaults.standard.bool(forKey: Delivery.notificationsKey) else { return }
+        guard Delivery.notificationsHere else { return }
         for alert in alerts {
             let content = UNMutableNotificationContent()
             content.title = "Usage"
@@ -175,7 +175,7 @@ enum UsageNotifications {
 extension UsageNotifications {
     /// A context warning is an "Errors"-kind notification: the same switch, muted agents and quiet hours.
     static func post(_ alerts: [ContextAlert]) {
-        guard UserDefaults.standard.bool(forKey: Delivery.notificationsKey) else { return }
+        guard Delivery.notificationsHere else { return }
         let prefs = NotificationPrefs.load()
         for alert in alerts {
             guard let (host, address) = ContextAlertTracker.parts(of: alert.id),

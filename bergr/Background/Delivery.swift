@@ -18,6 +18,11 @@ enum Delivery {
         set { UserDefaults.standard.set(newValue, forKey: notificationsKey); apply() }
     }
 
+    /// Notifications are on and this build gets them (see `PushOwner`).
+    nonisolated static var notificationsHere: Bool {
+        UserDefaults.standard.bool(forKey: notificationsKey) && PushOwner.isMine
+    }
+
     /// Kinds, muted agents and quiet hours. Setting it re-registers with the helpers.
     static var prefs: NotificationPrefs {
         get { NotificationPrefs.load() }
@@ -49,8 +54,10 @@ enum Delivery {
     /// Registers or removes this phone with the helpers to match the switches.
     static func apply() {
         guard helperSupported else { return }
-        let wanted = helperWanted(stayRunning: UserDefaults.standard.bool(forKey: KeepAliveKey.value), notifications: notifications,
-                                  lockScreen: lockScreen)
+        // Another Bergr on this phone gets them: this one leaves the helpers, so alerts come once.
+        let wanted = PushOwner.isMine
+            && helperWanted(stayRunning: UserDefaults.standard.bool(forKey: KeepAliveKey.value), notifications: notifications,
+                            lockScreen: lockScreen)
         let push = PushRegistration.shared
         if push.enabled != wanted { push.enabled = wanted }
         push.alertsChanged()

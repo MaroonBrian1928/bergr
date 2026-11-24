@@ -170,6 +170,7 @@ struct RootView: View {
         .task {
             if notifier == nil {
                 Delivery.migrate()
+                PushOwner.claimIfRelease(notificationsOn: Delivery.notifications)
                 Delivery.apply()
                 let notifier = AgentNotifier(sessions: sessions)
                 notifier.start()
@@ -222,7 +223,12 @@ struct RootView: View {
         // The update banners only appear once the newest herdr-core is known: look it up here,
         // not from the (hidden) banner, which SwiftUI never runs a task for.
         .task { await CoreUpdates.shared.refresh() }
-        .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await CoreUpdates.shared.refresh() } } }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await CoreUpdates.shared.refresh() }
+            // The other Bergr on this phone may have taken notifications meanwhile.
+            Delivery.apply()
+        }
         .onChange(of: showingNewSession) { _, showing in
             if !showing { newSessionPrefill = nil }
         }

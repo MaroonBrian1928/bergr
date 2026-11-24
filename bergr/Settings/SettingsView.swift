@@ -37,9 +37,15 @@ struct SettingsView: View {
     }
 
     /// A Notifications or Live Activity switch: stores it, then registers the helpers to match.
-    private func deliverySwitch(_ value: Binding<Bool>) -> Binding<Bool> {
-        Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0; Delivery.apply() })
+    private func deliverySwitch(_ value: Binding<Bool>, claims: Bool = false) -> Binding<Bool> {
+        Binding(get: { value.wrappedValue }, set: {
+            value.wrappedValue = $0
+            // Notifications turned on here: this build takes them from the other Bergr on this phone.
+            if $0, claims { PushOwner.claim(); ownerTick += 1 }
+            Delivery.apply()
+        })
     }
+    @State private var ownerTick = 0
     @State private var push = PushRegistration.shared
     /// Adds the demo machine and shows it.
     var addDemo: () -> Void = {}
@@ -212,7 +218,7 @@ struct SettingsView: View {
             #endif
 
             Section {
-                Toggle(isOn: deliverySwitch($notifications)) {
+                Toggle(isOn: deliverySwitch($notifications, claims: true)) {
                     Label {
                         Text("Notifications")
                     } icon: {
@@ -263,6 +269,18 @@ struct SettingsView: View {
                     #else
                     Text("Notifications: when an agent needs you or finishes.")
                     #endif
+                }
+            }
+
+            if notifications, !PushOwner.isMine, ownerTick >= 0 {
+                Section {
+                    Button("Get Notifications Here") {
+                        PushOwner.claim()
+                        ownerTick += 1
+                        Delivery.apply()
+                    }
+                } footer: {
+                    Text("Notifications go to \(PushOwner.ownerName) on this phone, so each arrives once.")
                 }
             }
 

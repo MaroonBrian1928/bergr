@@ -185,7 +185,7 @@ final class MachineHealthMonitor {
 
     /// The "<machine> went offline" local notification, under the Settings → Notifications switch.
     static func postOffline(_ id: UUID, name: String) {
-        guard UserDefaults.standard.bool(forKey: Delivery.notificationsKey) else { return }
+        guard Delivery.notificationsHere else { return }
         let content = UNMutableNotificationContent()
         content.title = "\(name) went offline"
         content.sound = .default
@@ -199,7 +199,7 @@ final class MachineHealthMonitor {
 extension MachineHealthMonitor {
     /// The low-disk / low-battery local notification: the "Errors" kind, so its switch and quiet hours apply.
     static func postHealth(_ id: UUID, name: String, alert: HealthAlert) {
-        guard UserDefaults.standard.bool(forKey: Delivery.notificationsKey) else { return }
+        guard Delivery.notificationsHere else { return }
         let minute = NotificationPrefs.minute(of: Date())
         guard NotificationPrefs.load().allows(kind: .error, host: id, address: "health", minute: minute) else { return }
         let content = UNMutableNotificationContent()

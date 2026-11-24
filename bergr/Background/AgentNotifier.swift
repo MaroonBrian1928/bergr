@@ -146,7 +146,7 @@ final class AgentNotifier {
 
     private func post(_ alert: Alert, agent: String, transcript: [String]) {
         // Settings → Notifications.
-        guard UserDefaults.standard.bool(forKey: Delivery.notificationsKey) else { return }
+        guard Delivery.notificationsHere else { return }
         // A machine whose helper pushes to this phone gets its alert from there: posting here too
         // gave two of each while Bergr was open or still running in the background.
         if Delivery.helperSupported, PushRegistration.shared.enabled, let secret = PushRegistration.shared.relaySecret {
@@ -182,7 +182,7 @@ final class AgentNotifier {
     }
 
     private func postNow(_ alert: Alert, agent: String, transcript: [String]) {
-        guard UserDefaults.standard.bool(forKey: Delivery.notificationsKey) else { return }
+        guard Delivery.notificationsHere else { return }
         // Per-kind switches, muted agents and quiet hours.
         guard NotificationPrefs.load().allows(kind: alert.kind, host: alert.host, address: alert.address,
                                               minute: NotificationPrefs.minute(of: Date())) else { return }

@@ -94,3 +94,55 @@ struct MachinesExport: Codable, Transferable {
         return count
     }
 }
+
+/// Which Bergr on this phone gets notifications, when two are installed (the dev build and the
+/// TestFlight/App Store build share an App Group): only that one registers with the helpers and
+/// posts alerts, so each alert arrives once. The release build takes them the first time it runs
+/// this; either takes them back when its Notifications switch is turned on.
+nonisolated enum PushOwner {
+    static let key = "bergr.push.owner"
+    private static let claimedKey = "bergr.push.ownerClaimed"
+
+    static var me: String { Bundle.main.bundleIdentifier ?? "" }
+    static var isDevBuild: Bool { me.hasSuffix(".dev") }
+
+    private static var group: UserDefaults? { BergrAppGroup.id.flatMap(UserDefaults.init(suiteName:)) }
+
+    /// The build that gets them; nil when none has claimed them (or there's no group).
+    static var owner: String? { group?.string(forKey: key) }
+
+    /// Nobody claimed them, or this build did.
+    static var isMine: Bool { owner.map { $0 == me } ?? true }
+
+    static func claim() { group?.set(me, forKey: key) }
+
+    /// At launch: the release build takes them once, the first time it runs this with its own
+    /// Notifications switch on (taking them with it off would leave neither build notifying).
+    static func claimIfRelease(_ own: UserDefaults = .standard, notificationsOn: Bool) {
+        guard !isDevBuild, notificationsOn, !own.bool(forKey: claimedKey) else { return }
+        own.set(true, forKey: claimedKey)
+        claim()
+    }
+
+    private static let devicesKey = "bergr.push.devices"
+
+    /// This build's id on the machines' helpers (see `PushRegistration.deviceID`), so the other
+    /// build can take this one off them when it takes notifications.
+    static func publish(deviceID: String) {
+        guard let group else { return }
+        var all = group.dictionary(forKey: devicesKey) as? [String: String] ?? [:]
+        if all[me] != deviceID { all[me] = deviceID; group.set(all, forKey: devicesKey) }
+    }
+
+    /// The other builds' ids on the helpers: removed from them when this build registers.
+    static var otherDeviceIDs: [String] {
+        let all = group?.dictionary(forKey: devicesKey) as? [String: String] ?? [:]
+        return all.filter { $0.key != me }.map(\.value).sorted()
+    }
+
+    /// "the TestFlight build" for Settings.
+    static var ownerName: String {
+        guard let owner else { return "another Bergr" }
+        return owner.hasSuffix(".dev") ? "the dev build" : "the TestFlight or App Store build"
+    }
+}
