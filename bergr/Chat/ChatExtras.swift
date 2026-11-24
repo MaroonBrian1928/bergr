@@ -250,6 +250,8 @@ struct ImagePlaceholder: View {
                 guard !reduceMotion, fetch == nil || fetching else { return }
                 withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { dim = true }
             }
+            // Ends the repeating pulse while it is off screen.
+            .onDisappear { withAnimation(nil) { dim = false } }
             .accessibilityLabel(fetch == nil ? "Image, loading" : fetching ? "Image, loading" : "Image, tap to load")
     }
 }

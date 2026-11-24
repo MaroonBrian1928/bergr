@@ -395,11 +395,18 @@ final class TerminalScreenModel {
         let focusFirst = !reportedFocus
         reportedFocus = true
         let generation = channelGeneration
-        Task {
+        // One write after another: a key sent right after another (Down, then Return on a menu)
+        // must not overtake it while the first waits for its focus report.
+        // Only within one channel: a write stuck on a replaced channel never holds up the new one.
+        let previous = writeTail?.generation == generation ? writeTail?.task : nil
+        writeTail = (generation, Task {
+            await previous?.value
             if focusFirst { try? await attached.focus(true) }
             await write(data, to: attached, generation: generation)
-        }
+        })
     }
+
+    @ObservationIgnored private var writeTail: (generation: Int, task: Task<Void, Never>)?
 
     // MARK: Confirmations, latency, prediction
 

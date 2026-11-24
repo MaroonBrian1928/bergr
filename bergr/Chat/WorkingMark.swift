@@ -27,11 +27,7 @@ struct WorkingMark: View {
 
     var body: some View {
         Group {
-            #if os(macOS)
             if LayerMotion.on { layer } else { canvas }
-            #else
-            canvas
-            #endif
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
@@ -72,7 +68,6 @@ struct WorkingMark: View {
     }
 }
 
-#if os(macOS)
 extension WorkingMark {
     /// On the Mac the mark is a few layers whose pictures are Core Animation keyframes, so the
     /// window server moves it and the app does nothing per frame. As a `TimelineView` it had SwiftUI
@@ -82,16 +77,16 @@ extension WorkingMark {
     }
 }
 
-private struct MarkLayer: NSViewRepresentable {
+private struct MarkLayer: PlatformViewRepresentable {
     let index: Int
     let previous: Int?
     let changedAt: Date
     let color: Color
     let reduceMotion: Bool
 
-    func makeNSView(context: Context) -> MarkView { MarkView() }
+    func makeView(context: Context) -> MarkView { MarkView() }
 
-    func updateNSView(_ view: MarkView, context: Context) {
+    func updateView(_ view: MarkView, context: Context) {
         view.index = index
         view.previous = previous
         view.changedAt = changedAt
@@ -104,7 +99,7 @@ private struct MarkLayer: NSViewRepresentable {
 /// The mark as eight stroke layers. Each picture is sampled over its time on screen (60 a second)
 /// into keyframes for each stroke's path, width and opacity: the same frames the Canvas draws on
 /// iOS, played by Core Animation. A change of picture, colour or size builds them again.
-final class MarkView: NSView {
+final class MarkView: MotionView {
     var index = 0
     var previous: Int?
     var changedAt = Date.distantPast
@@ -120,7 +115,6 @@ final class MarkView: NSView {
     }
     /// What the current animations were built for; nil when they are off (not on screen).
     private var built: Built?
-    private var observers: [NSObjectProtocol] = []
 
     private struct Built: Equatable {
         var index: Int
@@ -132,19 +126,12 @@ final class MarkView: NSView {
 
     private static let sampleRate = 60.0
 
-    override init(frame: NSRect) {
+    override init(frame: CGRect) {
         super.init(frame: frame)
-        wantsLayer = true
-        for l in strokeLayers { layer?.addSublayer(l) }
+        for l in strokeLayers { hostLayer.addSublayer(l) }
     }
 
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    override func layout() {
-        super.layout()
+    override func laidOut() {
         // Without the implicit animation a layer's frame gets.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -153,42 +140,13 @@ final class MarkView: NSView {
         sync()
     }
 
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        observeVisibility()
-        sync()
-    }
-
-    /// Visible on screen: its window is not occluded or minimized, and it is scrolled into view.
-    private var isOnScreen: Bool {
-        guard let window, window.occlusionState.contains(.visible) else { return false }
-        return !visibleRect.isEmpty
-    }
-
-    /// Re-checks `sync()` when the window's occlusion or the enclosing scroll position changes.
-    private func observeVisibility() {
-        for observer in observers { NotificationCenter.default.removeObserver(observer) }
-        observers = []
-        guard let window else { return }
-        let center = NotificationCenter.default
-        observers.append(center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification,
-                                            object: window, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.sync() }
-        })
-        if let clip = enclosingScrollView?.contentView {
-            clip.postsBoundsChangedNotifications = true
-            observers.append(center.addObserver(forName: NSView.boundsDidChangeNotification,
-                                                object: clip, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.sync() }
-            })
-        }
-    }
+    override func visibilityChanged() { sync() }
 
     /// Brings the animations up to date. Off screen they are removed, so nothing runs for the mark.
     /// On screen they run from the picture's start, so the mark is at the same moment of its
     /// picture whenever it appears; with Reduce Motion it stands still on the picture.
     func sync() {
-        guard window != nil, isOnScreen else {
+        guard isOnScreen else {
             for l in strokeLayers { l.removeAllAnimations() }
             built = nil
             return
@@ -250,15 +208,19 @@ final class MarkView: NSView {
 
     private var radius: CGFloat { min(bounds.width, bounds.height) / 2 }
 
-    /// The stroke as a line in the layer's coordinates (y up). The picture is laid out top-left down,
-    /// as the Canvas on iOS draws it, so each y is flipped here.
+    /// The stroke as a line in the layer's coordinates. The picture is laid out top-left down, as
+    /// the Canvas draws it; AppKit layers are y up, so there each y is flipped.
     private func path(for s: Stroke) -> CGPath {
         let r = radius
         let center = CGPoint(x: bounds.midX, y: bounds.midY)
         let half = s.length / 2
         let dx = cos(s.angle) * half, dy = sin(s.angle) * half
         func point(_ x: Double, _ y: Double) -> CGPoint {
+            #if os(macOS)
             CGPoint(x: center.x + x * r, y: bounds.height - (center.y + y * r))
+            #else
+            CGPoint(x: center.x + x * r, y: center.y + y * r)
+            #endif
         }
         let p = CGMutablePath()
         p.move(to: point(s.x - dx, s.y - dy))
@@ -266,7 +228,6 @@ final class MarkView: NSView {
         return p
     }
 }
-#endif
 
 /// Curves for the motion: nothing in the mark moves at a constant speed.
 enum Ease {

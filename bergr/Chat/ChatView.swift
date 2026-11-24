@@ -1833,20 +1833,30 @@ private struct RevealingMarkdown: View {
     let palette: ChatPalette
     let since: Date
     @State private var done = false
+    /// Off screen or with the app inactive the timeline stops; back after the reveal, it shows all.
+    @State private var visible = true
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         let total = MarkdownBlock.totalWords(blocks)
         let duration = RevealSchedule.duration(totalWords: total)
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: done)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: done || !visible || scenePhase != .active)) { context in
             let words = RevealSchedule.revealedWords(elapsed: context.date.timeIntervalSince(since),
                                                      totalWords: total, reduceMotion: false)
-            MarkdownView(blocks: blocks, palette: palette, revealed: words >= total ? nil : words)
+            MarkdownView(blocks: blocks, palette: palette, revealed: done || words >= total ? nil : words)
         }
+        .onAppear { visible = true; finishIfOver(duration) }
+        .onDisappear { visible = false }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { finishIfOver(duration) } }
         .task {
             let left = duration - Date.now.timeIntervalSince(since)
             if left > 0 { try? await Task.sleep(for: .seconds(left + 0.1)) }
             done = true
         }
+    }
+
+    private func finishIfOver(_ duration: Double) {
+        if !done, Date.now.timeIntervalSince(since) >= duration { done = true }
     }
 }
 
@@ -2617,15 +2627,10 @@ private struct Shimmer: ViewModifier {
         if reduceMotion {
             content
         } else {
-            #if os(macOS)
             if LayerMotion.on { layered(content) } else { animated(content) }
-            #else
-            animated(content)
-            #endif
         }
     }
 
-    #if os(macOS)
     /// The band is moved by Core Animation, off the main thread (see `LayerMotion`).
     private func layered(_ content: Content) -> some View {
         content
@@ -2636,7 +2641,6 @@ private struct Shimmer: ViewModifier {
                     .allowsHitTesting(false)
             }
     }
-    #endif
 
     private func animated(_ content: Content) -> some View {
         content
@@ -3399,13 +3403,20 @@ struct MessageTimeReveal: ViewModifier {
     }
 
     /// Moves the whole list with the drag and clips the times waiting outside it.
+    /// The view's width, and all the height there is.
+    struct SidesOnly: Shape {
+        func path(in rect: CGRect) -> Path { Path(rect.insetBy(dx: 0, dy: -10_000)) }
+    }
+
     struct Slide: ViewModifier {
         let pull: Pull
         func body(content: Content) -> some View {
             content
                 .offset(x: pull.offset)
-                // Clips only the sides, where the times wait: never the rows' tops and bottoms.
-                .mask { Rectangle().padding(.vertical, -10_000) }
+                // Clips only the sides, where the times wait: never the rows' tops and bottoms. A
+                // rectangular clip, not a mask: a mask had the whole chat drawn offscreen on every
+                // scroll frame.
+                .clipShape(SidesOnly())
         }
     }
 }

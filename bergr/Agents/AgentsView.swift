@@ -98,9 +98,19 @@ struct AgentsView: View {
         self.open = open
     }
 
+    @State private var shown = true
+    @State private var frozen = FrozenLists()
+
+    /// The lists last shown; a reference, so keeping them doesn't update the view.
+    private final class FrozenLists { var lists: [MachineLists]? }
+
     var body: some View {
         // Worked out once per body, and read by the sections, the animation and the attention lists.
-        let lists = machineLists
+        // Hidden under a chat it pushed, the list keeps its last lists: working them out reads every
+        // machine's live terminals, which change with each status update, and had SwiftUI rebuild
+        // the whole unseen list while the chat on top scrolled.
+        let lists = shown || frozen.lists == nil ? machineLists : frozen.lists!
+        let _ = (frozen.lists = lists)
         List(selection: listSelection) {
             if !searchText.isEmpty {
                 SearchResultsSections(model: searchModel, sessions: sessions, open: open)
@@ -108,7 +118,7 @@ struct AgentsView: View {
             if !digest.entries.isEmpty {
                 Section { DigestCard(model: digest, open: open) }
             }
-            let direct = DirectMigration.candidates(store: hosts, sessions: sessions)
+            let direct = shown ? DirectMigration.candidates(store: hosts, sessions: sessions) : []
             if DirectMigration.showBanner(direct, dismissedKey: dismissedBanner) {
                 Section {
                     HStack(spacing: 10) {
@@ -128,6 +138,8 @@ struct AgentsView: View {
             if byAttention { attentionSections(lists) } else { machineSections(lists) }
             }
         }
+        .onAppear { shown = true }
+        .onDisappear { shown = false }
         .sheet(isPresented: $showingMigration) {
             DirectMigrationSheet(store: hosts, sessions: sessions, keys: keys)
         }

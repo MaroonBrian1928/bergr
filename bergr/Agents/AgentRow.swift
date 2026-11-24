@@ -151,16 +151,12 @@ struct StatusMark: View {
         Group {
             switch state {
             case .working:
-                #if os(macOS)
                 if LayerMotion.on {
                     // Turned by Core Animation, off the main thread (see `LayerMotion`).
                     SpinnerRing(color: .blue).frame(width: 12, height: 12)
                 } else {
                     ring
                 }
-                #else
-                ring
-                #endif
             case .done:
                 Circle().fill(Color.green).frame(width: 10, height: 10)
             case .idle:
