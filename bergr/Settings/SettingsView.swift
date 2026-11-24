@@ -1,11 +1,14 @@
 import KeyStore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// App-wide settings, and what Bergr is.
 struct SettingsView: View {
     @Environment(HostStore.self) private var hosts
     @Environment(KeyLibrary.self) private var keys
     @State private var editing: Host?
+    @State private var importing = false
+    @State private var importResult: String?
     /// Live connection state for the machine rows (nil: no status shown).
     var sessions: SessionStore?
     @AppStorage(TerminalFont.sizeKey) private var fontSize = TerminalFont.defaultSize
@@ -70,6 +73,18 @@ struct SettingsView: View {
             .onDisappear { push.settingsOpen = false }
     }
 
+    private func importMachines(_ result: Result<URL, Error>) -> String {
+        guard case .success(let url) = result else { return "Couldn't open the file." }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url),
+              let export = try? JSONDecoder().decode(MachinesExport.self, from: data) else {
+            return "That file isn't a Bergr machines export."
+        }
+        let n = export.apply(to: hosts, knownKeys: Set(keys.keys.map(\.id)), fallbackKey: keys.keys.last?.id)
+        return n == 0 ? "Nothing new in that file." : n == 1 ? "Imported 1 machine." : "Imported \(n) machines."
+    }
+
     private var form: some View {
         Form {
             Section {
@@ -87,10 +102,24 @@ struct SettingsView: View {
                 } label: {
                     AccentLabel(title: "Add Machine", systemImage: "plus")
                 }
+                if hosts.hosts.contains(where: { !$0.isDemo && !$0.isLocal }) {
+                    ShareLink(item: MachinesExport.make(hosts: hosts.hosts),
+                              preview: SharePreview("Bergr Machines")) {
+                        AccentLabel(title: "Export Machines", systemImage: "square.and.arrow.up")
+                    }
+                }
+                Button {
+                    importing = true
+                } label: {
+                    AccentLabel(title: "Import Machines", systemImage: "square.and.arrow.down")
+                }
             } header: {
                 Text("Machines")
             } footer: {
-                Text("Machines running herdr-core that Bergr connects to over SSH. Swipe a machine to delete it.")
+                Text(importResult ?? "Machines running herdr-core that Bergr connects to over SSH. Swipe a machine to delete it. An export holds the machines and their host keys, never a private key: on another phone, add that phone's key to your machines.")
+            }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+                importResult = importMachines(result)
             }
 
             Section {

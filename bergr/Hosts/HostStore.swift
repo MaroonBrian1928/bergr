@@ -1,5 +1,8 @@
 // Modified for Bergr, 2026, from Hirte (Apache-2.0). See the git history for all changes.
 import Foundation
+#if os(iOS)
+import UIKit
+#endif
 import HerdrKit
 import Observation
 import SwiftUI
@@ -63,12 +66,18 @@ final class HostStore {
     private let defaults: UserDefaults
     private let key = "bergr.hosts"
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = SharedSettings.defaults) {
         self.defaults = defaults
         if let data = defaults.data(forKey: key),
            let saved = try? JSONDecoder().decode([Host].self, from: data) {
             hosts = saved
         }
+        #if os(iOS)
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reload() }
+        }
+        #endif
         // No demo machine in this build: drop one saved earlier.
         if hosts.contains(where: \.isDemo) {
             hosts.removeAll(where: \.isDemo)
@@ -148,6 +157,14 @@ final class HostStore {
 
     private func persist() {
         defaults.set(try? JSONEncoder().encode(hosts), forKey: key)
+    }
+
+    /// Reads the saved machines again: the other build on this phone (dev or TestFlight) shares
+    /// them, and may have changed them while this one was in the background.
+    func reload() {
+        guard let data = defaults.data(forKey: key),
+              let saved = try? JSONDecoder().decode([Host].self, from: data) else { return }
+        if saved != hosts { hosts = saved }
     }
 }
 

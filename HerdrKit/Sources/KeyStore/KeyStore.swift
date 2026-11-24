@@ -294,9 +294,16 @@ public protocol KeyStorage: Sendable {
 /// Generic-password items in the data protection keychain, never synced off the device.
 public struct KeychainKeyStorage: KeyStorage {
     public let service: String
+    /// A keychain group other builds of the app share (`BergrSharedKeychainGroup` in Info.plist):
+    /// new keys go there, and keys found elsewhere are moved there, so the dev build and the
+    /// TestFlight build on one phone use the same keys. Nil: the app's own group, as before.
+    public let sharedGroup: String?
 
-    public init(service: String = "bergr.ssh-keys") {
+    public init(service: String = "bergr.ssh-keys",
+                sharedGroup: String? = Bundle.main.object(forInfoDictionaryKey: "BergrSharedKeychainGroup") as? String) {
         self.service = service
+        // An unexpanded build setting means no group.
+        self.sharedGroup = sharedGroup.flatMap { $0.isEmpty || $0.contains("$(") ? nil : $0 }
     }
 
     private var baseQuery: [String: Any] {
@@ -317,7 +324,23 @@ public struct KeychainKeyStorage: KeyStorage {
         if status == errSecItemNotFound { return [] }
         guard status == errSecSuccess else { throw KeyStoreError.keychain(status: status) }
         let items = result as? [[String: Any]] ?? []
-        return items.compactMap { $0[kSecValueData as String] as? Data }
+        if let sharedGroup {
+            for item in items {
+                guard let account = item[kSecAttrAccount as String] as? String,
+                      let group = item[kSecAttrAccessGroup as String] as? String, group != sharedGroup else { continue }
+                var query = baseQuery
+                query[kSecAttrAccount as String] = account
+                query[kSecAttrAccessGroup as String] = group
+                // Best effort: a key that can't move stays usable by this build.
+                _ = SecItemUpdate(query as CFDictionary, [kSecAttrAccessGroup as String: sharedGroup] as CFDictionary)
+            }
+        }
+        // One per account (a key seen in two groups mid-move).
+        var seen = Set<String>()
+        return items.compactMap { item in
+            if let account = item[kSecAttrAccount as String] as? String, !seen.insert(account).inserted { return nil }
+            return item[kSecValueData as String] as? Data
+        }
     }
 
     public func save(_ data: Data, account: String) throws {
@@ -328,6 +351,7 @@ public struct KeychainKeyStorage: KeyStorage {
         if status == errSecItemNotFound {
             query[kSecValueData as String] = data
             query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            if let sharedGroup { query[kSecAttrAccessGroup as String] = sharedGroup }
             status = SecItemAdd(query as CFDictionary, nil)
         }
         guard status == errSecSuccess else { throw KeyStoreError.keychain(status: status) }

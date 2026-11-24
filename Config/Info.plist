@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BergrSharedKeychainGroup</key>
+	<string>$(AppIdentifierPrefix)$(BERGR_BUNDLE_ID_PREFIX).bergr.shared</string>
 	<key>BergrAppGroup</key>
 	<string>group.$(BERGR_BUNDLE_ID_PREFIX).bergr</string>
 	<key>CFBundleURLTypes</key>

@@ -55,7 +55,7 @@ final class HostSession {
     private var seenWritten: [String: UInt64] = [:]
 
     init(
-        host: Host, knownHosts: any KnownHostsStore = UserDefaultsKnownHosts(),
+        host: Host, knownHosts: any KnownHostsStore = UserDefaultsKnownHosts(defaults: SharedSettings.defaults),
         connector: HostConnector? = nil, timing: ConnectionTiming = .init()
     ) {
         self.host = host

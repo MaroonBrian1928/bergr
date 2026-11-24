@@ -37,6 +37,13 @@ final class KeyLibrary {
         self.load = { try store.signingKey(for: $0, authenticationContext: $1) }
         self.waitUntilActive = Self.waitForActivation
         reload()
+        #if os(iOS)
+        // The other build on this phone shares the keys and may have added one meanwhile.
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reload() }
+        }
+        #endif
     }
 
     init(
