@@ -1837,7 +1837,7 @@ struct ChatView: View {
         guard canType else { return }
         if model.watching { model.setWatching(false) }
         Task {
-            if model.menuOpen, state == "idle", !model.inLogin {
+            if model.menuOpen, state == "idle" || state == "done", !model.inLogin {
                 guard await model.closeMenu() else {
                     sendError = "Couldn't close the open menu. Press Esc in the terminal, then try again."
                     return
@@ -1940,7 +1940,7 @@ struct ChatView: View {
         }
         // A slash-command menu is open (the agent reads as idle): typed text would land in it.
         // Close it first; if it won't close, keep the draft and say so.
-        if model.menuOpen, state == "idle", !model.inLogin {
+        if model.menuOpen, state == "idle" || state == "done", !model.inLogin {
             guard !closingMenu else { return }
             closingMenu = true
             Task { @MainActor in
@@ -3215,7 +3215,8 @@ private struct AnswerSlot: View {
         if (blocked && terminal.status?.kind != "auth") || model.inLogin || auth || approval {
             AnswerCard(status: terminal.status, model: model, palette: palette, scope: scope, demo: demo) { record($0, $1) }
                 .transition(transition)
-        } else if model.menuOpen, terminal.status?.state == "idle" {
+        } else if model.menuOpen, ["idle", "done"].contains(terminal.status?.state) {
+            // "done": a finished turn not yet looked at; the agent is just as much at rest.
             MenuCard(model: model, palette: palette).transition(transition)
         } else if let offer = AlwaysAllowOffers.shared.current, offer.scope == scope {
             AlwaysAllowBanner(offer: offer, palette: palette).transition(transition)

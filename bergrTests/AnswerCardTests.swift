@@ -340,4 +340,31 @@ struct MenuOpenTests {
     @Test func title() {
         #expect(AnswerParser.menuTitle(Self.permissions) == "Update Model Permissions")
     }
+
+    /// Claude's /permissions panel on a phone-width terminal (its footer wraps).
+    static let claudePermissions = [
+        "✻ Crunched for 1m 2s · done 5:06 PM",
+        "────────────────────────────────────────",
+        "",
+        "  Permissions  Recently blocked   Allow   Ask",
+        "               Deny   Auto mode   Workspace",
+        "",
+        "  Commands auto mode recently blocked. Approving",
+        "  adds no rule.",
+        "",
+        "  ❯ 1. ✘ Run commands   Auto mode: [Destructive or",
+        "                        Unwanted Actions]",
+        "",
+        "    ┊ const tomlPath = F+'/wrangler.toml';",
+        "    … +27 lines (ctrl+o to see more)",
+        "",
+        "  ↑/↓ to navigate · r to retry · Enter to approve ·",
+        "  Esc to close",
+    ]
+
+    @Test func claudePermissionsPanel() {
+        #expect(AnswerParser.menuOpen(Self.claudePermissions))
+        #expect(AnswerParser.menuTitle(Self.claudePermissions) == "Permissions  Recently blocked   Allow   Ask")
+        #expect(AnswerParser.choices(in: Array(Self.claudePermissions.suffix(20))).map(\.number) == [1])
+    }
 }

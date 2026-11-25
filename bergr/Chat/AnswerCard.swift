@@ -145,6 +145,12 @@ enum AnswerParser {
     /// The open menu's title: the first line of the block (up to the previous blank line) above its footer.
     static func menuTitle(_ lines: [String]) -> String? {
         guard let footer = menuFooterIndex(lines) else { return nil }
+        // Claude draws its panels (/permissions, /config …) under a horizontal rule: the title is
+        // the first line below it. Its footer can wrap, so the line above the footer isn't safe.
+        if let rule = (max(0, footer - 40)..<footer).last(where: { isFullRule(lines[$0]) }),
+           let first = lines[(rule + 1)..<footer].map(clean).first(where: { !$0.isEmpty }) {
+            return first
+        }
         var title: String?
         var i = footer - 1
         var n = 0
@@ -177,6 +183,11 @@ enum AnswerParser {
     private static let markers: Set<Character> = Set("❯›>▶►→➤▸")
 
     /// A line without box-drawing borders or surrounding spaces.
+    private static func isFullRule(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        return t.count >= 10 && t.allSatisfy { "─━═▔▁-".contains($0) }
+    }
+
     static func clean(_ line: String) -> String {
         var chars = Substring(line)
         while let f = chars.first, f.isWhitespace || borders.contains(f) { chars = chars.dropFirst() }
