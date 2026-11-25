@@ -29,6 +29,13 @@ struct NewSessionTests {
         #expect(NewSession.parsePath("claude\t/x\n") == nil)
     }
 
+    @Test func startsAgentsWithoutAnInheritedClaudeSession() {
+        let argv = NewSession.clean(["/bin/claude", "--resume", "x"], windows: false)
+        #expect(argv.first == "env" && argv.suffix(3) == ["/bin/claude", "--resume", "x"])
+        #expect(argv.contains("CLAUDE_CODE_CHILD_SESSION"))
+        #expect(NewSession.clean(["claude.exe"], windows: true) == ["claude.exe"])
+    }
+
     @Test func recentFoldersAreAgentFoldersNewestFirstWithoutRepeats() throws {
         let folders = NewSession.recentFolders([
             try terminal("t1", cwd: "/Users/me/src/old", ms: 1),

@@ -3,6 +3,21 @@ import SwiftUI
 
 /// Pure helpers for the New Session sheet.
 enum NewSession {
+    /// What a Claude Code session passes to the programs it runs. A terminal started from inside
+    /// one (or a herdr-core started from one) hands them on: a new Claude then saves no transcript
+    /// (CLAUDE_CODE_CHILD_SESSION) and Bergr's chat stays empty.
+    static let inheritedClaudeVariables = [
+        "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE", "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_BRIDGE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_CHILD_NOTES_DIR", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_ENTRYPOINT",
+    ]
+
+    /// An agent's argv run through `env -u …` so it starts without them (not on Windows, which has no env).
+    static func clean(_ argv: [String], windows: Bool) -> [String] {
+        windows ? argv : ["env"] + inheritedClaudeVariables.flatMap { ["-u", $0] } + argv
+    }
+
     /// The command each agent's CLI goes by.
     static func command(_ agent: ChatAgent) -> String {
         switch agent {
@@ -412,7 +427,7 @@ struct NewSessionView: View {
                 guard let resume = RecentSessions.resumeArgv(agent: agent, path: path, id: resumed.id) else { return }
                 argv = resume
             }
-            request = RunRequest(argv: argv)
+            request = RunRequest(argv: NewSession.clean(argv, windows: session.isWindowsHost))
             if let path = searchPath[hostID] { request.env?["PATH"] = path }
         }
         starting = true

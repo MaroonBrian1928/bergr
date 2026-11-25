@@ -124,7 +124,7 @@ final class AgentLifecycle {
                 guard let id, let argv = RecentSessions.resumeArgv(agent: agent, path: path, id: id) else {
                     throw LifecycleError("There's no conversation to resume.")
                 }
-                var request = RunRequest(argv: argv)
+                var request = RunRequest(argv: NewSession.clean(argv, windows: session.isWindowsHost))
                 if let p = NewSession.parsePath(output) { request.env?["PATH"] = p }
                 request.cwd = folder
                 var labels = [Terminal.seenLabel: "0"]
