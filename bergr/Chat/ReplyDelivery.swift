@@ -346,7 +346,19 @@ struct ReplyEnvironment {
         // /clear has no user-message echo. A changed session is its acknowledgement;
         // never send extra Returns or infer failure from its absence in the transcript.
         let end = ContinuousClock.now + env.timing.imagesGiveUp
+        var nudged = false
         while ContinuousClock.now < end, reply.epoch == epoch {
+            // Codex: a quick Return only picks /clear from its command list and leaves it in the
+            // input ("› /clear"); a second Return runs it. Only when the input holds exactly that.
+            if !nudged, ContinuousClock.now > end - env.timing.imagesGiveUp + env.timing.confirmEnterWait,
+               Self.clearStillTyped(env.terminal.frameLines) {
+                nudged = true
+                await env.terminal.automate {
+                    guard reply.epoch == epoch, env.conversationID() == conversation,
+                          Self.clearStillTyped(env.terminal.frameLines) else { return }
+                    env.terminal.press(.enter)
+                }
+            }
             if let current = env.conversationID(), current != conversation {
                 reply.set(.confirmed)
                 remove(reply)
@@ -357,6 +369,14 @@ struct ReplyEnvironment {
         guard reply.epoch == epoch else { return }
         reply.driver = nil
         reply.set(.failed)
+    }
+
+    /// The agent's input line still holds just "/clear" (unsent), e.g. Codex's `› /clear`.
+    nonisolated static func clearStillTyped(_ lines: [String]) -> Bool {
+        lines.suffix(8).contains { line in
+            let t = line.trimmingCharacters(in: .whitespaces)
+            return t == "› /clear" || t == "❯ /clear" || t == "> /clear"
+        }
     }
 
     /// A Return can be lost (sent on a channel that was being replaced as the app came back): the

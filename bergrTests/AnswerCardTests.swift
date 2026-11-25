@@ -299,3 +299,45 @@ struct LinkedAlsoDirectTests {
         #expect(AnswerParser.choices(in: lines).last?.detail == "Press Enter to insert a newline")
     }
 }
+
+struct MenuOpenTests {
+    static let model = [
+        "  Select model",
+        "  Your pick is the default for new sessions. For other models, use --model.",
+        "    1.  Default (recommended)  Opus 5.5 · Best for everyday, complex tasks",
+        "  ❯ 5.  Haiku 5.5 ✔            Fastest for quick answers",
+        "  ◐ Medium effort (default) ←/→ to adjust",
+        "",
+        "  s to use this session only · Enter to save · Esc to cancel",
+    ]
+    static let permissions = [
+        "  Update Model Permissions",
+        "  1. Ask for approval          Read and edit workspace files ...",
+        "› 2. Approve for me (current)  Only ask for actions detected as potentially unsafe",
+        "  3. Full Access               Use with caution ...",
+        "",
+        "  enter select · esc back",
+    ]
+    static let idleClaude = ["● Done.", "", "╭────╮", "│ ❯  │", "╰────╯", "  ⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent"]
+    static let idleCodex = ["• Done.", "", "› Ask Codex to do anything", "", "  ← for agents · ? for shortcuts"]
+
+    @Test func detectsMenus() {
+        #expect(AnswerParser.menuOpen(Self.model))
+        #expect(AnswerParser.menuOpen(Self.permissions))
+        #expect(AnswerParser.menuOpen(["  Servers", "  ↑/↓ to navigate · Enter to view · Esc to close"]))
+        #expect(AnswerParser.menuOpen(["  Config", "  ↓ to navigate · ↑ to switch tabs · Esc to go back"]))
+        #expect(AnswerParser.menuOpen(["  Resume", "  Ctrl+A to show all projects · Ctrl+B to only show current branch · Esc to close"]))
+        #expect(AnswerParser.menuOpen([" Resume a chat", " enter resume   esc exit   ^c exit   tab focus sort/filter   ←/→ change option"]))
+    }
+
+    @Test func ignoresNormalScreens() {
+        #expect(!AnswerParser.menuOpen(Self.idleClaude))
+        #expect(!AnswerParser.menuOpen(Self.idleCodex))
+        #expect(!AnswerParser.menuOpen(["Steps:", "1. Install", "2. Build", "3. Test", "", "❯ "]))
+        #expect(!AnswerParser.menuOpen(["Esc to close"] + Self.idleClaude + ["a", "b"]))
+    }
+
+    @Test func title() {
+        #expect(AnswerParser.menuTitle(Self.permissions) == "Update Model Permissions")
+    }
+}

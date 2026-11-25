@@ -21,6 +21,7 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var attachments: [ChatAttachment] = []
     @State private var sendError: String?
+    @State private var closingMenu = false
     /// Sent replies, shown at once and until the agent's conversation has them.
     @State private var outbox = ReplyOutbox()
     @State private var sent = 0
@@ -1749,6 +1750,12 @@ struct ChatView: View {
         guard canType else { return }
         if model.watching { model.setWatching(false) }
         Task {
+            if model.menuOpen, state == "idle", !model.inLogin {
+                guard await model.closeMenu() else {
+                    sendError = "Couldn't close the open menu. Press Esc in the terminal, then try again."
+                    return
+                }
+            }
             await model.automate {
                 model.type(text)
                 try? await Task.sleep(for: .milliseconds(150))
@@ -1841,6 +1848,19 @@ struct ChatView: View {
             draft = ""
             sendError = nil
             answerClaudeInOwnWords(text, question: open.id, info: open.info)
+            return
+        }
+        // A slash-command menu is open (the agent reads as idle): typed text would land in it.
+        // Close it first; if it won't close, keep the draft and say so.
+        if model.menuOpen, state == "idle", !model.inLogin {
+            guard !closingMenu else { return }
+            closingMenu = true
+            Task { @MainActor in
+                let closed = await model.closeMenu()
+                closingMenu = false
+                if closed { send(interrupting: interrupting) }
+                else { sendError = "Couldn't close the open menu. Press Esc in the terminal, then send again." }
+            }
             return
         }
         sendAsNewMessage = false
@@ -3076,9 +3096,90 @@ private struct AnswerSlot: View {
         if blocked || model.inLogin {
             AnswerCard(status: terminal.status, model: model, palette: palette, scope: scope, demo: demo) { record($0, $1) }
                 .transition(transition)
+        } else if model.menuOpen, terminal.status?.state == "idle" {
+            MenuCard(model: model, palette: palette).transition(transition)
         } else if let offer = AlwaysAllowOffers.shared.current, offer.scope == scope {
             AlwaysAllowBanner(offer: offer, palette: palette).transition(transition)
         }
+    }
+}
+
+/// A slash-command menu is open in the terminal while the agent reads as idle: its options as
+/// buttons when they parse, and a Close button.
+private struct MenuCard: View {
+    let model: TerminalScreenModel
+    let palette: ChatPalette
+    @State private var closing = false
+    @State private var tapped = 0
+
+    var body: some View {
+        let lines = model.textLines
+        let title = AnswerParser.menuTitle(lines) ?? "A menu is open"
+        let choices = AnswerParser.choices(in: Array(lines.suffix(20)))
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: "list.bullet")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(palette.text)
+                .lineLimit(2)
+            Text("A menu is open in the terminal. Pick an option, or close it to chat again.")
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+            ForEach(choices, id: \.number) { choice in
+                Button {
+                    tapped += 1
+                    closing = true
+                    let steps = AnswerParser.steps(to: choice, in: choices)
+                    Task { @MainActor in
+                        defer { closing = false }
+                        await model.automate {
+                            // The same menu still up, or nothing: a queued tap must not land on
+                            // whatever replaced it.
+                            guard AnswerParser.menuOpen(model.textLines),
+                                  AnswerParser.choices(in: Array(model.textLines.suffix(20))) == choices else { return }
+                            let key: TerminalKey = steps < 0 ? .up : .down
+                            for _ in 0..<abs(steps) {
+                                model.press(key)
+                                try? await Task.sleep(for: .milliseconds(40))
+                            }
+                            try? await Task.sleep(for: .milliseconds(80))
+                            model.press(.enter)
+                        }
+                    }
+                } label: {
+                    Text("\(choice.number). \(choice.label)")
+                        .font(.callout)
+                        .foregroundStyle(palette.text)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: PlatformMetrics.controlHeight)
+                        .background(palette.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(PressStyle())
+                .disabled(closing)
+            }
+            Button {
+                tapped += 1
+                closing = true
+                Task { @MainActor in
+                    _ = await model.closeMenu()
+                    closing = false
+                }
+            } label: {
+                Text("Close")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(palette.onAccent)
+                    .frame(maxWidth: .infinity, minHeight: PlatformMetrics.controlHeight)
+                    .background(palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(PressStyle())
+            .disabled(closing)
+        }
+        .padding(14)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .sensoryFeedback(.impact(weight: .light), trigger: tapped)
     }
 }
 

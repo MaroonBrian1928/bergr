@@ -104,6 +104,21 @@ import UIKit
         #expect(reply.phase == .confirmed)
     }
 
+    @Test func codexClearLeftInInputGetsSecondReturn() async {
+        let rig = ReplyRig()
+        // Codex: the first Return only picks /clear from its command list.
+        rig.terminal.frameLines = ["› /clear  clear the terminal and start a new chat", "› /clear"]
+        var enters = 0
+        rig.terminal.onEnter = {
+            enters += 1
+            if enters == 2 { rig.conversationID = "new"; rig.terminal.frameLines = ["› Ask Codex to do anything"] }
+        }
+        let reply = rig.send("/clear")
+        await rig.until { rig.outbox.replies.isEmpty }
+        #expect(reply.phase == .confirmed)
+        #expect(rig.terminal.count("enter") == 2)
+    }
+
     @Test func clearWithoutSessionChangeIsNotConfirmed() async {
         let rig = ReplyRig()
         let reply = rig.send("/clear")

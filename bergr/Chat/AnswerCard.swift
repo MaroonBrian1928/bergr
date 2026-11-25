@@ -66,6 +66,42 @@ enum AnswerParser {
         return recent.contains("Rewind") && recent.contains { $0.hasPrefix("Esc to cancel") }
     }
 
+    private static let menuFooters = ["esc to close", "esc to cancel", "esc to go back", "esc back", "esc exit"]
+
+    /// A slash-command menu (/model, /resume, /mcp, /config, /permissions ...) is open: one of its
+    /// footers is in the last few non-empty lines. A cheap text check, run on every redraw.
+    static func menuOpen(_ lines: [String]) -> Bool { menuFooterIndex(lines) != nil }
+
+    private static func menuFooterIndex(_ lines: [String]) -> Int? {
+        var seen = 0
+        var i = lines.count - 1
+        // Only the bottom two lines: a menu's footer is its last line (Claude may print a hint
+        // line under it); anything higher is the agent's own output.
+        while i >= 0, seen < 2 {
+            let line = lines[i]
+            if !line.allSatisfy(\.isWhitespace) {
+                seen += 1
+                if menuFooters.contains(where: { line.localizedCaseInsensitiveContains($0) }) { return i }
+            }
+            i -= 1
+        }
+        return nil
+    }
+
+    /// The open menu's title: the first line of the block (up to the previous blank line) above its footer.
+    static func menuTitle(_ lines: [String]) -> String? {
+        guard let footer = menuFooterIndex(lines) else { return nil }
+        var title: String?
+        var i = footer - 1
+        var n = 0
+        while i >= 0, n < 12 {
+            let line = clean(lines[i])
+            if line.isEmpty { if title != nil { break } } else { title = line; n += 1 }
+            i -= 1
+        }
+        return title
+    }
+
     /// Whether the screen asks something Yes/No/numbered buttons can answer.
     static func isAsking(_ lines: [String]) -> Bool {
         if !choices(in: lines).isEmpty { return true }

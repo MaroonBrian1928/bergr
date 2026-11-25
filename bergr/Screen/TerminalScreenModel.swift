@@ -22,6 +22,8 @@ final class TerminalScreenModel {
     /// menu don't each rebuild them (or redraw) on every frame.
     private(set) var textLines: [String] = []
     private(set) var inLogin = false
+    /// A slash-command menu is open at the bottom of the screen.
+    private(set) var menuOpen = false
     /// Typed input a dropped channel left unconfirmed (it may or may not have arrived): the
     /// screen offers Resend or Discard; nothing is resent on its own.
     private(set) var ambiguousInput = 0
@@ -705,6 +707,33 @@ final class TerminalScreenModel {
         textLines = lines
         let login = AnswerParser.inLogin(lines)
         if login != inLogin { inLogin = login }
+        let menu = AnswerParser.menuOpen(lines)
+        if menu != menuOpen { menuOpen = menu }
+    }
+
+    /// Presses Esc until the menu footer is gone (at most 5 times). Each Esc is sent only when the
+    /// menu is on the latest screen, checked inside the automation (after anything queued before
+    /// it), and the next one waits for the screen to change: an extra Esc on Claude's prompt opens
+    /// rewind, and one on a working agent interrupts it. True when closed.
+    func closeMenu() async -> Bool {
+        if watching { setWatching(false) }
+        for _ in 0..<5 {
+            var sent = false, redrawn = false
+            await automate {
+                guard AnswerParser.menuOpen(self.textLines) else { return }
+                let before = self.textLines
+                self.press(.escape)
+                sent = true
+                for _ in 0..<20 where self.textLines == before {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                redrawn = self.textLines != before
+            }
+            guard sent else { return true }
+            // No redraw after an Esc: don't press another blind.
+            guard redrawn else { break }
+        }
+        return !AnswerParser.menuOpen(textLines)
     }
 
     #if DEBUG
@@ -713,6 +742,8 @@ final class TerminalScreenModel {
         if lines != textLines { textLines = lines }
         let login = AnswerParser.inLogin(lines)
         if login != inLogin { inLogin = login }
+        let menu = AnswerParser.menuOpen(lines)
+        if menu != menuOpen { menuOpen = menu }
     }
     #endif
 }
