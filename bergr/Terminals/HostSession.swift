@@ -164,6 +164,21 @@ final class HostSession {
     }
     #endif
 
+    @ObservationIgnored private var pendingCodexReplies: [String: (conversation: String?, replies: [ReplyDelivery])] = [:]
+
+    func rememberCodexReplies(_ replies: [ReplyDelivery], address: String, conversation: String?) {
+        guard !replies.isEmpty else { return }
+        let prior = takeCodexReplies(address: address, conversation: conversation)
+        let ids = Set(replies.map(\.id))
+        pendingCodexReplies[address] = (conversation, prior.filter { !ids.contains($0.id) } + replies)
+    }
+
+    func takeCodexReplies(address: String, conversation: String?) -> [ReplyDelivery] {
+        guard let pending = pendingCodexReplies.removeValue(forKey: address) else { return [] }
+        if let prior = pending.conversation, let conversation, prior != conversation { return [] }
+        return pending.replies
+    }
+
     // MARK: Chat feeds
 
     /// Conversations being followed, by terminal address. The session owns them, not the screen:
@@ -182,7 +197,8 @@ final class HostSession {
     /// The feed for a terminal's agent: the running one, or a new one.
     @MainActor
     func chatFeed(address: String, agent: ChatAgent, pid: Int32, cwd: String, sessionHint: String?) -> ChatFeed {
-        if let entry = feeds[address], entry.agent == agent {
+        if let entry = feeds[address], entry.agent == agent,
+           pid == 0 || feedStarts[address]?.pid == pid {
             feeds[address]?.used = .now
             return entry.feed
         }

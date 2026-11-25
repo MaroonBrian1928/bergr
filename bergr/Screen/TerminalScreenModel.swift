@@ -21,6 +21,8 @@ final class TerminalScreenModel {
     /// once per frame and set only when they change, so the chat's answer bar and permissions
     /// menu don't each rebuild them (or redraw) on every frame.
     private(set) var textLines: [String] = []
+    private(set) var codexQueuedInputs: [String] = []
+    private(set) var claudeTranscriptWarning: ClaudeTranscriptWarning?
     private(set) var inLogin = false
     /// A slash-command menu is open at the bottom of the screen.
     private(set) var menuOpen = false
@@ -283,6 +285,13 @@ final class TerminalScreenModel {
     /// Runs one automated key sequence after the ones started before it have finished.
     /// Automated typing under way (a chat reply being delivered): the typed line is its, not the person's.
     @ObservationIgnored private var automating = 0
+
+    var canSubmitShellCommand: Bool { phase == .live && attached != nil && !watching }
+
+    func hasForegroundAgent(_ agent: ChatAgent) -> Bool {
+        guard let address, let foreground = session?.terminal(address)?.foreground else { return false }
+        return ChatAgent.detect(name: foreground.name, argv: foreground.argv) == agent
+    }
 
     func automate(_ steps: @escaping @MainActor () async -> Void) async {
         automating += 1
@@ -575,6 +584,12 @@ final class TerminalScreenModel {
         return "\(findIndex + 1) of \(findMatches.count)"
     }
 
+    /// Bounded preview for chats whose agent has no saved transcript.
+    func recentTerminalText() -> [String] {
+        guard let vt else { return textLines }
+        return Array(vt.textSnapshot().lines.suffix(160))
+    }
+
     /// Searches the scrollback and screen for `query` (ignoring case) and shows the first match
     /// at or after the top of what is on screen.
     func find(_ query: String) {
@@ -705,6 +720,10 @@ final class TerminalScreenModel {
         }
         guard lines != textLines else { return }
         textLines = lines
+        let queue = CodexQueuedInputs.read(lines)
+        if queue != codexQueuedInputs { codexQueuedInputs = queue }
+        let warning = ClaudeTranscriptWarning.read(lines)
+        if warning != claudeTranscriptWarning { claudeTranscriptWarning = warning }
         let login = AnswerParser.inLogin(lines)
         if login != inLogin { inLogin = login }
         let menu = AnswerParser.menuOpen(lines)
@@ -740,6 +759,10 @@ final class TerminalScreenModel {
     /// A screen's text without a terminal behind it, for tests: what a new frame sets.
     func showText(_ lines: [String]) {
         if lines != textLines { textLines = lines }
+        let queue = CodexQueuedInputs.read(lines)
+        if queue != codexQueuedInputs { codexQueuedInputs = queue }
+        let warning = ClaudeTranscriptWarning.read(lines)
+        if warning != claudeTranscriptWarning { claudeTranscriptWarning = warning }
         let login = AnswerParser.inLogin(lines)
         if login != inLogin { inLogin = login }
         let menu = AnswerParser.menuOpen(lines)

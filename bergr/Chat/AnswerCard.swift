@@ -9,11 +9,43 @@ struct AnswerChoice: Equatable, Sendable {
     var detail: String = ""
 }
 
+enum ClaudeTranscriptWarning: Equatable {
+    case inheritedChildSession
+    case savingDisabled
+
+    static func read(_ lines: [String]) -> Self? {
+        guard let line = lines.suffix(8).last(where: {
+            $0.localizedCaseInsensitiveContains("Transcript saving is off")
+        }) else { return nil }
+        return line.localizedCaseInsensitiveContains("inherited") ? .inheritedChildSession : .savingDisabled
+    }
+}
+
 enum AnswerParser {
     /// Claude Code signed out on the machine ("Login expired · Please run /login",
     /// "Not logged in · Run /login"): herdr-core reports it as blocked, but there's no question.
     static func needsLogin(in lines: [String]) -> Bool {
-        lines.contains { $0.contains("run /login") || $0.contains("Run /login") }
+        let tail = lines.filter { !clean($0).isEmpty }.suffix(8)
+        for line in tail.reversed() {
+            let text = clean(line).lowercased()
+            if text.contains("login successful") { return false }
+            let notice = text.drop(while: { "└⎿●⏺ ".contains($0) })
+            if notice == "login interrupted" || notice.hasPrefix("not logged in")
+                || notice.hasPrefix("login expired") || notice.hasPrefix("please run /login")
+                || notice.hasPrefix("run /login") {
+                return true
+            }
+            // A new assistant response supersedes an older error in the viewport.
+            if text.hasPrefix("● ") || text.hasPrefix("⏺ ") { return false }
+        }
+        return false
+    }
+
+    static func showSignedOut(in lines: [String], status: TerminalStatus?) -> Bool {
+        if needsLogin(in: lines) { return true }
+        // The host's auth status can lag behind a successful login. Use it only
+        // while the terminal hasn't drawn anything we can inspect.
+        return status?.kind == "auth" && lines.allSatisfy { $0.allSatisfy(\.isWhitespace) }
     }
 
     /// Where Claude Code's /login is, from its screen (it shows a method menu first, which the
@@ -30,10 +62,24 @@ enum AnswerParser {
         // stays visible higher up for a while and must not keep the card up.
         let filled = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         let tail = Array(filled.suffix(6))
-        if tail.contains(where: { $0.contains("Press Enter to continue") || $0.contains("Login successful") }) {
+        guard let prompt = tail.last(where: { !clean($0).isEmpty }) else { return nil }
+        let text = clean(prompt).lowercased()
+        if text.hasPrefix("login successful") ||
+            (text.hasPrefix("press enter to continue") && tail.contains(where: {
+                clean($0).lowercased().hasPrefix("login successful")
+            })) {
             return .succeeded
         }
-        guard tail.contains(where: { $0.localizedCaseInsensitiveContains("paste code") }) else { return nil }
+        let codeField = tail.reversed().first { row in
+            let field = clean(row).lowercased()
+            return (field.hasPrefix("paste code here") || field.hasPrefix("paste the code from your browser"))
+                && (field.hasSuffix(">") || field.hasSuffix(":"))
+        }
+        guard let codeField, let index = tail.lastIndex(of: codeField),
+              tail[(index + 1)...].allSatisfy({ row in
+                  let hint = clean(row).lowercased()
+                  return hint.isEmpty || hint.hasPrefix("esc to cancel") || hint.hasPrefix("press esc")
+              }) else { return nil }
         return .pasteCode(url: signInURL(in: Array(filled.suffix(30))))
     }
 
@@ -56,8 +102,16 @@ enum AnswerParser {
         if loginStep(in: lines) != nil || rewindOpen(lines) { return true }
         // The cheap text check first: this runs on every terminal redraw, and parsing choices
         // across the whole screen each keystroke made typing lag.
+        return !loginChoices(in: lines).isEmpty
+    }
+
+    static func loginChoices(in lines: [String]) -> [AnswerChoice] {
         let recent = Array(lines.suffix(30))
-        return recent.contains { $0.localizedCaseInsensitiveContains("login method") } && !choices(in: recent).isEmpty
+        guard let heading = recent.lastIndex(where: {
+            $0.localizedCaseInsensitiveContains("login method")
+            || $0.localizedCaseInsensitiveContains("select an account")
+        }) else { return [] }
+        return choices(in: Array(recent.suffix(from: heading)))
     }
 
     /// Claude's Rewind menu (Esc twice) is open: "Rewind" … "Esc to cancel".
@@ -104,9 +158,19 @@ enum AnswerParser {
 
     /// Whether the screen asks something Yes/No/numbered buttons can answer.
     static func isAsking(_ lines: [String]) -> Bool {
+        if inLogin(lines) { return false }
         if !choices(in: lines).isEmpty { return true }
-        if needsLogin(in: lines) || loginStep(in: lines) != nil || rewindOpen(lines) { return false }
+        if needsLogin(in: lines) { return false }
         return lines.contains { $0.contains("?") }
+    }
+
+    /// Claude's native approval menu can appear before herdr reports it as blocked.
+    static func showsApprovalChoices(in lines: [String]) -> Bool {
+        guard menuOpen(lines), !inLogin(lines) else { return false }
+        let options = choices(in: Array(lines.suffix(20)))
+        return options.contains(where: \.selected)
+            && options.contains { $0.label.lowercased().hasPrefix("yes") }
+            && options.contains { $0.label.lowercased().hasPrefix("no") }
     }
 
     private static let borders: Set<Character> = Set("│┃║╭╮╰╯┌┐└┘─━═┆┊╎|")
@@ -253,6 +317,8 @@ enum AnswerParser {
         var j = at + 1
         while j < lines.count, let text = option(lines[j]) { below.append(text); j += 1 }
         let selected = clean(String(raw[labelStart...]))
+        // Claude echoes slash commands with the same cursor glyph as a menu.
+        guard !selected.hasPrefix("/") else { return nil }
         let labels = above + [selected] + below
         guard labels.count >= 2, labels.count <= 9 else { return nil }
         let choices = labels.enumerated().map { n, label in
@@ -320,6 +386,7 @@ struct AnswerCard: View {
     @Environment(\.colorScheme) private var scheme
     @State private var tapped = 0
     @State private var changed = false
+    @State private var loginError: String?
     /// The number of a dangerous prompt's Yes that was tapped once and waits for a second tap.
     @State private var confirming: Int?
     /// The on-device explanation of the command it belongs to; kept per command, so a stale one
@@ -347,12 +414,15 @@ struct AnswerCard: View {
         let asked = lines.suffix(12).last(where: { $0.contains("?") }).map(AnswerParser.clean)
         // Claude Code and Codex ask with numbered menus that ignore y/n: if none was read, the
         // generic Yes/No buttons would answer nothing.
-        let numberedOnly = ["claude-code", "codex"].contains(status?.app ?? "")
+        let app = status?.app?.lowercased() ?? ""
+        let numberedOnly = ["claude", "claude-code", "codex"].contains(app)
         if choices.isEmpty, AnswerParser.rewindOpen(lines) {
             rewindCard
-        } else if choices.isEmpty, let step = AnswerParser.loginStep(in: lines) {
+        } else if let step = AnswerParser.loginStep(in: lines) {
             LoginStepCard(step: step, model: model, palette: palette)
-        } else if choices.isEmpty, AnswerParser.needsLogin(in: lines) || status?.kind == "auth" {
+        } else if let first = AnswerParser.loginChoices(in: lines).first, choices.contains(first) {
+            card(choices, question: "Choose a Claude sign-in method", context: [])
+        } else if !AnswerParser.showsApprovalChoices(in: lines), AnswerParser.showSignedOut(in: lines, status: status) {
             loginCard
         } else if choices.isEmpty, let asked, !numberedOnly, let reason = DangerousCommand.check(asked) {
             // The generic Yes/No buttons are no place to approve this one.
@@ -381,18 +451,30 @@ struct AnswerCard: View {
             Label("Claude is signed out on this machine", systemImage: "person.crop.circle.badge.exclamationmark")
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(palette.text)
-            Text("Its login expired, so it can't answer. Sign in again from here: pick the account type, open the link, and paste the code back.")
+            Text(model.textLines.contains { $0.contains("security unlock-keychain") }
+                 ? "Claude reports a locked keychain. Unlock the login keychain on the Mac running Claude, then retry."
+                 : "Pick the account type, open the sign-in link, and paste the code back here.")
                 .font(.footnote)
                 .foregroundStyle(palette.secondary)
             Button {
                 if model.watching { model.setWatching(false) }
                 tapped += 1
                 Task { @MainActor in
-                    // Close whatever menu is open (Rewind, say) so the keys reach the prompt, then
-                    // clear the line and run /login. One Esc only: two would open Rewind.
+                    loginError = nil
+                    guard model.hasForegroundAgent(.claude) else {
+                        loginError = "Claude isn’t in front. Open the terminal to sign in."
+                        return
+                    }
+                    if model.menuOpen, !(await model.closeMenu()) {
+                        loginError = "Couldn’t close the menu. Open the terminal to continue."
+                        return
+                    }
                     await model.automate {
-                        model.press(.escape)
-                        try? await Task.sleep(for: .milliseconds(400))
+                        guard model.hasForegroundAgent(.claude), AnswerParser.needsLogin(in: model.textLines),
+                              !AnswerParser.inLogin(model.textLines), !AnswerParser.menuOpen(model.textLines) else {
+                            loginError = "The terminal changed. Open it to continue signing in."
+                            return
+                        }
                         model.press(.letter("u"), modifiers: .control)
                         model.type("/login")
                         try? await Task.sleep(for: .milliseconds(150))
@@ -407,6 +489,9 @@ struct AnswerCard: View {
                     .background(palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .buttonStyle(PressStyle())
+            if let loginError {
+                Text(loginError).font(.footnote).foregroundStyle(palette.secondary)
+            }
         }
         .padding(14)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))

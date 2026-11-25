@@ -13,6 +13,8 @@ struct ReplyPayload: Equatable {
     /// mustn't confirm a new one.
     var known: Set<String> = []
 
+    var isShellCommand: Bool { !hasImages && text.hasPrefix("!") && text.count > 1 && !text.contains("\n") }
+
     /// Whether the conversation has this reply as a message that came after it was sent.
     func arrived(in items: [ChatFeed.Item]) -> Bool {
         let said = Set(items.suffix(20).compactMap { item -> String? in
@@ -47,10 +49,15 @@ struct ReplyPayload: Equatable {
     var textLines: [String] { get }
     /// The drawn frame's lines: kept separate from `textLines` on purpose (they update at different times).
     var frameLines: [String] { get }
+    var canSubmitShellCommand: Bool { get }
     func automate(_ steps: @escaping @MainActor () async -> Void) async
     func type(_ text: String)
     func paste(_ text: String)
     func press(_ key: TerminalKey)
+}
+
+extension ReplyTerminal {
+    var canSubmitShellCommand: Bool { true }
 }
 
 extension TerminalScreenModel: ReplyTerminal {
@@ -84,14 +91,17 @@ struct ReplyEnvironment {
     var reconnect: @MainActor () async -> Void
     var conversationID: @MainActor () -> String? = { nil }
     var timing = ReplyTiming()
+    var agent: ChatAgent? = nil
 }
 
 /// One sent reply. Exactly one driver task works on it at a time; every restart (retry, discard,
 /// confirmation) bumps `epoch`, so a task that was already waiting never types for a newer one.
 @Observable final class ReplyDelivery: Identifiable {
-    enum Phase: Equatable { case sending, queued, pushed, failed, confirmed }
+    enum Phase: Equatable { case sending, queued, pushed, failed, unconfirmed, confirmed }
     let id = UUID()
     let payload: ReplyPayload
+    let images: [ChatAttachment]
+    fileprivate(set) var imagePaths: [String] = []
     private(set) var phase: Phase
     private(set) var sentAt = Date.now
     private(set) var attempts = 1
@@ -99,12 +109,23 @@ struct ReplyEnvironment {
 
     @ObservationIgnored fileprivate var epoch = 0
     /// Typed into the terminal and Return pressed: from then on it's in the agent's prompt or queue.
-    @ObservationIgnored fileprivate(set) var entered = false
+    fileprivate(set) var entered = false
+    @ObservationIgnored fileprivate var submissionAttempted = false
     @ObservationIgnored fileprivate var driver: Task<Void, Never>?
 
-    fileprivate init(payload: ReplyPayload, phase: Phase) {
+    fileprivate init(payload: ReplyPayload, images: [ChatAttachment], phase: Phase) {
         self.payload = payload
+        self.images = images
         self.phase = phase
+    }
+
+    fileprivate func arrived(in items: [ChatFeed.Item]) -> Bool {
+        if !imagePaths.isEmpty, items.suffix(20).contains(where: { item in
+            guard !payload.known.contains(item.id), case .user(let text) = item.kind else { return false }
+            let recorded = Set(SentImages.split(text).paths)
+            return imagePaths.allSatisfy { recorded.contains($0) }
+        }) { return true }
+        return payload.arrived(in: items)
     }
 
     fileprivate func set(_ phase: Phase) { self.phase = phase }
@@ -125,7 +146,7 @@ struct ReplyEnvironment {
     /// Replies to draw: the ones the conversation doesn't have yet. A reply it has is drawn as the
     /// real message from the same update: never both for a frame.
     func shown(in items: [ChatFeed.Item], search: String?) -> [ReplyDelivery] {
-        let waiting = replies.filter { !$0.payload.arrived(in: items) }
+        let waiting = replies.filter { !$0.arrived(in: items) }
         guard let search else { return waiting }
         return waiting.filter { $0.text.localizedStandardContains(search) }
     }
@@ -138,7 +159,7 @@ struct ReplyEnvironment {
                                    hasImages: !images.isEmpty, typed: text)
         payload.known = Set(env.feedItems().compactMap { if case .user = $0.kind { $0.id } else { nil } })
         let working = env.agentState() == "working"
-        let reply = ReplyDelivery(payload: payload, phase: working ? (interrupting ? .pushed : .queued) : .sending)
+        let reply = ReplyDelivery(payload: payload, images: images, phase: working ? (interrupting ? .pushed : .queued) : .sending)
         replies.append(reply)
         let epoch = reply.epoch
         reply.driver = Task {
@@ -186,12 +207,18 @@ struct ReplyEnvironment {
 
     /// Reconnects from scratch and sends the reply again.
     func retry(_ id: ReplyDelivery.ID) {
-        guard let env = environment, let reply = replies.first(where: { $0.id == id }) else { return }
+        guard let env = environment, let reply = replies.first(where: { $0.id == id }),
+              reply.phase == .failed else { return }
         let epoch = restart(reply)
         reply.restarted()
         reply.driver = Task {
             await env.reconnect()
             guard reply.epoch == epoch else { return }
+            if env.agent == .codex, reply.payload.isShellCommand {
+                await deliver(reply, epoch: epoch, text: reply.text, images: [], interrupting: false,
+                              env: env, onUploadFailure: { _ in })
+                return
+            }
             let conversation = env.conversationID()
             // The words may already be in the prompt, typed before the line died with Enter lost:
             // typing them again would send them twice in one message. Submit what's there.
@@ -202,6 +229,7 @@ struct ReplyEnvironment {
                     try? await Task.sleep(for: env.timing.enterDelay)
                     guard reply.epoch == epoch else { return }
                 }
+                reply.submissionAttempted = true
                 env.terminal.press(.enter)
             }
             Task { await self.confirmEntered(reply, epoch: epoch, env: env) }
@@ -221,30 +249,40 @@ struct ReplyEnvironment {
 
     /// A reply the conversation has now is confirmed.
     func feedChanged(_ items: [ChatFeed.Item]) {
-        for reply in replies where reply.payload.arrived(in: items) {
+        for reply in replies where reply.arrived(in: items) {
             reply.set(.confirmed)
             remove(reply)
         }
     }
 
-    /// The chat went away: nothing may type for it any more. Replies the conversation doesn't have
-    /// (queued, sending, pushed, failed) go back into the agent's draft rather than vanish. One the
-    /// conversation shows is delivered and stays out; one that can't be told apart is restored
-    /// (a duplicate is better than a lost instruction). Images aren't kept, only the words.
-    func cancelAll() {
-        let items = environment?.feedItems() ?? []
-        // Only what never reached the terminal goes back into the reply field. A queued or pushed
-        // reply is already typed into the agent's prompt and will be read after this step: putting
-        // it back (marked "not sent") made it look failed when it was waiting, and sending it again
-        // would duplicate it.
-        let lost = replies.filter { reply in
-            !reply.payload.arrived(in: items) && (!reply.entered || reply.phase == .failed)
-        }.map(\.payload.typed)
+    /// Reopening chat restores display state only. Terminal input is never replayed.
+    func restorePending(_ pending: [ReplyDelivery], items: [ChatFeed.Item]) {
+        for reply in pending where !reply.arrived(in: items) && !replies.contains(where: { $0.id == reply.id }) {
+            replies.append(reply)
+        }
+    }
+
+    /// Stop sending when the view closes. Keep submitted Codex replies visible
+    /// on reentry while their transcript is still catching up.
+    @discardableResult
+    func cancelAll(keepingSubmitted: Bool = false, items currentItems: [ChatFeed.Item]? = nil) -> [ReplyDelivery] {
+        let items = currentItems ?? environment?.feedItems() ?? []
+        var pending: [ReplyDelivery] = []
+        var lost: [String] = []
+        for reply in replies where !reply.arrived(in: items) {
+            if keepingSubmitted, reply.submissionAttempted || reply.entered, reply.phase != .failed {
+                if !reply.entered { reply.set(.unconfirmed) }
+                pending.append(reply)
+            } else if !reply.entered || reply.phase == .failed {
+                lost.append(reply.payload.typed)
+            }
+        }
         ReplyDrafts.restore(lost, for: draftKey, in: defaults)
         for reply in replies { _ = restart(reply) }
         replies = []
         pushTask?.cancel()
         pushTask = nil
+        return pending
     }
 
     // MARK: Driving
@@ -278,13 +316,15 @@ struct ReplyEnvironment {
             onUploadFailure(error)
             return
         }
+        reply.imagePaths = paths
         let message = (paths + (text.isEmpty ? [] : [text])).joined(separator: " ")
         let terminal = env.terminal
         let timing = env.timing
         let sentPaths = paths
+        let waitsForCodexShell = env.agent == .codex && reply.payload.isShellCommand
         let conversation = env.conversationID()
         await terminal.automate {
-            guard reply.epoch == epoch else { return }
+            guard reply.epoch == epoch, !waitsForCodexShell || terminal.canSubmitShellCommand else { return }
             if interrupting {
                 terminal.press(.escape)
                 // Type only once the agent has stopped (its screen says so), or it's queued again.
@@ -311,9 +351,37 @@ struct ReplyEnvironment {
             // Return on its own, a moment later, so the agent sees it as "send" and not as part of the text.
             try? await Task.sleep(for: timing.enterDelay)
             guard reply.epoch == epoch else { return }
+            reply.submissionAttempted = true
             terminal.press(.enter)
+            if waitsForCodexShell { reply.entered = true }
         }
         guard reply.epoch == epoch else { return }
+        // A shell command may run for minutes before Codex records it. Never resend it
+        // based on a missing transcript entry.
+        if waitsForCodexShell {
+            guard reply.entered else {
+                reply.driver = nil
+                reply.set(.failed)
+                return
+            }
+            let deadline = ContinuousClock.now + .seconds(900)
+            var idleSince: ContinuousClock.Instant?
+            while reply.epoch == epoch, ContinuousClock.now < deadline {
+                if env.agentState() == "working" || CodexLiveCommand.read(terminal.frameLines) != nil {
+                    idleSince = nil
+                } else {
+                    let now = ContinuousClock.now
+                    idleSince = idleSince ?? now
+                    if let idleSince, now - idleSince >= .seconds(10) { break }
+                }
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            }
+            if reply.epoch == epoch {
+                reply.driver = nil
+                reply.set(.unconfirmed)
+            }
+            return
+        }
         // Alongside the rest: it only decides what goes back into the reply field on leaving.
         Task { await confirmEntered(reply, epoch: epoch, env: env) }
         if reply.text.trimmingCharacters(in: .whitespacesAndNewlines) == "/clear", !reply.payload.hasImages {
@@ -333,7 +401,7 @@ struct ReplyEnvironment {
         let probe = String(reply.text.prefix(24))
         let end = ContinuousClock.now + .seconds(5)
         while ContinuousClock.now < end, reply.epoch == epoch {
-            if reply.payload.arrived(in: env.feedItems())
+            if reply.arrived(in: env.feedItems())
                 || (!probe.isEmpty && env.terminal.frameLines.contains { $0.contains(probe) }) {
                 reply.entered = true
                 return

@@ -16,6 +16,9 @@ struct PromptReading: Equatable {
     static let maxOptions = 4
 
     static func read(lines: [String], statusTitle: String?) -> PromptReading {
+        if AnswerParser.loginStep(in: lines) != nil || AnswerParser.needsLogin(in: lines) {
+            return PromptReading(question: statusTitle ?? "Sign in to continue", options: [], numbered: false)
+        }
         let choices = AnswerParser.choices(in: lines)
         if !choices.isEmpty {
             return PromptReading(

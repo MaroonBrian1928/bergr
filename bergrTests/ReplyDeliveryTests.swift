@@ -11,6 +11,7 @@ import UIKit
     var frameLines: [String] = []
     var log: [String] = []
     var held = false
+    var canSubmitShellCommand = true
     /// Runs as Return is pressed, as the machine would react to it (no wall-clock race with the test).
     var onEnter: (@MainActor () -> Void)?
     private var tail: Task<Void, Never>?
@@ -48,7 +49,7 @@ import UIKit
 
     struct Boom: Error {}
 
-    init(confirmEnterWait: Duration = .milliseconds(15)) {
+    init(confirmEnterWait: Duration = .milliseconds(15), agent: ChatAgent? = nil) {
         let timing = ReplyTiming(enterDelay: .milliseconds(1), shellBangDelay: .milliseconds(1),
                                  confirmEnterWait: confirmEnterWait, confirmEnterTries: 2,
                                  firstCheck: .milliseconds(10), recheck: .milliseconds(10),
@@ -63,7 +64,7 @@ import UIKit
                 while reconnectHeld { try? await Task.sleep(for: .milliseconds(1)) }
             },
             conversationID: { [self] in conversationID },
-            timing: timing)
+            timing: timing, agent: agent)
     }
 
     func send(_ text: String, images: [ChatAttachment] = [], onUploadFailure: @escaping @MainActor (Error) -> Void = { _ in }) -> ReplyDelivery {
@@ -298,5 +299,18 @@ import UIKit
         let reply = rig.send("hello there")
         await rig.pause(50)
         #expect(reply.phase == .sending)
+    }
+}
+
+
+@MainActor
+struct CodexShellDeliveryTests {
+    @Test func unavailableTerminalKeepsTheCommandForRetry() async {
+        let rig = ReplyRig(agent: .codex)
+        rig.terminal.canSubmitShellCommand = false
+        let reply = rig.send("!ls")
+        await rig.until { reply.phase == .failed }
+        #expect(rig.outbox.replies.map(\.text) == ["!ls"])
+        #expect(rig.terminal.log.isEmpty)
     }
 }

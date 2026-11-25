@@ -465,6 +465,10 @@ def code_mode_call(src):
     return m.group(1), args
 
 
+CM_DISPATCHED = re.compile(r"\(dispatched #(\d+)\)$")
+CM_EVENT = re.compile(r"<event\b([^>]*)>(.*?)</event>", re.S)
+CM_ATTR = re.compile(r'(\w[\w-]*)="([^"]*)"')
+CM_PART = re.compile(r"<(?:log|result|error)>(.*?)</(?:log|result|error)>", re.S)
 QUEUED_NOTICE = re.compile(r"\s*<[a-z][a-z0-9-]*[ >]")
 
 
@@ -488,7 +492,7 @@ def tool_summary(args):
     # Both go, one per line: the chat shows the first and opens to the second.
     what = first(("toolSummary", "description"))
     does = first(("command", "cmd", "CommandLine", "file_path", "path", "AbsolutePath", "DirectoryPath",
-                  "pattern", "query", "url", "prompt"))
+                  "pattern", "query", "url", "prompt", "code"))
     if what and does and short(does) != short(what):
         return short(what) + "\n" + short(does, 400)
     return short(what or does or "")
@@ -591,9 +595,12 @@ def bg_tick(now=None):
     for task, job in list(BG.items()):
         over = claude_gone or (open_now is not None and job.get("file") and job["file"] not in open_now
                                and os.path.realpath(job["file"]) not in open_now)
-        # Codex's have no file to watch: one it hasn't checked on for half an hour is no longer followed.
-        over = over or (not job.get("file") and now - job.get("heard", now) > 1800)
-        if over:
+        # Codex has no output file to check. An old poll confirms neither that
+        # the process is still running nor that it finished.
+        if task.startswith("cx") and (claude_gone or now - job.get("heard", now) >= 90):
+            BG.pop(task, None)
+            emit(bg_event(task, state="unknown", summary="No recent status", ended=round(job["heard"])))
+        elif over:
             BG.pop(task, None)
             emit(bg_event(task, state="done", summary="ended", ended=round(now)))
 
@@ -694,9 +701,10 @@ class Claude:
         meta = None
         for p in descendants(PID):
             f = os.path.join(base, "sessions", f"{p}.json")
-            if os.path.exists(f):
+            if fresh(f):
                 meta = f
                 break
+        matched_pid = meta is not None
         if HINT:
             # A resumed session: its file can predate this process, so no fresh() here.
             found = glob.glob(os.path.join(base, "projects", "*", f"{HINT}.jsonl"))
@@ -721,7 +729,7 @@ class Claude:
             sid = load_meta(meta).get("sessionId")
         except Exception:
             return None
-        found = [f for f in glob.glob(os.path.join(base, "projects", "*", f"{sid}.jsonl")) if fresh(f)]
+        found = [f for f in glob.glob(os.path.join(base, "projects", "*", f"{sid}.jsonl")) if matched_pid or fresh(f)]
         if found:
             self.project = os.path.dirname(found[0])
             return found[0]
@@ -879,6 +887,11 @@ class Claude:
                     if src.get("type") == "base64" else None
                 if ev:
                     yield ev
+            elif t == "tool_result" and block.get("tool_use_id") in getattr(self, "code_mode", {}):
+                # Code Mode (CLAUDE_CODE_EXPERIMENTAL_CODE_MODE): a REPL script that outlives its
+                # call answers "(dispatched #N)", and its output arrives later in a Poll's events.
+                yield from self.code_mode_result(block.get("tool_use_id"), result_text(block.get("content")) or "",
+                                                 bool(block.get("is_error")))
             elif t == "tool_result":
                 ev = blocked_event(block.get("tool_use_id"), result_text(block.get("content")),
                                    getattr(self, "calls", {}))
@@ -935,8 +948,35 @@ class Claude:
                     if not hasattr(self, "bash"):
                         self.bash = {}
                     self.bash[block.get("id") or bid] = (inp.get("description") or inp.get("command") or "")[:160]
-                yield {"t": "tool", "id": block.get("id") or bid, "name": block.get("name") or "tool",
+                if block.get("name") in ("REPL", "Poll"):
+                    if not hasattr(self, "code_mode"):
+                        self.code_mode = {}
+                    self.code_mode[block.get("id") or bid] = block["name"]
+                    # A Poll only waits: what it brings back goes to the scripts it reports on.
+                    if block["name"] == "Poll":
+                        continue
+                yield {"t": "tool", "id": block.get("id") or bid,
+                       "name": "Script" if block.get("name") == "REPL" else block.get("name") or "tool",
                        "summary": tool_summary(block.get("input"))}
+
+    def code_mode_result(self, tid, text, is_error):
+        evals = self.__dict__.setdefault("evals", {})
+        if self.code_mode.get(tid) == "REPL":
+            m = CM_DISPATCHED.match(text.strip())
+            if m:
+                evals[m.group(1)] = tid
+                return
+            yield from toolout(tid, text, failed=is_error)
+            return
+        for m in CM_EVENT.finditer(text):
+            attrs, body = dict(CM_ATTR.findall(m.group(1))), m.group(2)
+            target = evals.get(attrs.get("eval", ""))
+            if attrs.get("kind") != "repl-eval" or not target:
+                continue
+            parts = [html.unescape(x.strip()) for x in CM_PART.findall(body)]
+            out = "\n".join(p for p in parts if p) or html.unescape(body.strip())
+            events = toolout(target, out, failed="<error>" in body)
+            yield from events or [{"t": "toolout", "id": target, "text": ""}]
 
 
     def subagents(self, path):
@@ -1391,7 +1431,12 @@ class Codex:
             failed = failed or exit_failed(out)
             cid = p.get("call_id")
             yield from codex_background(self, cid, p.get("output"), d)
-            yield from toolout(self.__dict__.get("calls", {}).get(cid, cid), result_text(out), failed=failed)
+            tid = self.__dict__.get("calls", {}).get(cid, cid)
+            if not codex_output_still_running(p.get("output")):
+                events = toolout(tid, result_text(out), failed=failed)
+                if not events and cid in self.__dict__.get("calls", {}):
+                    events = [{"t": "toolout", "id": tid, "text": ""}]
+                yield from events
             yield from tool_images(pid, out)
 
 
@@ -1399,6 +1444,28 @@ CX_SESSION = re.compile(r'"session_id"\s*:\s*(\d+)')
 CX_EXIT = re.compile(r'"exit_code"\s*:\s*(-?\d+)')
 CX_POLL = re.compile(r'write_stdin\W*\{[^}]*?session_id\W*:\W*(\d+)')
 CX_CMD = re.compile(r'exec_command\W*\{\W*cmd\W*:\s*\\?"((?:[^"\\]|\\.)*)')
+
+
+def codex_output_still_running(raw):
+    text = raw if isinstance(raw, str) else (result_text(raw) or "")
+    return any(o.get("session_id") is not None and o.get("exit_code") is None
+               for o in codex_command_results(text))
+
+
+def codex_command_results(text):
+    results = []
+    for match in CX_OUTPUT.finditer(text):
+        try:
+            results.append(json.loads(match.group(0)))
+        except ValueError:
+            continue
+    if not results:
+        # A brace in stdout can defeat the JSON fragment pattern.
+        sid, code = CX_SESSION.search(text), CX_EXIT.search(text)
+        if sid or code:
+            results.append({"session_id": int(sid.group(1)) if sid else None,
+                            "exit_code": int(code.group(1)) if code else None})
+    return results
 
 
 def codex_background(src, cid, raw, d):
@@ -1410,17 +1477,7 @@ def codex_background(src, cid, raw, d):
     at = round(record_time(d) or time.time())
     running = src.__dict__.setdefault("cx_running", {})
     polled = [int(n) for n in CX_POLL.findall(call)]
-    objs = []
-    for m in CX_OUTPUT.finditer(text):
-        try:
-            objs.append(json.loads(m.group(0)))
-        except Exception:
-            pass
-    if not objs and ("session_id" in text or "exit_code" in text):
-        # Output with braces in it defeats the pattern: the ids alone still say enough.
-        sid, code = CX_SESSION.search(text), CX_EXIT.search(text)
-        objs.append({"session_id": int(sid.group(1)) if sid else None,
-                     "exit_code": int(code.group(1)) if code else None})
+    objs = codex_command_results(text)
     exit_at = [i for i, o in enumerate(objs) if o.get("exit_code") is not None and o.get("session_id") is None]
     for i, obj in enumerate(objs):
         sid, code = obj.get("session_id"), obj.get("exit_code")
@@ -1431,17 +1488,17 @@ def codex_background(src, cid, raw, d):
                 cmd = CX_CMD.search(call)
                 name = cmd.group(1).encode().decode("unicode_escape", "replace") if cmd else ""
                 name = (name.strip().splitlines() or ["Background command"])[0][:160]
-                running[sid] = name
-                BG[task] = {"file": None, "heard": at}
-                yield bg_event(task, parent=src.__dict__.get("calls", {}).get(cid, cid), state="running",
-                               started=at, name=name)
-            if task in BG:
-                BG[task]["heard"] = at
+                parent = src.__dict__.get("calls", {}).get(cid, cid)
+                running[sid] = (name, at, parent)
+            if task not in BG:
+                name, started, parent = running[sid]
+                yield bg_event(task, parent=parent, state="running", started=started, name=name, summary="")
+            BG[task] = {"file": None, "heard": at}
             if tail:
                 yield bg_event(task, output=tail)
         elif code is not None:
             # Which poll this exit belongs to: certain only with one poll in the call, or one
-            # result per poll in order. Otherwise it's left (the 30-minute limit ends it).
+            # result per poll in order. Otherwise the status becomes unknown after the last poll goes stale.
             if len(polled) == 1:
                 mine = polled
             elif len(polled) == len(exit_at) and i in exit_at:

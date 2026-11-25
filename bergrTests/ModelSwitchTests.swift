@@ -19,7 +19,19 @@ struct ModelSwitchTests {
         #expect(AntigravityStatus.read(["a · b", "nothing here"]) == nil)
     }
 
-    // Codex's "Select Model and Effort" list parses as numbered choices with the current one selected.
+    @Test func codexModelReadsCurrentFooterInsteadOfEarlierOutput() throws {
+        let lines = [
+            "GPT-6.1-Sol medium · /tmp · Approve for me",
+            "  GPT-6.2-Sol low · ~/src · Fix Claude login prompt",
+            "  granular · 5h 94% left · weekly 94% left",
+        ]
+        let status = try #require(CodexModelStatus.read(lines))
+        #expect(status.model == "GPT-6.2-Sol")
+        #expect(status.effort == "low")
+        #expect(CodexModelStatus.read(["› 1. GPT-6.2-Sol (current)", "enter select · esc back"]) == nil)
+    }
+
+    // The model picker is a numbered list with the current model marked.
     @Test func codexPickerParses() {
         let lines = [
             "  Select Model and Effort",

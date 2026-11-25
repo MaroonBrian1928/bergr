@@ -81,6 +81,9 @@ private struct ChatWindowContent: View {
                         } else {
                             model.reconnect()
                         }
+                    }
+                    .task(id: "\(agent.rawValue) \(session.state == .connected) \(session.connectionRevision) \(terminal?.foreground?.pid ?? 0)") {
+                        guard session.state == .connected, let terminal else { return }
                         let front = terminal.foreground.flatMap {
                             ChatAgent.detect(name: $0.name, argv: $0.argv) == agent ? $0 : nil
                         }

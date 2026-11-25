@@ -54,6 +54,23 @@ class ClaudeParse(Base):
             {"text": "A", "status": "completed"}, {"text": "B", "status": "in_progress"},
             {"text": "C", "status": "pending"}]}])
 
+    def test_code_mode_script_output_arrives_by_poll(self):
+        ns = load("claude", self.home)
+        c = ns["Claude"]()
+        def run(kind, content):
+            return list(c.parse({"type": kind, "uuid": kind, "message": {"content": content}}))
+        evs = run("assistant", [{"type": "tool_use", "id": "r1", "name": "REPL",
+                                 "input": {"code": "await $`ls`", "description": "List files"}}])
+        self.assertEqual(evs, [{"t": "tool", "id": "r1", "name": "Script", "summary": "List files\nawait $`ls`"}])
+        self.assertEqual(run("user", [{"type": "tool_result", "tool_use_id": "r1", "content": "(dispatched #4)"}]), [])
+        self.assertEqual(run("assistant", [{"type": "tool_use", "id": "p1", "name": "Poll", "input": {}}]), [])
+        poll = ('<system>nonces: X</system>\n<event nonce="X" kind="repl-eval" at="t" eval="4" status="settled">\n'
+                '<result>a.txt &amp;\nb.txt</result>\n</event>')
+        evs = run("user", [{"type": "tool_result", "tool_use_id": "p1", "content": poll}])
+        self.assertEqual([(e["t"], e["id"]) for e in evs], [("toolout", "r1")])
+        self.assertIn("a.txt &", evs[0]["text"])
+        self.assertNotIn("failed", evs[0])
+
     def test_image_block(self):
         block = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(100)}}
         evs = self.parse([block], kind="user")
@@ -477,6 +494,43 @@ class ToolOutput(Base):
         self.assertEqual(out, [{"t": "toolout", "id": "c9", "text": "done"}])
 
 
+class CodexBackgroundStatus(Base):
+    def test_empty_running_poll_is_not_tool_completion(self):
+        ns = load("codex", self.home)
+        parser = ns["Codex"]()
+        parser.calls = {"poll": "step"}
+        parser.call_src = {"poll": "write_stdin({session_id: 123})"}
+        def result(output):
+            return list(parser.parse({"type": "response_item", "payload": {
+                "type": "custom_tool_call_output", "call_id": "poll", "output": output
+            }}))
+        running = result('{"session_id": 123, "exit_code": null, "output": ""}')
+        self.assertEqual([e["state"] for e in running if e["t"] == "subagent"], ["running"])
+        self.assertFalse(any(e["t"] == "toolout" for e in running))
+        ended = result('{"exit_code": 0, "output": ""}')
+        self.assertTrue(any(e["t"] == "toolout" for e in ended))
+
+    def test_stale_poll_becomes_unknown_and_later_exit_still_applies(self):
+        ns = load("codex", self.home)
+        parser = ns["Codex"]()
+        parser.call_src = {"start": 'exec_command({cmd: "sleep 120"})',
+                           "poll": 'write_stdin({session_id: 123})'}
+        events = []
+        ns["emit"] = events.append
+        start = list(ns["codex_background"](parser, "start", '{"session_id": 123}', {}))
+        self.assertEqual(start[0]["state"], "running")
+        heard = ns["BG"]["cx123"]["heard"]
+        ns["bg_tick"](heard + 91)
+        self.assertEqual(events[-1]["state"], "unknown")
+        self.assertNotIn("cx123", ns["BG"])
+        resumed = list(ns["codex_background"](parser, "poll", '{"session_id": 123}', {}))
+        self.assertEqual(resumed[0]["state"], "running")
+        self.assertEqual(resumed[0]["started"], start[0]["started"])
+        done = list(ns["codex_background"](parser, "poll", '{"exit_code": 1}', {}))
+        self.assertEqual(done[0]["state"], "failed")
+        self.assertNotIn("cx123", ns["BG"])
+
+
 class HintLookup(Base):
     def old(self, path, rows=({"type": "user"},)):
         write_jsonl(path, rows)
@@ -501,6 +555,26 @@ class HintLookup(Base):
         ns = load("claude", self.home, pid="4242", hint="hinted")
         ns["descendants"] = lambda pid: [pid]
         self.assertEqual(ns["Claude"]().locate(), other)
+
+    def test_claude_pid_metadata_can_identify_an_older_transcript(self):
+        path = os.path.join(self.home, ".claude", "projects", "-work", "resumed.jsonl")
+        self.old(path)
+        meta = os.path.join(self.home, ".claude", "sessions", "4242.json")
+        write_jsonl(meta, [{"sessionId": "resumed", "cwd": "/work"}])
+        ns = load("claude", self.home, pid="4242")
+        ns["STARTED"] = time.time() - 60
+        ns["descendants"] = lambda pid: [pid]
+        self.assertEqual(ns["Claude"]().locate(), path)
+
+    def test_claude_reused_pid_does_not_follow_stale_metadata(self):
+        path = os.path.join(self.home, ".claude", "projects", "-elsewhere", "old.jsonl")
+        self.old(path)
+        meta = os.path.join(self.home, ".claude", "sessions", "4242.json")
+        self.old(meta, [{"sessionId": "old", "cwd": "/elsewhere"}])
+        ns = load("claude", self.home, pid="4242")
+        ns["STARTED"] = time.time() - 60
+        ns["descendants"] = lambda pid: [pid]
+        self.assertIsNone(ns["Claude"]().locate())
 
     def test_claude_clear_before_new_transcript_exists(self):
         project = os.path.join(self.home, ".claude", "projects", "-work")

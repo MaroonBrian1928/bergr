@@ -212,13 +212,15 @@ struct TerminalScreenView: View {
         // With two panes the column's bar is hidden (each pane has its own header).
         .toolbar(pane == nil ? .automatic : .hidden, for: .navigationBar)
         // The session follows the conversation and keeps following it if this screen goes away
-        // for a moment. Keyed by the agent only: the foreground process changes whenever the
-        // agent runs a command, and the feed finds a new conversation in the same terminal itself.
+        // for a moment. Recheck the feed when the agent process changes, for example after login.
+        // A temporary foreground subprocess does not replace an existing feed.
         // Also keyed by the line being up: going to the background closes the line and ends the
         // feeds, so coming back must ask for a new one (the old one stays on screen meanwhile).
-        .task(id: chat ? agent.map { "\($0.rawValue) \(session.state == .connected) \(session.connectionRevision)" } : nil) {
+        .task(id: chat ? session.connectionRevision : nil) {
+            if chat { model.wantsKeyboard = false }
+        }
+        .task(id: chat ? agent.map { "\($0.rawValue) \(session.state == .connected) \(session.connectionRevision) \(terminal?.foreground?.pid ?? 0)" } : nil) {
             guard chat, let agent, let terminal, session.state == .connected else { return }
-            model.wantsKeyboard = false
             // The agent's own process if it's in front; else the terminal's folder finds it.
             let front = terminal.foreground.flatMap { fg in
                 ChatAgent.detect(name: fg.name, argv: fg.argv) == agent ? fg : nil
@@ -415,7 +417,11 @@ private struct AnswerBar: View {
     let dark: Bool
 
     var body: some View {
-        if AnswerParser.isAsking(model.textLines) {
+        // Claude and Codex use menus, not y/n keystrokes. Leave their terminal
+        // unobstructed so login fields and numbered choices remain usable.
+        let app = terminal.status?.app?.lowercased() ?? ""
+        if ChatAgent.detect(terminal) != .claude, !app.contains("claude"), !app.contains("codex"),
+           terminal.status?.kind != "auth", AnswerParser.isAsking(model.textLines) {
             NeedsYouBar(status: terminal.status, model: model, dark: dark)
                 .frame(maxHeight: .infinity, alignment: .bottom)
         }

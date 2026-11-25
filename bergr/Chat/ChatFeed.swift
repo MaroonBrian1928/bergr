@@ -147,7 +147,7 @@ final class ChatFeed {
 
     /// A sub-agent the main agent started. Kept beside the conversation, never in `items`.
     struct SubagentInfo: Identifiable, Equatable, Sendable {
-        enum State: String, Sendable { case running, done, failed }
+        enum State: String, Sendable { case running, done, failed, unknown }
         let id: String
         /// The id of the tool call that started it (where the chat shows it), if known.
         var parent: String?
@@ -636,15 +636,16 @@ final class ChatFeed {
             (event[key] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
         }
         // An update may carry only what changed (a background shell's output): the rest stays.
+        let state = (event["state"] as? String).flatMap(SubagentInfo.State.init(rawValue:)) ?? old?.state ?? .running
         let next = SubagentInfo(
             id: id, parent: event["parent"] as? String ?? old?.parent,
             name: event["name"] as? String ?? old?.name ?? "Sub-agent",
             kind: event["kind"] as? String ?? old?.kind ?? "",
-            state: (event["state"] as? String).flatMap(SubagentInfo.State.init(rawValue:)) ?? old?.state ?? .running,
+            state: state,
             steps: (event["steps"] as? NSNumber)?.intValue ?? old?.steps ?? 0,
             summary: event["summary"] as? String ?? old?.summary ?? "",
             order: old?.order ?? subagentCount,
-            started: date("started") ?? old?.started, ended: date("ended") ?? old?.ended,
+            started: date("started") ?? old?.started, ended: state == .running ? nil : (date("ended") ?? old?.ended),
             output: event["output"] as? String ?? old?.output ?? "")
         if old == nil { subagentCount += 1 }
         if next != old { subagentMap[id] = next }
@@ -697,7 +698,7 @@ final class ChatFeed {
         if let at = event["at"] as? Double { sentAt[id] = Date(timeIntervalSince1970: at) }
         if type == "toolout" {
             if event["failed"] as? Bool == true, !toolFailed.contains(id) { toolFailed.insert(id) }
-            if let text = event["text"] as? String, !text.isEmpty, toolOutput[id] != text { toolOutput[id] = text }
+            if let text = event["text"] as? String, toolOutput[id] != text { toolOutput[id] = text }
             return
         }
         let kind: Kind

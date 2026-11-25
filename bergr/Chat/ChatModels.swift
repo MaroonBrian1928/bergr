@@ -11,6 +11,29 @@ enum EffortName {
     }
 }
 
+/// Codex updates its terminal footer as soon as a session model changes. Usage
+/// in the transcript still describes the last request until another turn runs.
+enum CodexModelStatus {
+    static func read(_ lines: [String]) -> (model: String, effort: String?)? {
+        for line in lines.suffix(6).reversed() {
+            guard let end = line.range(of: " · ") else { continue }
+            let folder = line[end.upperBound...].split(separator: "·", maxSplits: 1).first?
+                .trimmingCharacters(in: .whitespaces) ?? ""
+            guard folder.hasPrefix("/") || folder == "~" || folder.hasPrefix("~/")
+                || folder.range(of: #"^[A-Za-z]:[\\/]"#, options: .regularExpression) != nil else { continue }
+            let words = line[..<end.lowerBound].split(whereSeparator: \.isWhitespace)
+            guard let first = words.first, first.lowercased().hasPrefix("gpt-") else { continue }
+            let level = words.last.map { $0.lowercased() }
+            let effort = level.flatMap {
+                ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].contains($0) ? $0 : nil
+            }
+            let name = (effort == nil ? words[...] : words.dropLast()).joined(separator: " ")
+            return (name, effort)
+        }
+        return nil
+    }
+}
+
 /// Changes a running agent's model and effort the way a person would, through the terminal:
 /// Claude Code takes `/model <id>` and `/effort <level>`; Codex has only a picker, so this opens
 /// it, reads its numbered lists off the screen and moves to the right rows.

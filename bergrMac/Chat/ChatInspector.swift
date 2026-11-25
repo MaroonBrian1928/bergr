@@ -28,10 +28,11 @@ struct ChatInspector: View {
                 if let cwd = terminal?.cwd { row("folder", Self.abbreviate(cwd)) }
                 row("circle.fill", agent.displayName, trailing: stateText, tint: stateColor)
             }
-            if let model = feed.usage?.model {
+            let codexStatus = agent == .codex ? CodexModelStatus.read(model.textLines) : nil
+            if let model = codexStatus?.model ?? feed.usage?.model {
                 Section("Model") {
-                    row("sparkle", feed.models.first { $0.id == model }?.name ?? Self.modelName(model),
-                        trailing: feed.chosenEffort ?? feed.usage?.effort)
+                    row("sparkle", codexStatus?.model ?? feed.models.first { $0.id == model }?.name ?? Self.modelName(model),
+                        trailing: codexStatus?.effort ?? feed.chosenEffort ?? feed.usage?.effort)
                 }
             }
             if let usage = feed.usage, let fraction = usage.fraction {

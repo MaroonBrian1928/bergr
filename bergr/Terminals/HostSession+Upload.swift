@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import SSHTransport
 
@@ -8,9 +9,17 @@ extension HostSession {
         let path = "/tmp/bergr-images/\(UUID().uuidString.lowercased()).jpg"
         if host.isLocal {
             // On this Mac an upload is a file copy.
-            try FileManager.default.createDirectory(
-                atPath: "/tmp/bergr-images", withIntermediateDirectories: true)
-            try data.write(to: URL(fileURLWithPath: path))
+            let files = FileManager.default
+            let folder = "/tmp/bergr-images"
+            try files.createDirectory(atPath: folder, withIntermediateDirectories: true,
+                                      attributes: [.posixPermissions: 0o700])
+            let attributes = try files.attributesOfItem(atPath: folder)
+            guard attributes[.type] as? FileAttributeType == .typeDirectory,
+                  (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid()
+            else { throw CocoaError(.fileWriteNoPermission) }
+            try files.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder)
+            try data.write(to: URL(fileURLWithPath: path), options: .withoutOverwriting)
+            try files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
             return path
         }
         let pipe = try await openExec(AttachmentPrep.uploadCommand(path: path))

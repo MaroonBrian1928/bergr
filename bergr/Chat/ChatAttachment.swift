@@ -42,8 +42,10 @@ enum AttachmentPrep {
     /// The remote command that reads one base64 line on stdin, writes it to `path` (creating the directory), prints the path.
     static func uploadCommand(path: String) -> String {
         // The program holds no single quotes, so it sits safely inside them.
-        let program = "import base64,os,sys;p=sys.argv[1];os.makedirs(os.path.dirname(p),exist_ok=True);"
-            + "open(p,\"wb\").write(base64.b64decode(sys.stdin.readline()));print(p,flush=True)"
+        let program = "import base64,os,stat,sys;p=sys.argv[1];d=os.path.dirname(p);os.umask(0o077);"
+            + "os.makedirs(d,mode=0o700,exist_ok=True);info=os.lstat(d);"
+            + "assert stat.S_ISDIR(info.st_mode) and (not hasattr(os,\"getuid\") or info.st_uid==os.getuid());"
+            + "os.chmod(d,0o700);open(p,\"xb\").write(base64.b64decode(sys.stdin.readline()));print(p,flush=True)"
         return "python3 -I -c '\(program)' \(shellQuote(path))"
     }
 

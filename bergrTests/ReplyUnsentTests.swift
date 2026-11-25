@@ -74,6 +74,32 @@ import Testing
         #expect(ReplyDrafts.text(for: "m|a", in: d) == "half typed\n\nqueued")
     }
 
+    @Test func submittedCodexRepliesSurviveReopeningWithoutAnotherEnter() async {
+        let rig = ReplyRig(agent: .codex)
+        rig.terminal.frameLines = ["queued behind the step"]
+        rig.state = "working"
+        let message = rig.send("queued behind the step")
+        let command = rig.send("!ls")
+        await rig.until { message.entered && command.entered }
+        let pending = rig.outbox.cancelAll(keepingSubmitted: true, items: [])
+        let reopened = ReplyOutbox()
+        reopened.restorePending(pending, items: [])
+        #expect(reopened.shown(in: [], search: nil).map(\.text) == ["queued behind the step", "!ls"])
+        #expect(rig.terminal.count("enter") == 2)
+        reopened.feedChanged([rig.user("u1", message.text), rig.user("u2", command.text)])
+        #expect(reopened.replies.isEmpty)
+    }
+
+    @Test func reopeningSkipsRepliesAlreadyRecordedWhileAway() async {
+        let rig = ReplyRig(agent: .codex)
+        let reply = rig.send("!ls")
+        await rig.until { reply.entered }
+        let pending = rig.outbox.cancelAll(keepingSubmitted: true, items: [])
+        let reopened = ReplyOutbox()
+        reopened.restorePending(pending, items: [rig.user("u1", "!ls")])
+        #expect(reopened.replies.isEmpty)
+    }
+
     @Test func indicatorEndsWhenDraftIsEditedOrSent() {
         ReplyDrafts.restore(["x"], for: "m|a", in: d)
         #expect(ReplyDrafts.hasUnsent(for: "m|a", in: d))

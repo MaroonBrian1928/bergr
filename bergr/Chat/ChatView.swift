@@ -102,11 +102,20 @@ struct ChatView: View {
 
     /// The agent's queue as its transcript records it, less what our own replies already show.
     private func othersQueued(_ ours: [ReplyDelivery]) -> [String] {
-        var mine = ours.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
-        return feed.queued.filter { text in
-            let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fromTerminal = agent == .codex
+        func comparable(_ text: String) -> String {
+            if fromTerminal { return text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var mine = ours.map { reply in
+            comparable(fromTerminal && reply.payload.hasImages && !reply.imagePaths.isEmpty
+                       ? (reply.imagePaths + [reply.payload.typed]).joined(separator: " ") : reply.text)
+        }
+        let queued = fromTerminal ? model.codexQueuedInputs : feed.queued
+        return queued.filter { text in
+            let t = comparable(text)
             // Ours with an image comes back with the image's path in front: the words end it.
-            if let i = mine.firstIndex(where: { $0 == t || (!$0.isEmpty && t.hasSuffix($0)) }) {
+            if let i = mine.firstIndex(where: { $0 == t || (!fromTerminal && !$0.isEmpty && t.hasSuffix($0)) }) {
                 mine.remove(at: i)
                 return false
             }
@@ -225,13 +234,24 @@ struct ChatView: View {
         .onDisappear {
             if draftSave != nil { draftSave?.cancel(); draftSave = nil; ReplyDrafts.set(draft, for: draftKey) }
             outbox.draftKey = draftKey
-            outbox.cancelAll()
+            let address = terminal?.address
+            let keepPending = agent == .codex && session != nil && address != nil
+            let pending = outbox.cancelAll(keepingSubmitted: keepPending, items: feed.items)
+            if keepPending, let address {
+                session?.rememberCodexReplies(pending, address: address, conversation: feed.conversationID)
+            }
             // Undelivered replies went back into the draft: take it, so a later edit here keeps them.
             draft = ReplyDrafts.text(for: draftKey)
         }
         // The store keeps this view for building rows: let go of it with the chat (and take it
         // back when the chat shows again without having been rebuilt).
-        .onAppear { rowStore.chat = self }
+        .onAppear {
+            rowStore.chat = self
+            if agent == .codex, let session, let address = terminal?.address {
+                let pending = session.takeCodexReplies(address: address, conversation: feed.conversationID)
+                outbox.restorePending(pending, items: feed.items)
+            }
+        }
         .onDisappear { rowStore.chat = nil }
         #if os(iOS)
         // `-bergr.demoAttach YES` (screenshots): the demo's Codex question has a scanned sketch attached.
@@ -246,7 +266,7 @@ struct ChatView: View {
         .toolbar { if pane == nil { chatToolbar } }
         .sheet(isPresented: $showingModels) {
             ModelSheet(models: feed.models, current: currentModel,
-                       effort: feed.usage?.effort ?? agyStatus?.effort ?? feed.chosenEffort) { option, effort in
+                       effort: liveModelStatus?.effort ?? feed.usage?.effort ?? feed.chosenEffort) { option, effort in
                 Task {
                     if let problem = await ModelSwitcher.apply(agent: agent, model: model, option: option, effort: effort) {
                         sendError = problem
@@ -517,7 +537,8 @@ struct ChatView: View {
         }
         let others = search == nil ? othersQueued(shownReplies) : []
         let working = search == nil && state == "working"
-        if !loose.isEmpty || !shownReplies.isEmpty || !others.isEmpty || working || noMatches {
+        let showsCodexActivity = search == nil && agent == .codex
+        if !loose.isEmpty || !shownReplies.isEmpty || !others.isEmpty || working || showsCodexActivity || useClaudeTerminalHistory || noMatches {
             var hasher = Hasher()
             hasher.combine(colorScheme == .dark)
             hasher.combine(noMatches)
@@ -527,8 +548,11 @@ struct ChatView: View {
                 hasher.combine(reply.id)
                 hasher.combine(String(describing: reply.phase))
                 hasher.combine(reply.text)
+                hasher.combine(reply.entered)
             }
             hasher.combine(others)
+            hasher.combine(showsCodexActivity)
+            hasher.combine(useClaudeTerminalHistory)
             if working {
                 hasher.combine(liveRunID == nil ? terminal?.status?.msg ?? terminal?.status?.title : nil)
                 hasher.combine(workingSince)
@@ -553,22 +577,44 @@ struct ChatView: View {
     @ViewBuilder
     private func trailingRows(shownReplies: [ReplyDelivery], loose: [ChatFeed.SubagentInfo], noMatches: Bool,
                               state: String?) -> some View {
+        if search == nil, useClaudeTerminalHistory {
+            ClaudeTerminalHistory(model: model, palette: palette)
+        }
         // A sent reply shows at once; when the conversation has it, the real one takes
         // its place without moving, and this one goes in the same instant.
         ForEach(shownReplies) { reply in
             VStack(alignment: .trailing, spacing: 6) {
-                UserBubble(text: reply.text, palette: palette)
-                    .opacity(0.55)
-                    // Sent while the agent works, it waits in the agent's queue: long-press
-                    // can stop the agent so it's read now.
-                    .contextMenu {
-                        if state == "working", reply.phase != .failed {
-                            Button("Send Now", systemImage: "bolt.fill") { pushNow() }
-                        }
-                        copyButton(reply.text)
+                if agent == .codex {
+                    ForEach(reply.images) { image in
+                        ImageBubble(data: image.data, fromUser: true, palette: palette)
                     }
-                    .accessibilityLabel(reply.phase == .failed ? "Not delivered: \(reply.text)" : "Sending: \(reply.text)")
-                if reply.phase == .queued || reply.phase == .pushed {
+                }
+                if agent != .codex || reply.images.isEmpty || !reply.payload.typed.isEmpty {
+                    UserBubble(text: agent == .codex && reply.payload.hasImages ? reply.payload.typed : reply.text, palette: palette)
+                        .opacity(0.55)
+                        // Sent while the agent works, it waits in the agent's queue: long-press
+                        // can stop the agent so it's read now.
+                        .contextMenu {
+                            if state == "working", reply.phase != .failed, !reply.payload.isShellCommand {
+                                Button("Send Now", systemImage: "bolt.fill") { pushNow() }
+                            }
+                            copyButton(reply.text)
+                        }
+                        .accessibilityLabel(reply.phase == .failed ? "Not delivered: \(reply.text)" : "Sending: \(reply.text)")
+                }
+                if reply.phase == .unconfirmed {
+                    Label(reply.payload.isShellCommand ? "Command result unconfirmed" : "Delivery unconfirmed",
+                          systemImage: "questionmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(palette.secondary)
+                        .contextMenu {
+                            Button("Dismiss") { outbox.discard(reply.id) }
+                        }
+                } else if agent == .codex, reply.payload.isShellCommand, reply.entered {
+                    Label("Command submitted · waiting for result", systemImage: "terminal")
+                        .font(.caption)
+                        .foregroundStyle(palette.secondary)
+                } else if reply.phase == .queued || reply.phase == .pushed {
                     Label(reply.phase == .pushed ? "Sending now" : "Queued, the agent reads it after this step",
                           systemImage: reply.phase == .pushed ? "bolt.fill" : "clock")
                         .font(.caption)
@@ -602,15 +648,21 @@ struct ChatView: View {
         if search == nil {
             ForEach(Array(othersQueued(shownReplies).enumerated()), id: \.offset) { _, text in
                 VStack(alignment: .trailing, spacing: 6) {
-                    UserBubble(text: text, palette: palette)
-                        .opacity(0.55)
-                        .contextMenu {
-                            if state == "working" {
-                                Button("Send Now", systemImage: "bolt.fill") { pushNow() }
+                    let parts = SentImages.split(text)
+                    ForEach(parts.paths, id: \.self) { path in
+                        SentImageView(path: path, session: session, palette: palette)
+                    }
+                    if !parts.text.isEmpty || parts.paths.isEmpty {
+                        UserBubble(text: parts.text, palette: palette)
+                            .opacity(0.55)
+                            .contextMenu {
+                                if state == "working" {
+                                    Button("Send Now", systemImage: "bolt.fill") { pushNow() }
+                                }
+                                copyButton(parts.text)
                             }
-                            copyButton(text)
-                        }
-                        .accessibilityLabel("Queued: \(text)")
+                            .accessibilityLabel("Queued: \(parts.text)")
+                    }
                     Label("Queued, the agent reads it after this step", systemImage: "clock")
                         .font(.caption)
                         .foregroundStyle(palette.secondary)
@@ -619,6 +671,9 @@ struct ChatView: View {
                 .modifier(ArriveIn(active: true))
                 .transition(.identity)
             }
+        }
+        if search == nil, agent == .codex {
+            CodexLiveCommandRow(model: model, palette: palette)
         }
         if search == nil, state == "working", !waitingOnQuestion {
             // herdr's status is mostly the agent's description of its current tool, which
@@ -768,13 +823,16 @@ struct ChatView: View {
         .padding(.vertical, 6)
     }
 
-    /// The model the agent is on, from its last reply.
-    private var agyStatus: (model: String, effort: String?)? {
-        agent == .antigravity ? AntigravityStatus.read(model.frame.textLines) : nil
+    private var liveModelStatus: (model: String, effort: String?)? {
+        switch agent {
+        case .codex: CodexModelStatus.read(model.textLines)
+        case .antigravity: AntigravityStatus.read(model.textLines)
+        case .claude: nil
+        }
     }
 
     private var currentModel: ChatFeed.ModelOption? {
-        guard let id = (feed.usage?.model ?? agyStatus?.model)?.lowercased() else { return nil }
+        guard let id = (liveModelStatus?.model ?? feed.usage?.model)?.lowercased() else { return nil }
         return feed.models.first { $0.id.lowercased() == id || $0.name.lowercased() == id }
     }
 
@@ -1300,7 +1358,8 @@ struct ChatView: View {
             let started = tools.started
             key.steps = items.compactMap { item -> ToolRun.Step? in
                 if case .tool(let name, let summary) = item.kind, !started.contains(item.id) {
-                    ToolRun.Step(id: item.id, name: name, summary: summary, output: feed.toolOutput[item.id],
+                    ToolRun.Step(id: item.id, name: name, summary: summary,
+                                 output: feed.toolOutput[item.id].flatMap { $0.isEmpty ? nil : $0 },
                                  failed: feed.toolFailed.contains(item.id))
                 } else { nil }
             }
@@ -1308,7 +1367,7 @@ struct ChatView: View {
                 key.agents = tools.agents.filter { a in a.parent.map { p in items.contains { $0.id == p } } ?? false }
             }
             let id = row.id
-            key.running = id == tools.liveRunID
+            key.running = id == tools.liveRunID && (key.steps.last.map { feed.toolOutput[$0.id] == nil && !$0.failed } ?? false)
             key.waiting = state == "blocked" && id == tools.lastRowID
         case .item(let item):
             switch item.kind {
@@ -1544,8 +1603,19 @@ struct ChatView: View {
         }
     }
 
+    private var useClaudeTerminalHistory: Bool {
+        agent == .claude && feed.items.isEmpty && !model.inLogin
+            && model.claudeTranscriptWarning != nil
+            && !AnswerParser.needsLogin(in: model.textLines)
+    }
+
     @ViewBuilder
     private var placeholder: some View {
+        if !useClaudeTerminalHistory { transcriptPlaceholder }
+    }
+
+    @ViewBuilder
+    private var transcriptPlaceholder: some View {
         switch feed.phase {
         case .loading:
             ReadingSpinner(color: palette.secondary)
@@ -1628,7 +1698,7 @@ struct ChatView: View {
                 }
                 ModelChip(usage: feed.usage, effort: feed.chosenEffort, agent: agent, palette: palette, enabled: canType,
                           open: feed.models.isEmpty ? nil : { showingModels = true },
-                          screen: agent == .antigravity ? model : nil)
+                          screen: agent == .claude ? nil : model)
                 // Long-press: the context and plan limits (also in ⋯ → Usage).
                 .contextMenu {
                     if feed.usage != nil || agent == .claude {
@@ -1735,7 +1805,7 @@ struct ChatView: View {
                     }
                     return
                 }
-                model.type(command)
+                model.type(RestartCommand.typedLine(command, windows: session.isWindowsHost))
                 try? await Task.sleep(for: .milliseconds(150))
                 model.press(.enter)
             }
@@ -1819,7 +1889,8 @@ struct ChatView: View {
                     try? await Task.sleep(for: .milliseconds(100))
                 }
             },
-            conversationID: { feed.conversationID })
+            conversationID: { feed.conversationID },
+            agent: agent)
         return outbox
     }
 
@@ -2032,7 +2103,7 @@ private struct SubagentLine: View {
 
     private func detail(now: Date) -> String {
         var parts: [String] = []
-        if agent.isShell, let started = agent.started {
+        if agent.isShell, agent.state != .unknown, let started = agent.started {
             let seconds = max(0, (agent.ended ?? now).timeIntervalSince(started))
             parts.append(agent.state == .running ? "running \(Self.duration(seconds))" : Self.duration(seconds))
         }
@@ -2090,6 +2161,7 @@ private struct SubagentLine: View {
                 switch agent.state {
                 case .running: ProgressView().controlSize(.mini)
                 case .done: Image(systemName: "checkmark").font(.footnote)
+                case .unknown: Image(systemName: "questionmark.circle").font(.footnote)
                 case .failed: Image(systemName: "xmark").font(.footnote.weight(.bold)).foregroundStyle(.red)
                 }
             }
@@ -3093,7 +3165,10 @@ private struct AnswerSlot: View {
     let record: (String, String) -> Void
 
     var body: some View {
-        if blocked || model.inLogin {
+        let claude = ChatAgent.detect(terminal) == .claude
+        let auth = claude && AnswerParser.showSignedOut(in: model.textLines, status: terminal.status)
+        let approval = claude && model.menuOpen && AnswerParser.showsApprovalChoices(in: model.textLines)
+        if (blocked && terminal.status?.kind != "auth") || model.inLogin || auth || approval {
             AnswerCard(status: terminal.status, model: model, palette: palette, scope: scope, demo: demo) { record($0, $1) }
                 .transition(transition)
         } else if model.menuOpen, terminal.status?.state == "idle" {
@@ -3479,9 +3554,15 @@ enum RestartCommand {
             .contains(name)
     }
 
+    /// A Claude started from inside another Claude's session inherits CLAUDE_CODE_CHILD_SESSION and
+    /// saves no transcript, which leaves the chat with nothing to read. A restart drops it.
+    static func typedLine(_ command: String, windows: Bool) -> String {
+        windows ? command : "env -u CLAUDE_CODE_CHILD_SESSION " + command
+    }
+
     /// The command as a new terminal's program: Claude's usual install folders first on PATH.
     static func directLine(_ command: String) -> String {
-        #"PATH="$HOME/.local/bin:$HOME/.claude/local:/opt/homebrew/bin:/usr/local/bin:$PATH"; exec "# + command
+        #"unset CLAUDE_CODE_CHILD_SESSION; PATH="$HOME/.local/bin:$HOME/.claude/local:/opt/homebrew/bin:/usr/local/bin:$PATH"; exec "# + command
     }
 
     static func make(argv: [String], conversation: String) -> String {

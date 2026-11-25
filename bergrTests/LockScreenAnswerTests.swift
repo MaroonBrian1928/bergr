@@ -97,12 +97,55 @@ struct LockScreenAnswerTests {
 
     /// Claude signed out: herdr-core says blocked, but nothing is asked. No Yes/No buttons
     /// (they'd type "n" into its input), and an old button is refused.
+    @Test func recognizesClippedClaudeTranscriptWarning() {
+        let line = "  ⚠ Transcript saving is off — inherited CLAUDE_CO…"
+        #expect(ClaudeTranscriptWarning.read(["❯ ", line, "Opus 5.5 · 5% context"]) == .inheritedChildSession)
+        #expect(ClaudeTranscriptWarning.read(["⚠ Transcript saving is off — CLAUDE_CODE_SKIP_PROMPT_HISTORY is set"]) == .savingDisabled)
+        #expect(ClaudeTranscriptWarning.read(["❯ ", "Opus 5.5 · 5% context"]) == nil)
+    }
+
     @Test func signedOutOffersNothing() {
         let lines = ["● Login expired · Please run /login", "❯ ", "Not logged in · Run /login"]
         let reading = PromptReading.read(lines: lines, statusTitle: "Claude")
         #expect(reading.options.isEmpty)
         #expect(AnswerPolicy.decide(question: "Claude", number: 0, label: "No", key: "n",
                                     lines: lines, statusTitle: "Claude") == .changed)
+    }
+
+    @Test func numberedAuthenticationQuestionIsNotALoginPrompt() {
+        let lines = ["Which authentication code method?", "❯ 1. TOTP", "  2. SMS"]
+        #expect(AnswerParser.loginStep(in: lines) == nil)
+        #expect(PromptReading.read(lines: lines, statusTitle: nil).options.map(\.label) == ["TOTP", "SMS"])
+        #expect(AnswerParser.loginStep(in: ["Press Enter to continue"]) == nil)
+    }
+
+    @Test func codePromptCanHaveAnEscapeFooter() {
+        let lines = ["Paste the code from your browser here:", "Esc to cancel"]
+        #expect(AnswerParser.loginStep(in: lines) == .pasteCode(url: nil))
+        #expect(AnswerParser.loginStep(in: lines + ["❯ "]) == nil)
+    }
+
+    @Test func oldLoginNoticeDoesNotHideNewApprovalChoices() {
+        let lines = ["Not logged in · Run /login", "Proceed?", "❯ 1. Yes", "  2. No", "Esc to cancel"]
+        #expect(AnswerParser.isAsking(lines))
+        #expect(AnswerParser.showsApprovalChoices(in: lines))
+    }
+
+    @Test func loginCodePromptOverridesOldChoicesAndQuestions() {
+        let lines = ["Why this account?", "1. Claude account", "2. Console account",
+                     "Paste the code from your browser here:"]
+        #expect(AnswerParser.loginStep(in: lines) == .pasteCode(url: nil))
+        #expect(!AnswerParser.isAsking(lines))
+        #expect(PromptReading.read(lines: lines, statusTitle: "Claude").options.isEmpty)
+    }
+
+    @Test func signedOutVariantsAreNotQuestions() {
+        for text in ["Not logged in", "Login expired", "Please RUN /login", "  ⎿ Login interrupted"] {
+            let lines = ["Need help?", "❯ /login", text]
+            #expect(AnswerParser.choices(in: lines).isEmpty)
+            #expect(AnswerParser.needsLogin(in: lines))
+            #expect(!AnswerParser.isAsking(lines))
+        }
     }
 
     @Test func loginStepsFromScreen() {
@@ -120,6 +163,13 @@ struct LockScreenAnswerTests {
         #expect(AnswerParser.rewindOpen(lines))
         #expect(!AnswerParser.isAsking(lines))
         #expect(!AnswerParser.rewindOpen(["❯ Rewind the db"]))
+    }
+
+    @Test func earlierLoginErrorsDoNotOutliveSuccessfulLoginOrNewOutput() {
+        let error = "Not logged in · Run /login"
+        #expect(!AnswerParser.needsLogin(in: [error, "Login successful", "❯ "]))
+        #expect(!AnswerParser.needsLogin(in: [error, "❯ Hello", "● Hi!", "❯ "]))
+        #expect(AnswerParser.loginStep(in: ["Login successful. Press Enter to continue…", "❯ "]) == nil)
     }
 
     @Test func loginSuccessHigherUpIsOver() {
