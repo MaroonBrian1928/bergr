@@ -682,6 +682,16 @@ class Claude:
     project = None
 
 
+    def bg_ended(self, text, d):
+        """Background shells a <task-notification> says have ended."""
+        for task, status in TASK_NOTE.findall(text):
+            if not task.startswith("a"):  # "a…" is a sub-agent's, followed on its own
+                BG.pop(task, None)
+                status = status.strip()
+                yield bg_event(task, state="done" if status == "completed" else "failed",
+                               summary="" if status == "completed" else status,
+                               ended=round(record_time(d) or time.time()))
+
     def unqueue(self, text):
         """A queued message the agent took in (as a user message or a queued-command attachment):
         out of the queue. A dequeue record names no text and its own notices are often taken without
@@ -794,6 +804,10 @@ class Claude:
         # A message typed while Claude was working: Claude Code records it as a queued-command
         # attachment, not a user message, once it takes it in mid-turn.
         att = d.get("attachment") if kind == "attachment" else None
+        # A background shell's end taken in mid-turn (Code Mode does this) is a queued-command
+        # attachment of Claude Code's own, not a user message.
+        if isinstance(att, dict) and att.get("type") == "queued_command" and isinstance(att.get("prompt"), str):
+            yield from self.bg_ended(att["prompt"], d)
         if isinstance(att, dict) and att.get("type") == "queued_command" and not d.get("isSidechain") \
                 and att.get("commandMode", "prompt") == "prompt" \
                 and (att.get("origin") or {}).get("kind", "human") == "human":
@@ -807,13 +821,7 @@ class Claude:
             return
         if kind == "user" and isinstance((d.get("message") or {}).get("content"), str):
             yield from self.unqueue(d["message"]["content"])
-            for task, status in TASK_NOTE.findall(d["message"]["content"]):
-                if not task.startswith("a"):  # "a…" is a sub-agent's, followed on its own
-                    BG.pop(task, None)
-                    status = status.strip()
-                    yield bg_event(task, state="done" if status == "completed" else "failed",
-                                   summary="" if status == "completed" else status,
-                                   ended=round(record_time(d) or time.time()))
+            yield from self.bg_ended(d["message"]["content"], d)
         if kind == "user" and isinstance((d.get("message") or {}).get("content"), list):
             tur = d.get("toolUseResult") if isinstance(d.get("toolUseResult"), dict) else {}
             if self.results is None:

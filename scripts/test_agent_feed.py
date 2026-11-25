@@ -71,6 +71,18 @@ class ClaudeParse(Base):
         self.assertIn("a.txt &", evs[0]["text"])
         self.assertNotIn("failed", evs[0])
 
+    def test_background_shell_end_taken_in_mid_turn(self):
+        # Code Mode records the end as Claude Code's own queued-command attachment.
+        ns = load("claude", self.home)
+        c = ns["Claude"]()
+        ns["BG"]["b1"] = {"file": None}
+        note = "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>"
+        evs = list(c.parse({"type": "attachment", "uuid": "q1", "attachment": {
+            "type": "queued_command", "prompt": note, "origin": {"kind": "task-notification"}}}))
+        self.assertEqual([(e["id"], e["state"]) for e in evs if e["t"] == "subagent"], [("bg-b1", "done")])
+        self.assertNotIn("b1", ns["BG"])
+        self.assertEqual([e for e in evs if e["t"] == "msg"], [])
+
     def test_image_block(self):
         block = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(100)}}
         evs = self.parse([block], kind="user")
