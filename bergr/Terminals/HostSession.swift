@@ -225,6 +225,28 @@ final class HostSession {
         return feed
     }
 
+    /// Retry from a chat stuck reading: end its feed's loop, wherever it hangs, and start it again
+    /// into the same feed.
+    @MainActor
+    func restartFeed(_ feed: ChatFeed) {
+        guard let (address, entry) = feeds.first(where: { $0.value.feed === feed }),
+              let start = feedStarts[address] else { return }
+        let old = entry.task
+        old.cancel()
+        feed.prepareRestart()
+        let agent = entry.agent
+        let task = Task { @MainActor [weak self] in
+            // Let the old loop finish first so two never write into one feed; but it may be the
+            // thing that's stuck, so wait at most 3 s for it.
+            let ended = RetryFlag()
+            Task { @MainActor in await old.value; ended.on = true }
+            for _ in 0..<30 where !ended.on { try? await Task.sleep(for: .milliseconds(100)) }
+            guard let self, !Task.isCancelled else { return }
+            await feed.run(session: self, agent: agent, pid: start.pid, cwd: start.cwd, sessionHint: start.sessionHint)
+        }
+        feeds[address] = (agent, feed, task, .now)
+    }
+
     /// Back on the line: follow again the conversations that were open when it went away. Done
     /// here, not by the screens: a chat on screen while the app was in the background never saw the
     /// line drop and come back (no redraws in the background), so it never asked again, and the chat
@@ -704,3 +726,6 @@ final class SessionStore {
         for session in sessions.values { session.probe(keys: keys) }
     }
 }
+
+/// Set once the feed loop a Retry replaces has ended.
+@MainActor private final class RetryFlag { var on = false }

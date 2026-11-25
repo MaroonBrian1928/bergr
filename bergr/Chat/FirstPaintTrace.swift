@@ -15,6 +15,17 @@ final class FirstPaintTrace {
 
     init(label: String) { self.label = label }
 
+    /// The last step reached, for the stall report.
+    private(set) var lastStep = "started"
+
+    /// A chat stuck on "Reading the conversation…": logged in release builds too, so a stall
+    /// leaves a trace of where it stopped.
+    func stalled(_ detail: String) {
+        let line = "\(label) STALLED after \(lastStep): \(detail)"
+        Self.log.error("\(line, privacy: .public)")
+        Self.append(line)
+    }
+
     func count(bytes: Int, events: Int, parse: Duration) {
         self.bytes += bytes
         self.events += events
@@ -23,6 +34,7 @@ final class FirstPaintTrace {
 
     /// Records `step` once per trace.
     func mark(_ step: String) {
+        lastStep = step
         #if DEBUG
         guard marked.insert(step).inserted else { return }
         let ms = (ContinuousClock.now - start).components

@@ -273,6 +273,18 @@ final class ChatFeed {
     /// Starts the helper again (its loop reconnects): after a restart into a newer Claude Code, a
     /// helper that was already running kept reporting the old version and the banner came back.
     func reconnect() { activePipe?.close() }
+
+    /// The spinner has shown for too long: log where reading stopped.
+    func reportStall() {
+        let state = "phase \(phase), items \(items.count), caughtUp \(caughtUp), pipe \(activePipe != nil)"
+        if let trace { trace.stalled(state) } else { FirstPaintTrace(label: "chat").stalled(state + ", no attempt started") }
+    }
+
+    /// Before the session starts this feed's loop again (Retry).
+    func prepareRestart() {
+        activePipe?.close()
+        if items.isEmpty { phase = .loading }
+    }
     /// Whether the network is expensive or constrained (cellular, Low Data Mode); tests override it.
     @ObservationIgnored var isExpensive: () -> Bool = { NetworkWatcher.shared.isExpensive }
 
@@ -318,7 +330,8 @@ final class ChatFeed {
                 defer { pipe.close() }
                 trace?.mark("opened")
                 activePipe = pipe
-                defer { activePipe = nil }
+                // A Retry may already have started a newer loop with its own pipe: leave that one.
+                defer { if activePipe === pipe { activePipe = nil } }
                 // Bound the initial write too: a suspended SSH channel may never finish it.
                 try await Self.bounded(timeout: { try await Task.sleep(for: timeout) }, onCancel: pipe.close) {
                     try await pipe.write(launch.input)
@@ -456,6 +469,8 @@ final class ChatFeed {
             trace?.mark("first byte")
             let parseStart = ContinuousClock.now
             let events = await parser.feed(chunk)
+            // A loop replaced by Retry must not apply what it read after the replacement started.
+            if Task.isCancelled { throw CancellationError() }
             trace?.count(bytes: chunk.count, events: events.count, parse: ContinuousClock.now - parseStart)
             for parsed in events {
                 let event = parsed.event

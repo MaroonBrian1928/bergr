@@ -1614,11 +1614,21 @@ struct ChatView: View {
         if !useClaudeTerminalHistory { transcriptPlaceholder }
     }
 
+    private var retryFeed: (() -> Void)? {
+        guard let session else { return nil }
+        return { [feed] in session.restartFeed(feed) }
+    }
+
     @ViewBuilder
     private var transcriptPlaceholder: some View {
+        if reading {
+            // One spinner for both loading and live-but-not-caught-up, so its 30 s cap doesn't
+            // start over when the conversation is found.
+            ReadingSpinner(color: palette.secondary, onStuck: feed.reportStall, retry: retryFeed)
+        } else {
         switch feed.phase {
         case .loading:
-            ReadingSpinner(color: palette.secondary)
+            EmptyView()
         case .noConversation:
             ContentUnavailableView(
                 "No conversation yet", systemImage: "bubble.left.and.text.bubble.right",
@@ -1626,11 +1636,18 @@ struct ChatView: View {
         case .failed(let message):
             ContentUnavailableView("Can't read the conversation", systemImage: "exclamationmark.triangle",
                                    description: Text(message))
-        case .live where feed.items.isEmpty && !feed.caughtUp:
-            // A conversation was found and is being read: keep the same spinner until it's all in.
-            ReadingSpinner(color: palette.secondary)
         case .live:
             EmptyView()
+        }
+        }
+    }
+
+    /// Loading, or a conversation found and still being read (shown until it's all in).
+    private var reading: Bool {
+        switch feed.phase {
+        case .loading: return true
+        case .live: return feed.items.isEmpty && !feed.caughtUp
+        default: return false
         }
     }
 
@@ -3133,20 +3150,47 @@ private struct QuestionCard: View {
 
 /// "Reading the conversation…", shown only if reading takes long enough to notice.
 /// A conversation that loads quickly shows nothing, instead of flashing the spinner for a moment.
+/// After 30 s it gives up showing progress and offers Retry, whatever the reading is stuck on.
 private struct ReadingSpinner: View {
     var color: Color
+    var onStuck: () -> Void = {}
+    var retry: (() -> Void)?
     @State private var visible = false
+    @State private var stuck = false
+    @State private var attempt = 0
 
     var body: some View {
-        ProgressView("Reading the conversation…")
-            .foregroundStyle(color)
-            .frame(maxWidth: .infinity)
-            .padding(.top, 48)
-            .opacity(visible ? 1 : 0)
-            .task {
-                try? await Task.sleep(for: .milliseconds(600))
-                withAnimation(.easeIn(duration: 0.2)) { visible = true }
+        Group {
+            if stuck {
+                ContentUnavailableView {
+                    Label("Can't read the conversation", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text("Reading it has taken over 30 seconds.")
+                } actions: {
+                    if let retry {
+                        Button("Retry") {
+                            stuck = false
+                            attempt += 1
+                            retry()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            } else {
+                ProgressView("Reading the conversation…")
+                    .foregroundStyle(color)
+                    .opacity(visible ? 1 : 0)
             }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 48)
+        .task(id: attempt) {
+            try? await Task.sleep(for: .milliseconds(600))
+            withAnimation(.easeIn(duration: 0.2)) { visible = true }
+            do { try await Task.sleep(for: .seconds(30)) } catch { return }
+            onStuck()
+            withAnimation { stuck = true }
+        }
     }
 }
 
