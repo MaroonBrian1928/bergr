@@ -161,10 +161,13 @@ import UIKit
         let rig = ReplyRig()
         rig.terminal.textLines = ["> hello there"]
         let reply = rig.send("hello there")
-        // Retried while the first monitor still waits: only the newer one may keep watching.
+        // Retry is only offered once a send has failed: after it, only the new monitor may keep watching.
         await rig.until("typed") { rig.terminal.count("enter") >= 1 }
+        rig.terminal.textLines = []
+        await rig.until("failed") { reply.phase == .failed }
         rig.outbox.retry(reply.id)
         await rig.until("retry typed") { rig.terminal.count("enter") >= 2 }
+        rig.terminal.textLines = ["> hello there"]
         rig.stateReads = 0
         await rig.pause(45)
         // One monitor looks every 10 ms at most; the sleeping old one would have doubled that.
