@@ -12,16 +12,13 @@ final class DemoChatTests: XCTestCase {
         let row = app.staticTexts["Add a dark mode toggle"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         row.tap()
-        let reply = NSPredicate(format: "placeholderValue BEGINSWITH 'Reply'")
-        let asView = app.textViews.matching(reply).firstMatch
-        let asField = app.textFields.matching(reply).firstMatch
-        XCTAssertTrue(asView.waitForExistence(timeout: 10) || asField.exists, "the chat's reply box shows")
-        let field = asView.exists ? asView : asField
+        let field = app.descendants(matching: .any)["reply-field"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "the chat's reply box shows")
         sleep(3)
         field.tap()
         sleep(4) // keyboard up, nothing touched: the list must hold still
         field.typeText("check the deploy")
-        app.buttons["Send"].tap()
+        app.buttons["send-button"].tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'roll'")).firstMatch
             .waitForExistence(timeout: 15), "the fake agent answers")
         sleep(6) // after the answer, still nothing touched
