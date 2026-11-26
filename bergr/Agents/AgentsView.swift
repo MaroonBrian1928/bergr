@@ -112,31 +112,35 @@ struct AgentsView: View {
         let lists = shown || frozen.lists == nil ? machineLists : frozen.lists!
         let _ = (frozen.lists = lists)
         List(selection: listSelection) {
-            if !searchText.isEmpty {
-                SearchResultsSections(model: searchModel, sessions: sessions, open: open)
-            } else {
-            if !digest.entries.isEmpty {
-                Section { DigestCard(model: digest, open: open) }
-            }
-            let direct = shown ? DirectMigration.candidates(store: hosts, sessions: sessions) : []
-            if DirectMigration.showBanner(direct, dismissedKey: dismissedBanner) {
-                Section {
-                    HStack(spacing: 10) {
-                        Image(systemName: "arrow.triangle.branch").foregroundStyle(.secondary)
-                        Text(direct.count == 1 ? "1 machine is reached through another."
-                             : "\(direct.count) machines are reached through another.")
-                            .font(.footnote)
-                        Button("Connect directly") { showingMigration = true }
-                            .font(.footnote.weight(.semibold)).buttonStyle(.borderless)
-                        Spacer(minLength: 4)
-                        Button("Dismiss", systemImage: "xmark") { dismissedBanner = DirectMigration.bannerKey(direct) }
-                            .labelStyle(.iconOnly).buttonStyle(.borderless).foregroundStyle(.secondary)
+            // One Group, so a look's translucent row fill reaches every row.
+            Group {
+                if !searchText.isEmpty {
+                    SearchResultsSections(model: searchModel, sessions: sessions, open: open)
+                } else {
+                if !digest.entries.isEmpty {
+                    Section { DigestCard(model: digest, open: open) }
+                }
+                let direct = shown ? DirectMigration.candidates(store: hosts, sessions: sessions) : []
+                if DirectMigration.showBanner(direct, dismissedKey: dismissedBanner) {
+                    Section {
+                        HStack(spacing: 10) {
+                            Image(systemName: "arrow.triangle.branch").foregroundStyle(.secondary)
+                            Text(direct.count == 1 ? "1 machine is reached through another."
+                                 : "\(direct.count) machines are reached through another.")
+                                .font(.footnote)
+                            Button("Connect directly") { showingMigration = true }
+                                .font(.footnote.weight(.semibold)).buttonStyle(.borderless)
+                            Spacer(minLength: 4)
+                            Button("Dismiss", systemImage: "xmark") { dismissedBanner = DirectMigration.bannerKey(direct) }
+                                .labelStyle(.iconOnly).buttonStyle(.borderless).foregroundStyle(.secondary)
+                        }
                     }
                 }
+                CoreUpdateSection(sessions: sessions, hosts: hosts.hosts)
+                if byAttention { attentionSections(lists) } else { machineSections(lists) }
+                }
             }
-            CoreUpdateSection(sessions: sessions, hosts: hosts.hosts)
-            if byAttention { attentionSections(lists) } else { machineSections(lists) }
-            }
+            .lookRows()
         }
         .onAppear { shown = true }
         .onDisappear { shown = false }
@@ -212,7 +216,7 @@ struct AgentsView: View {
                 let host = list.host
                 let session = list.session
                 let terminals = list.own
-                Section {
+                LookSection {
                     // Why a machine can't connect, in full, with a way to try again; the other
                     // machines carry on.
                     if case .failed(let message, _) = session.state {
@@ -266,6 +270,7 @@ struct AgentsView: View {
         #else
         .listStyle(.plain)
         #endif
+        .lookBackground()
         // Rows glide to their new place when an agent's state re-sorts them; Reduce Motion fades.
         .animation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.35), value: orderKey)
         .sensoryFeedback(.selection, trigger: picked) { _, new in new != nil }
@@ -345,7 +350,7 @@ struct AgentsView: View {
         attentionSection("Finished", finished, counted: true)
         attentionSection("Working", working, counted: false)
         if !idle.isEmpty {
-            Section {
+            LookSection {
                 ForEach(shownIdle) { entryRow($0) }
                 if idle.count > shownIdle.count {
                     Button("Show \(idle.count - shownIdle.count) more") { withAnimation { showAllIdle = true } }
@@ -356,7 +361,7 @@ struct AgentsView: View {
         }
         // Finished and idle agents untouched for longer than the setting: out of the way, not gone.
         if !quiet.isEmpty {
-            Section {
+            LookSection {
                 if showOlder {
                     ForEach(quiet) { entryRow($0) }
                 }
@@ -397,7 +402,7 @@ struct AgentsView: View {
     @ViewBuilder
     private func attentionSection(_ title: String, _ items: [Entry], counted: Bool) -> some View {
         if !items.isEmpty {
-            Section {
+            LookSection {
                 ForEach(items) { entryRow($0) }
             } header: { AttentionHeader(title: title, count: counted ? items.count : nil) }
         }

@@ -24,88 +24,93 @@ struct MachinesView: View {
 
     var body: some View {
         List {
-            if hosts.hosts.isEmpty {
-                ContentUnavailableView {
-                    Label("No machines", systemImage: "server.rack")
-                } description: {
-                    Text(LocalCore.isMac
-                        ? "Add a machine using this Mac's SSH config and ssh-agent, or select a Bergr key."
-                        : keys.keys.isEmpty
-                        ? "Create an SSH key first, add it to your machine, then add the machine here."
-                        : "Add a machine that runs herdr-core.")
-                } actions: {
-                    if keys.keys.isEmpty && !LocalCore.isMac {
-                        Button("Create Key") { showingKeys = true }.buttonStyle(.borderedProminent)
-                    } else {
-                        Button("Add Machine") { editing = newHost() }.buttonStyle(.borderedProminent)
-                    }
-                    if LocalCore.isAvailable && !hosts.hasLocal {
-                        Button("Add This Mac") { selection = hosts.addLocal().id }
-                    }
-                    Button("Try the Demo") { _ = hosts.addDemo() }
-                }
-                .listRowBackground(Color.clear)
-            }
-            Section {
-                ForEach(hosts.hosts) { host in
-                    Button {
-                        if host.isDemo || host.isLocal {
-                            selection = host.id
-                            if inSheet { dismiss() }
+            // One Group, so a look's translucent row fill reaches every row.
+            Group {
+                if hosts.hosts.isEmpty {
+                    ContentUnavailableView {
+                        Label("No machines", systemImage: "server.rack")
+                    } description: {
+                        Text(LocalCore.isMac
+                            ? "Add a machine using this Mac's SSH config and ssh-agent, or select a Bergr key."
+                            : keys.keys.isEmpty
+                            ? "Create an SSH key first, add it to your machine, then add the machine here."
+                            : "Add a machine that runs herdr-core.")
+                    } actions: {
+                        if keys.keys.isEmpty && !LocalCore.isMac {
+                            Button("Create Key") { showingKeys = true }.buttonStyle(.borderedProminent)
                         } else {
-                            editing = host
+                            Button("Add Machine") { editing = newHost() }.buttonStyle(.borderedProminent)
                         }
-                    } label: {
-                        HStack {
-                            MachineRow(host: host, session: sessions.existing(host.id), sameAs: duplicates[host.id])
-                            if host.id == selection {
-                                Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(.tint)
+                        if LocalCore.isAvailable && !hosts.hasLocal {
+                            Button("Add This Mac") { selection = hosts.addLocal().id }
+                        }
+                        Button("Try the Demo") { _ = hosts.addDemo() }
+                    }
+                    .listRowBackground(Color.clear)
+                }
+                Section {
+                    ForEach(hosts.hosts) { host in
+                        Button {
+                            if host.isDemo || host.isLocal {
+                                selection = host.id
+                                if inSheet { dismiss() }
+                            } else {
+                                editing = host
+                            }
+                        } label: {
+                            HStack {
+                                MachineRow(host: host, session: sessions.existing(host.id), sameAs: duplicates[host.id])
+                                if host.id == selection {
+                                    Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(.tint)
+                                }
+                            }
+                        }
+                        .foregroundStyle(.primary)
+                        .contextMenu {
+                            Button("Show Terminals", systemImage: "terminal") {
+                                selection = host.id
+                                if inSheet { dismiss() }
+                            }
+                            if !host.isDemo && !host.isLocal {
+                                Button("Edit", systemImage: "pencil") { editing = host }
+                            }
+                            if !host.isDemo {
+                                Button("Setup", systemImage: "checklist") {
+                                    let session = sessions.session(for: host)
+                                    if session.state == .idle { session.start(keys: keys) }
+                                    setupHost = host
+                                }
+                            }
+                            Divider()
+                            Button("Move Up", systemImage: "arrow.up") { withAnimation { hosts.move(host, by: -1) } }
+                                .disabled(hosts.hosts.first == host)
+                            Button("Move Down", systemImage: "arrow.down") { withAnimation { hosts.move(host, by: 1) } }
+                                .disabled(hosts.hosts.last == host)
+                            Divider()
+                            Button("Delete", systemImage: "trash", role: .destructive) {
+                                if let index = hosts.hosts.firstIndex(of: host) { hosts.delete(at: [index]) }
                             }
                         }
                     }
-                    .foregroundStyle(.primary)
-                    .contextMenu {
-                        Button("Show Terminals", systemImage: "terminal") {
-                            selection = host.id
-                            if inSheet { dismiss() }
-                        }
-                        if !host.isDemo && !host.isLocal {
-                            Button("Edit", systemImage: "pencil") { editing = host }
-                        }
-                        if !host.isDemo {
-                            Button("Setup", systemImage: "checklist") {
-                                let session = sessions.session(for: host)
-                                if session.state == .idle { session.start(keys: keys) }
-                                setupHost = host
-                            }
-                        }
-                        Divider()
-                        Button("Move Up", systemImage: "arrow.up") { withAnimation { hosts.move(host, by: -1) } }
-                            .disabled(hosts.hosts.first == host)
-                        Button("Move Down", systemImage: "arrow.down") { withAnimation { hosts.move(host, by: 1) } }
-                            .disabled(hosts.hosts.last == host)
-                        Divider()
-                        Button("Delete", systemImage: "trash", role: .destructive) {
-                            if let index = hosts.hosts.firstIndex(of: host) { hosts.delete(at: [index]) }
+                    .onMove { hosts.move(fromOffsets: $0, toOffset: $1) }
+                    .onDelete { hosts.delete(at: $0) }
+                    if !hosts.hosts.isEmpty {
+                        Button {
+                            editing = newHost()
+                        } label: {
+                            AccentLabel(title: "Add Machine", systemImage: "plus")
                         }
                     }
-                }
-                .onMove { hosts.move(fromOffsets: $0, toOffset: $1) }
-                .onDelete { hosts.delete(at: $0) }
-                if !hosts.hosts.isEmpty {
-                    Button {
-                        editing = newHost()
-                    } label: {
-                        AccentLabel(title: "Add Machine", systemImage: "plus")
+                } footer: {
+                    if !hosts.hosts.isEmpty {
+                        Text("Tap a machine to edit it. Swipe to delete it; this removes it from Bergr only.")
                     }
-                }
-            } footer: {
-                if !hosts.hosts.isEmpty {
-                    Text("Tap a machine to edit it. Swipe to delete it; this removes it from Bergr only.")
                 }
             }
+            .lookRows()
         }
         .bergrTint()
+        .lookBackground()
         .navigationTitle("Machines")
         .toolbar {
             if inSheet {

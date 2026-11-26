@@ -98,7 +98,9 @@ struct ChatView: View {
     @Environment(KeyLibrary.self) private var keys
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var palette: ChatPalette { .of(colorScheme) }
+    @ActiveLook private var look
+
+    private var palette: ChatPalette { .of(colorScheme, look: look) }
 
     /// The agent's queue as its transcript records it, less what our own replies already show.
     private func othersQueued(_ ours: [ReplyDelivery]) -> [String] {
@@ -223,7 +225,8 @@ struct ChatView: View {
             bottomBar
                 .macBarHeight { macBars.bottom = $0 }
         }
-        .background(palette.background)
+        // A look draws its gradient behind the chat; otherwise the palette's flat color.
+        .background(look.map { AnyShapeStyle($0.linearGradient) } ?? AnyShapeStyle(palette.background))
         // A reconnect that's over in a moment (the connection dropped and came straight back)
         // doesn't flash the bar: it shows after 1.5 s without a connection.
         .task(id: session.map { $0.state != .connected } ?? false) {
@@ -1167,6 +1170,20 @@ struct ChatView: View {
 
     private func answerCodexQuestion(_ answer: String, title: String, id: String) {
         guard canType, questionPicks[id] == nil, !questionSending.contains(id) else { return }
+        // The demo's made-up terminal has no question menu to pick from: its fake agent takes the
+        // answer as a typed line (DemoCore answers the cache question and works on).
+        if session?.host.isDemo == true {
+            questionPicks[id] = answer
+            draft = ""
+            sendError = nil
+            Task { @MainActor in
+                await model.automate {
+                    model.type(answer)
+                    model.press(.enter)
+                }
+            }
+            return
+        }
         questionSending.insert(id)
         if model.watching { model.setWatching(false) }
         let pending = feed.questionInfo.values.filter { $0.codexAsync && $0.answer == nil }.count
@@ -1332,6 +1349,7 @@ struct ChatView: View {
     private struct RowKey: Equatable {
         let row: Row
         let scheme: ColorScheme
+        let look: AppLook?
         let reduceMotion: Bool
         let canType: Bool
         let session: ObjectIdentifier?
@@ -1350,7 +1368,7 @@ struct ChatView: View {
     }
 
     private func rowKey(_ row: Row, tools: ToolContext, canType: Bool, state: String?) -> RowKey {
-        var key = RowKey(row: row, scheme: colorScheme, reduceMotion: reduceMotion, canType: canType,
+        var key = RowKey(row: row, scheme: colorScheme, look: look, reduceMotion: reduceMotion, canType: canType,
                          session: session.map(ObjectIdentifier.init), address: terminal?.address)
         switch row {
         case .tools(let items):
@@ -1399,7 +1417,7 @@ struct ChatView: View {
 
     @ViewBuilder
     private func rowView(_ key: RowKey) -> some View {
-        let palette = ChatPalette.of(key.scheme)
+        let palette = ChatPalette.of(key.scheme, look: key.look)
         switch key.row {
         case .tools:
             let steps = key.steps
@@ -3062,7 +3080,7 @@ private struct QuestionCard: View {
                 Button { pick(option) } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Text(letter).font(.footnote.weight(.semibold).monospaced())
-                            .foregroundStyle(picked ? Color.white.opacity(0.8) : palette.secondary)
+                            .foregroundStyle(picked ? palette.onAccentFill.opacity(0.8) : palette.secondary)
                         VStack(alignment: .leading, spacing: 2) {
                             // Centered on the title, not on its baseline: by baseline the pill's
                             // padding hung below the line and crowded the description.
@@ -3072,14 +3090,14 @@ private struct QuestionCard: View {
                                     Text("Recommended")
                                         .font(.caption2.weight(.semibold))
                                         .padding(.horizontal, 7).padding(.vertical, 2)
-                                        .foregroundStyle(picked ? Color.white : palette.accent)
-                                        .background((picked ? Color.white : palette.accent).opacity(0.15), in: Capsule())
+                                        .foregroundStyle(picked ? palette.onAccentFill : palette.accent)
+                                        .background((picked ? palette.onAccentFill : palette.accent).opacity(0.15), in: Capsule())
                                 }
                             }
                             if index < details.count, !details[index].isEmpty {
                                 Text(details[index])
                                     .font(.footnote)
-                                    .foregroundStyle(picked ? Color.white.opacity(0.8) : palette.secondary)
+                                    .foregroundStyle(picked ? palette.onAccentFill.opacity(0.8) : palette.secondary)
                                     .multilineTextAlignment(.leading)
                             }
                         }
@@ -3090,7 +3108,7 @@ private struct QuestionCard: View {
                             ProgressView().controlSize(.small).accessibilityLabel("Sending")
                         }
                     }
-                    .foregroundStyle(picked ? Color.white : palette.text)
+                    .foregroundStyle(picked ? palette.onAccentFill : palette.text)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .frame(minHeight: PlatformMetrics.controlHeight)
@@ -3120,7 +3138,7 @@ private struct QuestionCard: View {
                             Image(systemName: "arrow.up")
                                 .font(.callout.weight(.bold))
                                 .frame(width: 30, height: 30)
-                                .foregroundStyle(empty ? palette.secondary : Color.white)
+                                .foregroundStyle(empty ? palette.secondary : palette.onAccentFill)
                                 .background(empty ? palette.bubble : palette.accent, in: Circle())
                         }
                         .buttonStyle(PressStyle())

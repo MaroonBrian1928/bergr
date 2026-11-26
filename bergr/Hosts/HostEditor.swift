@@ -71,7 +71,8 @@ struct HostEditor: View {
     @State private var sshProcess = SystemSSHTest.Attempt()
     #endif
 
-    private var palette: ChatPalette { .of(scheme) }
+    @ActiveLook private var look
+    private var palette: ChatPalette { .of(scheme, look: look) }
     private var isExisting: Bool { hosts.hosts.contains { $0.id == host.id } }
     private var key: SSHKeyInfo? { keys.key(id: host.keyID) }
     private var portValue: Int? {

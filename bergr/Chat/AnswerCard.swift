@@ -619,7 +619,7 @@ struct AnswerCard: View {
                     HStack(spacing: 10) {
                         Text("\(choice.number)")
                             .font(.footnote.monospacedDigit())
-                            .foregroundStyle(primary ? Color.white.opacity(0.75) : palette.secondary)
+                            .foregroundStyle(primary ? palette.onAccentFill.opacity(0.75) : palette.secondary)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(confirm ? "Tap again to confirm: \(choice.label)" : choice.label)
                                 .font(.callout)

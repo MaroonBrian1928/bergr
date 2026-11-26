@@ -71,6 +71,23 @@ class ClaudeParse(Base):
         self.assertIn("a.txt &", evs[0]["text"])
         self.assertNotIn("failed", evs[0])
 
+    def test_code_mode_poll_images_show(self):
+        # A screenshot read inside a script comes back as an image block in the Poll's result.
+        ns = load("claude", self.home)
+        c = ns["Claude"]()
+        def run(kind, content):
+            return list(c.parse({"type": kind, "uuid": kind, "message": {"content": content}}))
+        run("assistant", [{"type": "tool_use", "id": "r1", "name": "REPL", "input": {"code": "await Read()"}}])
+        run("user", [{"type": "tool_result", "tool_use_id": "r1", "content": "(dispatched #4)"}])
+        run("assistant", [{"type": "tool_use", "id": "p1", "name": "Poll", "input": {}}])
+        poll = '<event nonce="X" kind="repl-eval" eval="4" status="settled">\n<result>ok</result>\n</event>'
+        evs = run("user", [{"type": "tool_result", "tool_use_id": "p1", "content": [
+            {"type": "text", "text": poll},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}]}])
+        images = [e for e in evs if e["t"] == "image"]
+        self.assertEqual(len(images), 1)
+        self.assertEqual((images[0]["role"], images[0].get("fromTool")), ("assistant", True))
+
     def test_background_shell_end_taken_in_mid_turn(self):
         # Code Mode records the end as Claude Code's own queued-command attachment.
         ns = load("claude", self.home)

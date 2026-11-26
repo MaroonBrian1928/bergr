@@ -29,6 +29,7 @@ DARK = [
     ("github-dark", "GitHub Dark", "GitHub Dark Default"),
     ("kanagawa-wave", "Kanagawa Wave", "Kanagawa Wave"),
     ("everforest-dark", "Everforest Dark", "Everforest Dark Med"),
+    ("miami", "Miami", None),
 ]
 LIGHT = [
     ("bergr-light", "Bergr Light", None),
@@ -51,6 +52,12 @@ BERGR = {
                    "cursor": "#f2b33d", "selection": "#3a3d42"},
     "bergr-light": {"base": "Atom One Light", "background": "#ecedeb", "foreground": "#303438",
                     "cursor": "#c27c0e", "selection": "#cfd1ce"},
+    # A sunset on a flat plum: pinks, violets, amber, cyan and a mint green. It also turns on the
+    # app's Miami look (AppLook.swift). A custom "ansi" replaces the base theme's palette.
+    "miami": {"base": "Atom One Dark", "background": "#22102e", "foreground": "#f4eaf7",
+              "cursor": "#ff7ac6", "selection": "#4a2a5e",
+              "ansi": ["#3a2348", "#ff5c8a", "#5cf2b0", "#ffc66b", "#7aa2ff", "#d77bff", "#4fe3f0", "#e6dcef",
+                       "#7a6690", "#ff86a8", "#8affc9", "#ffd98f", "#a3bfff", "#e8a5ff", "#8af0f7", "#ffffff"]},
 }
 
 

@@ -379,6 +379,17 @@ def claude_status(session_id):
     return window, session, weekly
 
 
+def claude_tool_images(bid, content):
+    """Images a tool brought back (Read of a screenshot, a browser capture): shown inline after its
+    tool row, on the agent's side, like an image it sent."""
+    for j, part in enumerate(content if isinstance(content, list) else []):
+        src = part.get("source") if isinstance(part, dict) and part.get("type") == "image" else None
+        if isinstance(src, dict) and src.get("type") == "base64":
+            ev = image_event(f"{bid}.{j}", "assistant", src.get("media_type"), src.get("data"))
+            if ev:
+                ev["fromTool"] = True
+                yield ev
+
 def image_event(eid, role, mime, data):
     """An image event, or None when it is too big (or not base64 text) to send."""
     if not isinstance(data, str) or not data or not isinstance(mime, str):
@@ -900,6 +911,8 @@ class Claude:
                 # call answers "(dispatched #N)", and its output arrives later in a Poll's events.
                 yield from self.code_mode_result(block.get("tool_use_id"), result_text(block.get("content")) or "",
                                                  bool(block.get("is_error")))
+                # Images a script read (Read of a screenshot) come back in the Poll's or REPL's result.
+                yield from claude_tool_images(bid, block.get("content"))
             elif t == "tool_result":
                 ev = blocked_event(block.get("tool_use_id"), result_text(block.get("content")),
                                    getattr(self, "calls", {}))
@@ -910,15 +923,7 @@ class Claude:
                     yield {k: v for k, v in ev.items() if k != "key"}
                 yield from toolout(block.get("tool_use_id"), result_text(block.get("content")),
                                    failed=bool(block.get("is_error")))
-                # An image a tool brought back (Read of a screenshot, a browser capture): shown
-                # inline after its tool row, on the agent's side, like an image it sent.
-                for j, part in enumerate(block.get("content") if isinstance(block.get("content"), list) else []):
-                    src = part.get("source") if isinstance(part, dict) and part.get("type") == "image" else None
-                    if isinstance(src, dict) and src.get("type") == "base64":
-                        ev = image_event(f"{bid}.{j}", "assistant", src.get("media_type"), src.get("data"))
-                        if ev:
-                            ev["fromTool"] = True
-                            yield ev
+                yield from claude_tool_images(bid, block.get("content"))
             elif t == "tool_use" and block.get("name") == "AskUserQuestion" \
                     and isinstance((block.get("input") or {}).get("questions"), list):
                 # Its questions as cards: each option is picked in the terminal by its number,

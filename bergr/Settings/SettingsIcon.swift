@@ -32,8 +32,9 @@ struct SettingsIcon: View {
 /// Tints toggles, buttons and links with the chat's coral.
 private struct BergrTint: ViewModifier {
     @Environment(\.colorScheme) private var scheme
+    @ActiveLook private var look
     func body(content: Content) -> some View {
-        content.tint(ChatPalette.of(scheme).accent)
+        content.tint(ChatPalette.of(scheme, look: look).accent)
     }
 }
 
@@ -47,12 +48,14 @@ struct AccentLabel: View {
     let title: String
     let systemImage: String
     @Environment(\.colorScheme) private var scheme
+    @ActiveLook private var look
 
     var body: some View {
+        let accent = ChatPalette.of(scheme, look: look).accent
         Label {
-            Text(title).foregroundStyle(ChatPalette.of(scheme).accent)
+            Text(title).foregroundStyle(accent)
         } icon: {
-            SettingsIcon(systemImage, color: ChatPalette.of(scheme).accent)
+            SettingsIcon(systemImage, color: accent)
         }
         .frame(minHeight: 44)
     }

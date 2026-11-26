@@ -8,6 +8,8 @@ struct MarkdownInline: Hashable, ExpressibleByStringLiteral {
     let words: Int
     private let light: AttributedString
     private let dark: AttributedString
+    /// Per look id, styled once like the other two.
+    private let looks: [String: AttributedString]
 
     init(_ source: String) {
         self.source = source
@@ -15,12 +17,19 @@ struct MarkdownInline: Hashable, ExpressibleByStringLiteral {
         words = Self.plainWords(plain)
         light = Self.styled(plain, palette: .of(.light))
         dark = Self.styled(plain, palette: .of(.dark))
+        looks = Dictionary(uniqueKeysWithValues: AppLook.all.map { ($0.id, Self.styled(plain, palette: .of(style: .look($0.id)))) })
     }
 
     init(stringLiteral value: String) { self.init(value) }
 
     /// The text in the palette's colors, ready to draw.
-    func styled(_ palette: ChatPalette) -> AttributedString { palette.isDark ? dark : light }
+    func styled(_ palette: ChatPalette) -> AttributedString {
+        switch palette.style {
+        case .light: light
+        case .dark: dark
+        case .look(let id): looks[id] ?? dark
+        }
+    }
 
     static func == (a: MarkdownInline, b: MarkdownInline) -> Bool { a.source == b.source }
     func hash(into hasher: inout Hasher) { hasher.combine(source) }
@@ -277,24 +286,51 @@ final class MarkdownBlock: Hashable, @unchecked Sendable {
 
 /// The chat's colors.
 struct ChatPalette {
-    let background, text, secondary, codeText, codeBackground, bubble, field, border: Color
-    let isDark: Bool
-    /// Bergr's gold, from the app icon: the logo's own gold in dark mode, a deeper one in light
-    /// mode so text and thin strokes stay readable on the cream background.
-    var accent: Color { Color("AccentColor") }
-    /// Text and icons on an accent fill: the icon's dark navy on the bright gold, white on the deeper one.
-    var onAccent: Color { Color("OnAccentColor") }
+    /// Which palette: a look's (by id) is a dark one, drawn on its gradient (see `AppLook`).
+    enum Style: Hashable { case light, dark, look(String) }
 
-    static func of(_ scheme: ColorScheme) -> ChatPalette {
-        scheme == .dark
-            ? ChatPalette(
+    let background, text, secondary, codeText, codeBackground, bubble, field, border: Color
+    let style: Style
+    /// A look's accent pair; nil keeps the asset catalog's.
+    var accentOverride: Color? = nil
+    var onAccentOverride: Color? = nil
+    var isDark: Bool { style != .light }
+    /// Bergr's gold, from the app icon: the logo's own gold in dark mode, a deeper one in light
+    /// mode so text and thin strokes stay readable on the cream background. A look can bring its own.
+    var accent: Color { accentOverride ?? Color("AccentColor") }
+    /// Text and icons on an accent fill: the icon's dark navy on the bright gold, white on the deeper one.
+    var onAccent: Color { onAccentOverride ?? Color("OnAccentColor") }
+    /// Text on a picked answer's accent fill: white as always, or a look's own on-accent color
+    /// (white on a light accent like Miami's peach would be unreadable).
+    var onAccentFill: Color { onAccentOverride ?? .white }
+
+    /// `look` only counts in dark mode: light mode never changes.
+    static func of(_ scheme: ColorScheme, look: AppLook? = nil) -> ChatPalette {
+        of(style: scheme == .light ? .light : look.map { .look($0.id) } ?? .dark)
+    }
+
+    static func of(style: Style) -> ChatPalette {
+        switch style {
+        case .look(let id):
+            if let look = AppLook.find(id) {
+                ChatPalette(
+                    background: look.solid, text: look.text, secondary: look.secondary, codeText: look.codeText,
+                    codeBackground: look.codeBackground, bubble: look.bubble, field: look.field, border: look.border,
+                    style: style, accentOverride: look.accent, onAccentOverride: look.onAccent)
+            } else {
+                of(style: .dark)
+            }
+        case .dark:
+            ChatPalette(
                 background: Color(white: 0.08), text: Color(white: 0.94), secondary: Color(white: 0.6),
                 codeText: Color(red: 0.55, green: 0.69, blue: 0.98), codeBackground: Color(red: 0.15, green: 0.17, blue: 0.21),
-                bubble: Color(white: 0.18), field: Color(white: 0.15), border: Color(white: 0.22), isDark: true)
-            : ChatPalette(
+                bubble: Color(white: 0.18), field: Color(white: 0.15), border: Color(white: 0.22), style: .dark)
+        case .light:
+            ChatPalette(
                 background: Color(red: 0.98, green: 0.976, blue: 0.96), text: Color(white: 0.1), secondary: Color(white: 0.45),
                 codeText: Color(red: 0.13, green: 0.33, blue: 0.75), codeBackground: Color(red: 0.91, green: 0.92, blue: 0.95),
-                bubble: Color(red: 0.92, green: 0.91, blue: 0.88), field: .white, border: Color(white: 0.85), isDark: false)
+                bubble: Color(red: 0.92, green: 0.91, blue: 0.88), field: .white, border: Color(white: 0.85), style: .light)
+        }
     }
 }
 
@@ -365,10 +401,10 @@ struct MarkdownView: View {
         #if DEBUG
         let _ = RenderProbe.hit("MarkdownView")
         #endif
-        let dark = palette.isDark
+        let style = palette.style
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { i, block in
-                MarkdownBlockView(block: block, dark: dark, visible: visible(i, block))
+                MarkdownBlockView(block: block, style: style, visible: visible(i, block))
                     // A heading belongs to what follows it: more room above than below.
                     .padding(.top, i > 0 && block.isHeading ? 10 : 0)
             }
@@ -387,12 +423,12 @@ struct MarkdownView: View {
     }
 }
 
-/// One block. Its three fields are plain words (a reference, a flag, a number), the same bit for
+/// One block. Its three fields are plain words (a reference, a style, a number), the same bit for
 /// bit while the block is unchanged, so SwiftUI skips it at once: a streamed token builds and
 /// measures only the block that grew (see `RowSlot` for why it isn't `Equatable`).
 private struct MarkdownBlockView: View {
     let block: MarkdownBlock
-    let dark: Bool
+    let style: ChatPalette.Style
     /// Words shown; -1 shows everything.
     let visible: Int
 
@@ -402,7 +438,7 @@ private struct MarkdownBlockView: View {
         #if DEBUG
         let _ = RenderProbe.hit("MarkdownBlockView")
         #endif
-        let palette = ChatPalette.of(dark ? .dark : .light)
+        let palette = ChatPalette.of(style: style)
         let visible: Int? = visible >= 0 ? visible : nil
         switch block.kind {
         case .paragraph(let inline):

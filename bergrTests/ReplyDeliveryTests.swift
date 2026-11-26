@@ -49,11 +49,12 @@ import UIKit
 
     struct Boom: Error {}
 
-    init(confirmEnterWait: Duration = .milliseconds(15), agent: ChatAgent? = nil) {
+    init(confirmEnterWait: Duration = .milliseconds(15), imagesGiveUp: Duration = .milliseconds(30),
+         agent: ChatAgent? = nil) {
         let timing = ReplyTiming(enterDelay: .milliseconds(1), shellBangDelay: .milliseconds(1),
                                  confirmEnterWait: confirmEnterWait, confirmEnterTries: 2,
                                  firstCheck: .milliseconds(10), recheck: .milliseconds(10),
-                                 imagesGiveUp: .milliseconds(30), stopWait: .milliseconds(20),
+                                 imagesGiveUp: imagesGiveUp, stopWait: .milliseconds(20),
                                  poll: .milliseconds(1), stoppedSettle: .milliseconds(1))
         outbox.environment = ReplyEnvironment(
             terminal: terminal,
@@ -106,7 +107,9 @@ import UIKit
     }
 
     @Test func codexClearLeftInInputGetsSecondReturn() async {
-        let rig = ReplyRig()
+        // A window wide enough that a busy machine (the whole suite in parallel) can't sleep past
+        // the moment the second Return is due; the session change ends the test well before it.
+        let rig = ReplyRig(imagesGiveUp: .seconds(3))
         // Codex: the first Return only picks /clear from its command list.
         rig.terminal.frameLines = ["› /clear  clear the terminal and start a new chat", "› /clear"]
         var enters = 0
@@ -271,7 +274,12 @@ import UIKit
         rig.outbox.pushNow()
         await rig.pause(5)
         rig.reconnectHeld = false
-        await rig.pause(40)
+        // Waits on what's expected, not wall time (a busy machine can be slower than any pause).
+        await rig.until("both typed and pushed") {
+            rig.terminal.count("type:alpha reply") >= 1 && rig.terminal.count("type:beta reply") >= 1
+                && queued.phase == .pushed
+        }
+        await rig.pause(20) // a double would show up by now
         #expect(rig.terminal.count("type:alpha reply") == 1)
         #expect(rig.terminal.count("type:beta reply") == 1)
         #expect(rig.terminal.count("escape") == 1)
