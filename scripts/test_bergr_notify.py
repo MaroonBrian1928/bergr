@@ -73,6 +73,11 @@ class Alerts(Base):
         self.assertEqual(alerts, [])
         self.assertEqual(state["last"], {"t1": ("blocked", 5)})
 
+    def test_other_machines_terminals_dont_alert(self):
+        state, _ = notify.alerts_for(None, line(term(addr="popos/t2", state="working", turn=5)))
+        state, alerts = notify.alerts_for(state, line(term(addr="popos/t2", state="done", turn=6)))
+        self.assertEqual(alerts, [])
+
     def test_non_integer_turn_is_logged_once(self):
         notify._BAD_TURN_LOGGED.clear()
         logged = []

@@ -31,7 +31,7 @@ import urllib.parse
 import urllib.request
 
 # Bumped when the script changes; the app compares it with the installed copy to offer updates.
-VERSION = 26
+VERSION = 27
 CONFIG_PATH = os.path.expanduser("~/.config/bergr/push.json")
 # Windows: child processes (hc, curl, git) get no console window; the helper runs under pythonw.exe,
 # where each console child would otherwise flash a window.
@@ -1639,6 +1639,10 @@ def alerts_for(prev_state, line, machine=""):
         changed = known and (state != last[address][0] or (turn_now != last[address][1] and state in ALERT_STATES))
         last[address] = (state, turn_now)
         if not changed or state not in ALERT_STATES or term.get("notify") is False:
+            continue
+        # Another machine's terminal ("popos/t2"): this core follows it too, but that machine's own
+        # helper alerts for it. Alerting here as well sent every alert twice.
+        if "/" in address:
             continue
         turn = term.get("turn")
         if not isinstance(turn, int) or isinstance(turn, bool):
