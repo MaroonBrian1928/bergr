@@ -774,9 +774,8 @@ class AsTheAppRunsIt(Base):
         os.makedirs(os.path.join(self.home, ".claude", "projects", "-work"))
         path = os.path.join(self.home, ".claude", "projects", "-work", "sess-1.jsonl")
         write_jsonl(path, [{"type": "user", "uuid": "u", "message": {"content": "hello"}}])
-        enc = base64.b64encode(SOURCE.encode()).decode()
-        cmd = [sys.executable, "-I", "-c", "import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))",
-               enc, "claude", "0", "/work", "sess-1"]
+        cmd = [sys.executable, "-I", "-c", "import sys;exec(open(sys.argv.pop(1),encoding='utf-8').read())",
+               source_file(), "claude", "0", "/work", "sess-1"]
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                              env={"HOME": self.home, "PATH": os.environ.get("PATH", "")})
         time.sleep(2)
@@ -786,6 +785,21 @@ class AsTheAppRunsIt(Base):
         self.assertTrue(any(l.get("t") == "reset" and l.get("session") == "sess-1.jsonl" for l in lines), (out, err))
         self.assertTrue(any(l.get("t") == "msg" and l.get("text") == "hello" for l in lines), (out, err))
 
+
+
+_source_file = None
+
+
+def source_file():
+    """The helper as a file to exec: as one base64 argument it would pass Linux's 128 KB per-argument limit."""
+    global _source_file
+    if _source_file is None:
+        import atexit, tempfile
+        fd, _source_file = tempfile.mkstemp(suffix=".py")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(SOURCE)
+        atexit.register(os.unlink, _source_file)
+    return _source_file
 
 
 STAGE2 = open(os.path.join(HERE, "..", "bergr", "Chat", "agent-stage2.py"), encoding="utf-8").read()
@@ -1116,10 +1130,9 @@ class LocalFeedStartup(Base):
             {"type": "event_msg", "payload": {"type": "token_count", "info": {
                 "last_token_usage": {"total_tokens": 1234}, "model_context_window": 100000}}},
         ])
-        encoded = base64.b64encode(SOURCE.encode()).decode()
-        command = "import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))"
+        command = "import sys;exec(open(sys.argv.pop(1),encoding='utf-8').read())"
         environment = dict(os.environ, HOME=self.home)
-        process = subprocess.Popen([sys.executable, "-I", "-c", command, encoded, "codex", "0", "/work", "test"],
+        process = subprocess.Popen([sys.executable, "-I", "-c", command, source_file(), "codex", "0", "/work", "test"],
                                    env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             stdout, stderr = process.communicate(timeout=2)
@@ -1137,9 +1150,8 @@ class OneShotUsage(Base):
     """argv "once": print the newest usage event of the transcript and exit."""
 
     def run_once(self, agent, hint):
-        encoded = base64.b64encode(SOURCE.encode()).decode()
-        command = "import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))"
-        out = subprocess.run([sys.executable, "-I", "-c", command, encoded, agent, "0", "/work", hint, "0", "-", "0", "once"],
+        command = "import sys;exec(open(sys.argv.pop(1),encoding='utf-8').read())"
+        out = subprocess.run([sys.executable, "-I", "-c", command, source_file(), agent, "0", "/work", hint, "0", "-", "0", "once"],
                              env=dict(os.environ, HOME=self.home), capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
         return [json.loads(line) for line in out.stdout.splitlines()], out.stderr
 
