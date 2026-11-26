@@ -55,13 +55,16 @@ App tests: `xcodebuild … -only-testing:bergrTests test` (unit) or `-only-testi
 - **Generated files**: `bergr/Licenses/licenses.json` (`just licenses`, after changing Swift packages,
   bundled fonts or the Ghostty pin; it fails if a package has no license entry),
   `bergr/Settings/themes.json` (`just themes`), the app icons (`just icon` from `assets/logo-*.png`).
-- **App looks** (`bergr/Settings/AppLook.swift`): a dark terminal theme can restyle the whole app in
-  dark mode (gradient background, chat colors, translucent rows, optional alternate icon); Miami is
-  the first. To add one: a custom entry in `scripts/themes.py` (`BERGR`, with its own `ansi`) and
-  `just themes`; an `AppLook` with the same id in `AppLook.all`; for an icon, draw it in
-  `scripts/icons.swift`, add `AppIcon-<Name>.appiconset` and list it in the bergr target's
-  `ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES`. Views use `@ActiveLook`, `.lookBackground()` and
-  `ChatPalette.of(scheme, look:)`, never a theme id.
+- **App looks** (`bergr/Settings/AppLook.swift`): a pair of terminal themes can restyle the whole
+  app (gradient background, chat colors, translucent rows, optional alternate icon), with a light and
+  a dark style; Miami is the first. To add one: custom entries in `scripts/themes.py` (`BERGR`, with
+  their own `ansi`; a light and/or a dark one) and `just themes`; an `AppLook` in `AppLook.all` naming
+  those theme ids, with a `LookStyle` for each (`AppLookTests` checks the themes exist and WCAG
+  contrast); for an icon, draw it in `scripts/icons.swift`, add `AppIcon-<Name>.appiconset` and list it
+  in the bergr target's `ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES`. (Miami's arrival is announced once
+  to existing users by `LookAnnouncement.swift`, flag `themes.announced`; never in demo or UI-test
+  launches, `-bergr.announceLooks YES` forces it.) Views use `@ActiveLook`,
+  `.lookBackground()` and `ChatPalette.of(scheme, look:)`, never a theme id.
 - **Bundled fonts** live in `bergr/Fonts` and are registered at runtime (`Fonts.mono`); each needs a
   license entry.
 - **Terminal colors** come from the selected theme (`TerminalTheme`), set as libghostty-vt's default

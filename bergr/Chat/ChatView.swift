@@ -1349,7 +1349,7 @@ struct ChatView: View {
     private struct RowKey: Equatable {
         let row: Row
         let scheme: ColorScheme
-        let look: AppLook?
+        let look: LookStyle?
         let reduceMotion: Bool
         let canType: Bool
         let session: ObjectIdentifier?

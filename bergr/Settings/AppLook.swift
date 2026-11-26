@@ -1,28 +1,21 @@
 import SwiftUI
 
-/// An app-wide look that comes with a dark terminal theme: a background gradient behind the chat
-/// and lists, the chat's colors, translucent rows, and optionally an alternate app icon. Picking
-/// that dark theme turns it on in dark mode; every other theme, and light mode, is drawn exactly
-/// as without looks. To add one: an entry in `all`, the terminal colors in scripts/themes.py, and
-/// optionally an icon set (see AGENTS.md).
+/// An app-wide look that comes with a pair of terminal themes: a background gradient behind the
+/// chat and lists, the chat's colors, translucent rows, and optionally an alternate app icon.
+/// Picking its light theme turns on its light style in light mode, its dark theme its dark style
+/// in dark mode; every other theme is drawn exactly as without looks. To add one: an entry in
+/// `all`, the terminal colors in scripts/themes.py, and optionally an icon set (see AGENTS.md).
 struct AppLook: Identifiable, Hashable {
-    /// The dark terminal theme's id (themes.json) it pairs with.
     let id: String
-    /// Top-left to bottom-right unless set otherwise; dim enough for white text.
-    let gradient: [Gradient.Stop]
-    var start: UnitPoint = .topLeading
-    var end: UnitPoint = .bottomTrailing
-    /// One opaque color where something needs it (a header's backdrop); best the terminal's background.
-    let solid: Color
-    /// Cards and rows on the gradient.
-    let card: Color
-    let text, secondary, codeText, codeBackground, bubble, field, border, accent, onAccent: Color
+    let name: String
+    /// The terminal themes (themes.json ids) it pairs with; nil leaves that appearance alone.
+    let lightTheme: String?
+    let darkTheme: String?
+    let light: LookStyle?
+    let dark: LookStyle?
     /// An alternate icon set in the asset catalog (also listed in the project's
     /// ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES), offered in Settings under `name`.
     var iconName: String?
-    let name: String
-
-    var linearGradient: LinearGradient { LinearGradient(stops: gradient, startPoint: start, endPoint: end) }
 
     static func == (a: AppLook, b: AppLook) -> Bool { a.id == b.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -32,43 +25,83 @@ struct AppLook: Identifiable, Hashable {
 
     static func find(_ id: String) -> AppLook? { all.first { $0.id == id } }
 
-    /// The look in use: the dark theme's, in dark mode only.
-    static func active(darkTheme: String, scheme: ColorScheme) -> AppLook? {
-        scheme == .dark ? find(darkTheme) : nil
+    /// The style in use: in light mode the look whose light theme is selected, in dark mode the
+    /// one whose dark theme is.
+    static func active(lightTheme: String, darkTheme: String, scheme: ColorScheme) -> LookStyle? {
+        scheme == .dark
+            ? all.first { $0.darkTheme == darkTheme }?.dark
+            : all.first { $0.lightTheme == lightTheme }?.light
     }
 
-    private static func rgb(_ hex: UInt32, _ opacity: Double = 1) -> Color {
+    fileprivate static func rgb(_ hex: UInt32, _ opacity: Double = 1) -> Color {
         Color(red: Double(hex >> 16 & 0xff) / 255, green: Double(hex >> 8 & 0xff) / 255,
               blue: Double(hex & 0xff) / 255, opacity: opacity)
     }
 
-    /// A sunset: deep indigo, plum, then a warm brown-amber; lavender secondary text, pink code, peach accent.
+    /// Dark, a sunset: deep indigo, plum, then a warm brown-amber; lavender secondary text, pink
+    /// code and accent. Light, a pastel sunrise: lavender, pink, peach, with plum text and a deep
+    /// pink accent (6.8:1 under white text, 5.2:1 or more as text on the gradient).
     static let miami = AppLook(
-        id: "miami",
-        gradient: [.init(color: rgb(0x1e0b3a), location: 0), .init(color: rgb(0x2e0f45), location: 0.35),
-                   .init(color: rgb(0x3a1238), location: 0.65), .init(color: rgb(0x5a3a1a), location: 1)],
-        solid: rgb(0x22102e), card: .white.opacity(0.08),
-        text: Color(white: 0.97), secondary: rgb(0xc7b8db), codeText: rgb(0xff99d6),
-        codeBackground: .white.opacity(0.09), bubble: .white.opacity(0.12), field: .white.opacity(0.08),
-        border: .white.opacity(0.16), accent: rgb(0xffa86b), onAccent: rgb(0x290d33),
-        iconName: "AppIcon-Miami", name: "Miami")
+        id: "miami", name: "Miami", lightTheme: "miami-light", darkTheme: "miami",
+        light: LookStyle(
+            lookID: "miami", isDark: false,
+            gradient: [.init(color: rgb(0xe9dcff), location: 0), .init(color: rgb(0xffd6ea), location: 0.55),
+                       .init(color: rgb(0xffe2c8), location: 1)],
+            solid: rgb(0xfff4f6), card: .white.opacity(0.62),
+            text: rgb(0x2a1033), secondary: rgb(0x674a70), codeText: rgb(0xa3195b),
+            codeBackground: .white.opacity(0.6), bubble: .white.opacity(0.7), field: .white.opacity(0.66),
+            border: rgb(0x2a1033, 0.14), accent: rgb(0xb0125a), onAccent: .white),
+        dark: LookStyle(
+            lookID: "miami", isDark: true,
+            gradient: [.init(color: rgb(0x1e0b3a), location: 0), .init(color: rgb(0x2e0f45), location: 0.35),
+                       .init(color: rgb(0x3a1238), location: 0.65), .init(color: rgb(0x5a3a1a), location: 1)],
+            solid: rgb(0x22102e), card: .white.opacity(0.08),
+            text: Color(white: 0.97), secondary: rgb(0xc7b8db), codeText: rgb(0xff99d6),
+            codeBackground: .white.opacity(0.09), bubble: .white.opacity(0.12), field: .white.opacity(0.08),
+            border: .white.opacity(0.16), accent: rgb(0xff6fb5), onAccent: rgb(0x290d33)),
+        iconName: "AppIcon-Miami")
 }
 
-/// The look in use, or nil. Reads the stored dark theme and the color scheme, so a view holding
-/// it redraws when either changes.
+/// One appearance of a look: what the views draw.
+struct LookStyle: Equatable {
+    let lookID: String
+    let isDark: Bool
+    /// Top-left to bottom-right unless set otherwise; text in `text` must read anywhere on it.
+    let gradient: [Gradient.Stop]
+    var start: UnitPoint = .topLeading
+    var end: UnitPoint = .bottomTrailing
+    /// One opaque color where something needs it (a header's backdrop); best the terminal's background.
+    let solid: Color
+    /// Cards and rows on the gradient.
+    let card: Color
+    let text, secondary, codeText, codeBackground, bubble, field, border, accent, onAccent: Color
+
+    var linearGradient: LinearGradient { LinearGradient(stops: gradient, startPoint: start, endPoint: end) }
+
+    static func == (a: LookStyle, b: LookStyle) -> Bool { a.lookID == b.lookID && a.isDark == b.isDark }
+
+    /// By the palette's style, for `ChatPalette.of(style:)`.
+    static func find(_ id: String, dark: Bool) -> LookStyle? {
+        AppLook.find(id).flatMap { dark ? $0.dark : $0.light }
+    }
+}
+
+/// The look style in use, or nil. Reads the stored themes and the color scheme, so a view holding
+/// it redraws when any changes.
 @propertyWrapper
 struct ActiveLook: DynamicProperty {
+    @AppStorage(TerminalTheme.lightKey) private var lightTheme = TerminalTheme.defaultLight
     @AppStorage(TerminalTheme.darkKey) private var darkTheme = TerminalTheme.defaultDark
     @Environment(\.colorScheme) private var scheme
 
     init() {}
 
-    var wrappedValue: AppLook? { AppLook.active(darkTheme: darkTheme, scheme: scheme) }
+    var wrappedValue: LookStyle? { AppLook.active(lightTheme: lightTheme, darkTheme: darkTheme, scheme: scheme) }
 }
 
 /// The look's gradient, edge to edge.
 struct LookBackground: View {
-    let look: AppLook
+    let look: LookStyle
     var body: some View { look.linearGradient.ignoresSafeArea() }
 }
 

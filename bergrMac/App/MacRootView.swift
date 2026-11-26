@@ -12,6 +12,7 @@ struct MacRootView: View {
 
     var body: some View {
         content.background { UsageAlertsHost(sessions: sessions) }
+            .modifier(LookAnnouncer())
             .task { await CoreUpdates.shared.refresh() }
             .onReceive(NotificationCenter.default.publisher(for: RestartCommand.openTerminal)) { note in
                 if let host = note.userInfo?["host"] as? Host.ID, let address = note.userInfo?["address"] as? String {

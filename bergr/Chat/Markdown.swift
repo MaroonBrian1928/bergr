@@ -17,7 +17,13 @@ struct MarkdownInline: Hashable, ExpressibleByStringLiteral {
         words = Self.plainWords(plain)
         light = Self.styled(plain, palette: .of(.light))
         dark = Self.styled(plain, palette: .of(.dark))
-        looks = Dictionary(uniqueKeysWithValues: AppLook.all.map { ($0.id, Self.styled(plain, palette: .of(style: .look($0.id)))) })
+        var looks: [String: AttributedString] = [:]
+        for look in AppLook.all {
+            for dark in [false, true] where LookStyle.find(look.id, dark: dark) != nil {
+                looks[Self.lookKey(look.id, dark)] = Self.styled(plain, palette: .of(style: .look(look.id, dark: dark)))
+            }
+        }
+        self.looks = looks
     }
 
     init(stringLiteral value: String) { self.init(value) }
@@ -27,9 +33,11 @@ struct MarkdownInline: Hashable, ExpressibleByStringLiteral {
         switch palette.style {
         case .light: light
         case .dark: dark
-        case .look(let id): looks[id] ?? dark
+        case .look(let id, let isDark): looks[Self.lookKey(id, isDark)] ?? (isDark ? dark : light)
         }
     }
+
+    private static func lookKey(_ id: String, _ dark: Bool) -> String { dark ? id + "|dark" : id + "|light" }
 
     static func == (a: MarkdownInline, b: MarkdownInline) -> Bool { a.source == b.source }
     func hash(into hasher: inout Hasher) { hasher.combine(source) }
@@ -287,14 +295,20 @@ final class MarkdownBlock: Hashable, @unchecked Sendable {
 /// The chat's colors.
 struct ChatPalette {
     /// Which palette: a look's (by id) is a dark one, drawn on its gradient (see `AppLook`).
-    enum Style: Hashable { case light, dark, look(String) }
+    enum Style: Hashable { case light, dark, look(String, dark: Bool) }
 
     let background, text, secondary, codeText, codeBackground, bubble, field, border: Color
     let style: Style
     /// A look's accent pair; nil keeps the asset catalog's.
     var accentOverride: Color? = nil
     var onAccentOverride: Color? = nil
-    var isDark: Bool { style != .light }
+    var isDark: Bool {
+        switch style {
+        case .light: false
+        case .dark: true
+        case .look(_, let dark): dark
+        }
+    }
     /// Bergr's gold, from the app icon: the logo's own gold in dark mode, a deeper one in light
     /// mode so text and thin strokes stay readable on the cream background. A look can bring its own.
     var accent: Color { accentOverride ?? Color("AccentColor") }
@@ -304,21 +318,22 @@ struct ChatPalette {
     /// (white on a light accent like Miami's peach would be unreadable).
     var onAccentFill: Color { onAccentOverride ?? .white }
 
-    /// `look` only counts in dark mode: light mode never changes.
-    static func of(_ scheme: ColorScheme, look: AppLook? = nil) -> ChatPalette {
-        of(style: scheme == .light ? .light : look.map { .look($0.id) } ?? .dark)
+    /// `look` only counts when it is for this scheme.
+    static func of(_ scheme: ColorScheme, look: LookStyle? = nil) -> ChatPalette {
+        if let look, look.isDark == (scheme == .dark) { return of(style: .look(look.lookID, dark: look.isDark)) }
+        return of(style: scheme == .light ? .light : .dark)
     }
 
     static func of(style: Style) -> ChatPalette {
         switch style {
-        case .look(let id):
-            if let look = AppLook.find(id) {
+        case .look(let id, let dark):
+            if let look = LookStyle.find(id, dark: dark) {
                 ChatPalette(
                     background: look.solid, text: look.text, secondary: look.secondary, codeText: look.codeText,
                     codeBackground: look.codeBackground, bubble: look.bubble, field: look.field, border: look.border,
                     style: style, accentOverride: look.accent, onAccentOverride: look.onAccent)
             } else {
-                of(style: .dark)
+                of(style: dark ? .dark : .light)
             }
         case .dark:
             ChatPalette(

@@ -43,6 +43,7 @@ LIGHT = [
     ("github-light", "GitHub Light", "GitHub Light Default"),
     ("kanagawa-lotus", "Kanagawa Lotus", "Kanagawa Lotus"),
     ("everforest-light", "Everforest Light", "Everforest Light Med"),
+    ("miami-light", "Miami", None),
 ]
 
 # Bergr's own: the icon's charcoal and grey, an amber cursor. Their ANSI colors are borrowed
@@ -54,6 +55,11 @@ BERGR = {
                     "cursor": "#c27c0e", "selection": "#cfd1ce"},
     # A sunset on a flat plum: pinks, violets, amber, cyan and a mint green. It also turns on the
     # app's Miami look (AppLook.swift). A custom "ansi" replaces the base theme's palette.
+    # Miami's sunrise: plum on blush, a deep pink cursor; colors 1-6 read at 4.4:1 or more.
+    "miami-light": {"base": "Atom One Light", "background": "#fff4f6", "foreground": "#2a1033",
+                    "cursor": "#d6337f", "selection": "#f6c6dd",
+                    "ansi": ["#2a1033", "#c8264f", "#1f7a55", "#9a5b00", "#3a5bc7", "#9b2fae", "#0f7f8c", "#8a7690",
+                             "#5e4a66", "#e0386a", "#2a9468", "#b36b00", "#4f6fe0", "#b543c9", "#138f9e", "#b8a8be"]},
     "miami": {"base": "Atom One Dark", "background": "#22102e", "foreground": "#f4eaf7",
               "cursor": "#ff7ac6", "selection": "#4a2a5e",
               "ansi": ["#3a2348", "#ff5c8a", "#5cf2b0", "#ffc66b", "#7aa2ff", "#d77bff", "#4fe3f0", "#e6dcef",

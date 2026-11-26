@@ -52,10 +52,12 @@ struct RootView: View {
         } else {
             main.modifier(TrustPrompt(sessions: sessions)).background { agentShortcuts }
                 .background { UsageAlertsHost(sessions: sessions) }
+                .modifier(LookAnnouncer())
         }
         #else
         main.modifier(TrustPrompt(sessions: sessions)).background { agentShortcuts }
             .background { UsageAlertsHost(sessions: sessions) }
+            .modifier(LookAnnouncer())
         #endif
     }
 

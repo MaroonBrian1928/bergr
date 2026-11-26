@@ -646,5 +646,32 @@
   "foreground": "#5c6a72",
   "cursor": "#f57d26",
   "selection": "#eaedc8"
+ },
+ {
+  "id": "miami-light",
+  "name": "Miami",
+  "dark": false,
+  "ansi": [
+   "#2a1033",
+   "#c8264f",
+   "#1f7a55",
+   "#9a5b00",
+   "#3a5bc7",
+   "#9b2fae",
+   "#0f7f8c",
+   "#8a7690",
+   "#5e4a66",
+   "#e0386a",
+   "#2a9468",
+   "#b36b00",
+   "#4f6fe0",
+   "#b543c9",
+   "#138f9e",
+   "#b8a8be"
+  ],
+  "background": "#fff4f6",
+  "foreground": "#2a1033",
+  "cursor": "#d6337f",
+  "selection": "#f6c6dd"
  }
 ]
