@@ -36,6 +36,13 @@ struct NewSessionTests {
         #expect(NewSession.clean(["claude.exe"], windows: true) == ["claude.exe"])
     }
 
+    @Test func codeModeIsSetAfterTheInheritedOneIsRemoved() {
+        let argv = NewSession.clean(["/bin/claude"], windows: false, set: [NewSession.codeModeVariable: "1"])
+        let unset = argv.lastIndex(of: NewSession.codeModeVariable)!
+        let set = argv.firstIndex(of: "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1")!
+        #expect(unset < set && argv.last == "/bin/claude" && argv[argv.count - 2] == "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1")
+    }
+
     @Test func recentFoldersAreAgentFoldersNewestFirstWithoutRepeats() throws {
         let folders = NewSession.recentFolders([
             try terminal("t1", cwd: "/Users/me/src/old", ms: 1),

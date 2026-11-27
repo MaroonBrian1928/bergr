@@ -30,6 +30,9 @@ struct RootView: View {
     @State private var newSessionPrefill: NewSessionPrefill?
     /// A second conversation shown beside the open one (iPad, the unfolded Duo).
     @State private var beside: Pane?
+    /// A conversation opened on another machine: switching machines clears the selection, so it's
+    /// selected once that has happened (else a new session's chat opened blank).
+    @State private var pendingTerminal: String?
     struct Pane: Hashable { let host: Host.ID; let address: String }
     @State private var notifier: AgentNotifier?
     private let router = NotificationRouter.shared
@@ -213,7 +216,10 @@ struct RootView: View {
             open(host: target.host, address: target.address)
         }
         .onChange(of: selectedHost.wrappedValue) {
-            selectedTerminal = nil
+            selectedTerminal = pendingTerminal
+            pendingTerminal = nil
+            // The same address on another machine leaves selectedTerminal unchanged: refocus here.
+            notifier?.focusedAddress = selectedHost.wrappedValue.flatMap { host in selectedTerminal.map { (host, $0) } }
         }
         // Siri, Shortcuts or a control launched the app: the queued request is routed here.
         .task { handleIntents() }
@@ -324,6 +330,7 @@ extension RootView {
     func open(host: Host.ID, address: String) {
         // Opening the conversation that's beside swaps it into the main pane.
         if beside == Pane(host: host, address: address) { beside = nil }
+        if selectedHost.wrappedValue != host { pendingTerminal = address }
         storedHost = host.uuidString
         Task { @MainActor in
             selectedTerminal = address

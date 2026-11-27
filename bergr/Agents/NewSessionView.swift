@@ -14,9 +14,15 @@ enum NewSession {
     ]
 
     /// An agent's argv run through `env -u …` so it starts without them (not on Windows, which has no env).
-    static func clean(_ argv: [String], windows: Bool) -> [String] {
-        windows ? argv : ["env"] + inheritedClaudeVariables.flatMap { ["-u", $0] } + argv
+    /// `set` is put back afterwards (`NAME=value` after the `-u`s): Code Mode, when chosen.
+    static func clean(_ argv: [String], windows: Bool, set: [String: String] = [:]) -> [String] {
+        windows ? argv : ["env"] + inheritedClaudeVariables.flatMap { ["-u", $0] }
+            + set.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" } + argv
     }
+
+    /// Claude Code's Code Mode (it works through one scripting tool), chosen in New Session.
+    static let codeModeVariable = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE"
+    static let codeModeKey = "newSession.codeMode"
 
     /// The command each agent's CLI goes by.
     static func command(_ agent: ChatAgent) -> String {
@@ -136,6 +142,8 @@ struct NewSessionView: View {
     @State private var isRepo = false
     @State private var useWorktree = false
     @State private var branch = ""
+    /// Claude Code starts in Code Mode; remembered, on unless turned off.
+    @AppStorage(NewSession.codeModeKey) private var codeMode = true
 
     /// Machines a session can start on: connected, and real (the demo can't run agents).
     private var machines: [Host] {
@@ -172,6 +180,13 @@ struct NewSessionView: View {
                         folderSection(session)
                     }
                     if isRepo, agent != nil || shell { worktreeSection }
+                    if !shell, agent == .claude, agents != nil {
+                        Section {
+                            Toggle("Code Mode", isOn: $codeMode)
+                        } footer: {
+                            Text("Claude Code works through scripts instead of separate tool calls.")
+                        }
+                    }
                     if !shell {
                         RecentSessionsSection(sessions: recent, loading: loadingRecent) { s in
                             Task { await start(resuming: s) }
@@ -427,8 +442,10 @@ struct NewSessionView: View {
                 guard let resume = RecentSessions.resumeArgv(agent: agent, path: path, id: resumed.id) else { return }
                 argv = resume
             }
-            request = RunRequest(argv: NewSession.clean(argv, windows: session.isWindowsHost))
+            let extra = agent == .claude && codeMode ? [NewSession.codeModeVariable: "1"] : [:]
+            request = RunRequest(argv: NewSession.clean(argv, windows: session.isWindowsHost, set: extra))
             if let path = searchPath[hostID] { request.env?["PATH"] = path }
+            if session.isWindowsHost { for (k, v) in extra { request.env?[k] = v } }
         }
         starting = true
         defer { starting = false }
